@@ -35,15 +35,22 @@ chmod 1777 /dev/shm
 
 echo "init: done with mount essentials" > /dev/kmsg
 
-exec >/dev/console 2>&1
+# exec >/dev/console 2>&1
+exec </dev/console >/dev/console 2>&1
 
 echo "init: launching wrapper"
 /wrapper.sh
 EC=$?
 echo "init: wrapper exited with code $EC"
 
-# keep PID1 alive so logs stay visible
-sleep infinity
+# If wrapper failed (non-zero), give you a rescue shell instead of reboot/panic
+if [ "$EC" -ne 0 ]; then
+  echo "init: dropping into interactive shell for debugging..."
+  /bin/sh -i
+else
+  echo "init: wrapper succeeded, sleeping to keep PID1 alive"
+  sleep infinity
+fi
 EOF
 chmod +x rootfs/init
 
