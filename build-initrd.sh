@@ -111,8 +111,7 @@ mount -o ro /dev/vda /lower
 
 echo "overlay-init: mounted readonly rootfs from /dev/vda" > /dev/kmsg
 
-# Create memory overlay (using 2G, adjust as needed)
-mount -t tmpfs -o size=2G none /tmp
+mount -t tmpfs -o size=1G none /tmp
 mkdir -p /tmp/upper /tmp/work /tmp/newroot
 
 mount -t overlay \

@@ -16,7 +16,7 @@ sudo cloud-hypervisor \
   --kernel vmlinux \
   --initramfs initrd \
   --cmdline 'console=hvc0' \
-  --cpus boot=4 --memory size=8192M \
+  --cpus boot=4 --memory size=2048M \
   --disk path=rootfs.ext4,readonly=on \
   --net "tap=${TAP},ip=${GUEST_IP},mask=${MASK},mac=${MAC}" \
   --api-socket /tmp/ch.sock
