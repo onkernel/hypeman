@@ -4,7 +4,7 @@ Check that we can run Chrome in a Cloud Hypervisor VM using our existing image b
 
 ## Initial setup:
 
-Install cloud-hypervisor by [installing the pre-built binaries](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries). Make sure `ch-root` and `cloud-hypervisor` are in path (requires renaming the binaries).
+Install cloud-hypervisor by [installing the pre-built binaries](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries). Make sure `ch-remote` and `cloud-hypervisor` are in path (requires renaming the binaries).
 
 ```
 # this should work
