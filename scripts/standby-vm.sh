@@ -75,31 +75,43 @@ if ! sudo ch-remote --api-socket "$SOCKET" snapshot "$SNAPSHOT_URL"; then
 fi
 echo "[INFO] Snapshot created successfully"
 
-# Get cloud-hypervisor PID
-CH_PID=$(sudo lsof -t "$SOCKET" 2>/dev/null || echo "")
-
-# Delete/kill the VMM
+# Get cloud-hypervisor PID by finding which process has the overlay disk open
 echo "[INFO] Stopping cloud-hypervisor process..."
-if [ -n "$CH_PID" ]; then
-  sudo kill "$CH_PID"
-  # Wait for process to die
-  for i in {1..10}; do
-    if ! kill -0 "$CH_PID" 2>/dev/null; then
-      break
-    fi
-    sleep 0.5
-  done
-  
-  # Force kill if still alive
-  if kill -0 "$CH_PID" 2>/dev/null; then
-    echo "[WARN] Process still alive, force killing..."
-    sudo kill -9 "$CH_PID" || true
-  fi
-  
-  echo "[INFO] Cloud-hypervisor process stopped (PID: $CH_PID)"
-else
-  echo "[WARN] Could not find cloud-hypervisor PID"
+OVERLAY_DISK="$VM_DIR/overlay.raw"
+CH_PID=$(sudo lsof -t "$OVERLAY_DISK" 2>/dev/null | head -1)
+
+if [ -z "$CH_PID" ]; then
+  echo "[ERROR] Could not find cloud-hypervisor PID!"
+  echo "[ERROR] No process has $OVERLAY_DISK open"
+  echo "[ERROR] The VM might already be stopped or check manually:"
+  echo "  ps aux | grep cloud-hypervisor | grep $VM_ID"
+  exit 1
 fi
+
+echo "[INFO] Found cloud-hypervisor process (PID: $CH_PID)"
+sudo kill "$CH_PID"
+
+# Wait for process to die
+for i in {1..10}; do
+  if ! sudo kill -0 "$CH_PID" 2>/dev/null; then
+    echo "[INFO] Process terminated"
+    break
+  fi
+  sleep 0.5
+done
+
+# Force kill if still alive
+if sudo kill -0 "$CH_PID" 2>/dev/null; then
+  echo "[WARN] Process still alive, force killing..."
+  sudo kill -9 "$CH_PID"
+  sleep 1
+fi
+
+# Wait for file locks to be released
+echo "[INFO] Waiting for disk locks to be released..."
+sleep 2
+
+echo "[INFO] Cloud-hypervisor process stopped (PID: $CH_PID)"
 
 # Remove socket
 sudo rm -f "$SOCKET" || true
