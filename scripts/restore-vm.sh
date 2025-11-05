@@ -31,6 +31,9 @@ echo "========================================"
 echo "Restore VM: $VM_ID"
 echo "========================================"
 
+# Start overall timing
+RESTORE_START=$(date +%s%3N)
+
 # Check if VM directory exists
 if [ ! -d "$VM_DIR" ]; then
   echo "[ERROR] VM directory not found: $VM_DIR"
@@ -59,6 +62,8 @@ fi
 
 # Recreate TAP device for restore
 echo "[INFO] Setting up TAP device for restore..."
+TAP_START=$(date +%s%3N)
+
 TAP=$(jq -r '.tap' "$VM_DIR/config.json" 2>/dev/null)
 BRIDGE="vmbr0"
 
@@ -82,6 +87,9 @@ sudo ip link set "$TAP" master "$BRIDGE"
 sudo ip link set "$TAP" type bridge_slave isolated on
 echo "[INFO] TAP device $TAP ready"
 
+TAP_END=$(date +%s%3N)
+TAP_TIME=$((TAP_END - TAP_START))
+
 LOG_FILE="$VM_DIR/logs/console.log"
 
 echo "[INFO] Starting cloud-hypervisor for restore..."
@@ -90,6 +98,8 @@ echo "       Snapshot: $SNAPSHOT_DIR"
 
 # Start cloud-hypervisor with just the API socket (no VM config yet)
 # The restore will load everything from the snapshot
+CH_START=$(date +%s%3N)
+
 sudo nohup cloud-hypervisor \
   --api-socket "$SOCKET" \
   > "$VM_DIR/ch-restore-stdout.log" 2>&1 &
@@ -97,27 +107,31 @@ sudo nohup cloud-hypervisor \
 CH_PID=$!
 echo "[INFO] Cloud-hypervisor started with PID: $CH_PID"
 
-# Wait for socket to be ready
+# Wait for socket to be ready (poll every 0.01s, timeout after 1s)
 echo "[INFO] Waiting for API socket to be ready..."
-for i in {1..30}; do
+SOCKET_READY=false
+for i in {1..100}; do
   if [ -S "$SOCKET" ]; then
     echo "[INFO] Socket ready"
+    SOCKET_READY=true
     break
   fi
-  sleep 0.5
+  sleep 0.01
 done
 
-if [ ! -S "$SOCKET" ]; then
-  echo "[ERROR] Socket not created after 15 seconds"
+if [ "$SOCKET_READY" = false ]; then
+  echo "[ERROR] Socket not created after 1 second"
   sudo kill "$CH_PID" 2>/dev/null || true
   exit 1
 fi
 
-# Give it a moment for the API to be fully ready
-sleep 1
+CH_END=$(date +%s%3N)
+CH_TIME=$((CH_END - CH_START))
 
 # Restore from snapshot
 echo "[INFO] Restoring from snapshot..."
+SNAPSHOT_START=$(date +%s%3N)
+
 SNAPSHOT_URL="file://$SNAPSHOT_DIR"
 if ! sudo ch-remote --api-socket "$SOCKET" restore "source_url=$SNAPSHOT_URL"; then
   echo "[ERROR] Failed to restore from snapshot"
@@ -127,10 +141,15 @@ if ! sudo ch-remote --api-socket "$SOCKET" restore "source_url=$SNAPSHOT_URL"; t
   exit 1
 fi
 
+SNAPSHOT_END=$(date +%s%3N)
+SNAPSHOT_TIME=$((SNAPSHOT_END - SNAPSHOT_START))
+
 echo "[INFO] Snapshot restored successfully"
 
 # Resume the VM
 echo "[INFO] Resuming VM..."
+RESUME_START=$(date +%s%3N)
+
 if ! sudo ch-remote --api-socket "$SOCKET" resume; then
   echo "[ERROR] Failed to resume VM"
   echo "[INFO] Cleaning up..."
@@ -139,15 +158,28 @@ if ! sudo ch-remote --api-socket "$SOCKET" resume; then
   exit 1
 fi
 
+RESUME_END=$(date +%s%3N)
+RESUME_TIME=$((RESUME_END - RESUME_START))
+
 echo "[INFO] VM resumed successfully"
 
 # Log the operation
 TIMESTAMP=$(date -Iseconds)
 echo "$TIMESTAMP - VM $VM_ID restored from standby" >> "$VM_DIR/standby.log"
 
-# Verify it's running
-sleep 1
+# Verify it's running (no sleep needed)
 if sudo ch-remote --api-socket "$SOCKET" info &>/dev/null; then
+  RESTORE_END=$(date +%s%3N)
+  TOTAL_TIME=$((RESTORE_END - RESTORE_START))
+  
+  # Convert milliseconds to seconds with 3 decimal places
+  format_time() {
+    local ms=$1
+    local sec=$((ms / 1000))
+    local msec=$((ms % 1000))
+    printf "%d.%03d" $sec $msec
+  }
+  
   echo ""
   echo "========================================"
   echo "Restore Complete!"
@@ -155,6 +187,14 @@ if sudo ch-remote --api-socket "$SOCKET" info &>/dev/null; then
   echo "VM: $VM_ID"
   echo "PID: $CH_PID"
   echo "Time: $TIMESTAMP"
+  echo ""
+  echo "Timing Breakdown:"
+  echo "  TAP device setup:      $(format_time $TAP_TIME)s"
+  echo "  Cloud-hypervisor init: $(format_time $CH_TIME)s"
+  echo "  Snapshot restore:      $(format_time $SNAPSHOT_TIME)s"
+  echo "  VM resume:             $(format_time $RESUME_TIME)s"
+  echo "  ─────────────────────────────────"
+  echo "  Total restore time:    $(format_time $TOTAL_TIME)s"
   echo ""
   echo "View logs: ./scripts/logs-vm.sh $VM_NUM"
   echo "Check status: ./scripts/list-vms.sh"
