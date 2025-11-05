@@ -104,6 +104,19 @@ fi
 # Remove socket
 sudo rm -f "$SOCKET" || true
 
+# Get TAP device name from config and remove it
+echo "[INFO] Cleaning up TAP device..."
+TAP=$(jq -r '.tap' "$VM_DIR/config.json" 2>/dev/null || echo "")
+
+if [ -n "$TAP" ] && ip link show "$TAP" &>/dev/null; then
+  echo "[INFO] Removing TAP device $TAP..."
+  sudo ip link set "$TAP" down 2>/dev/null || true
+  sudo ip link delete "$TAP" 2>/dev/null || true
+  echo "[INFO] TAP device $TAP removed"
+else
+  echo "[INFO] TAP device not found or already removed"
+fi
+
 # Log the operation
 echo "[INFO] Logging standby operation..."
 TIMESTAMP=$(date -Iseconds)

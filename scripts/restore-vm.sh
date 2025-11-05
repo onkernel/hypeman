@@ -57,6 +57,31 @@ if [ -S "$SOCKET" ]; then
   fi
 fi
 
+# Recreate TAP device for restore
+echo "[INFO] Setting up TAP device for restore..."
+TAP=$(jq -r '.tap' "$VM_DIR/config.json" 2>/dev/null)
+BRIDGE="vmbr0"
+
+if [ -z "$TAP" ]; then
+  echo "[ERROR] Could not read TAP device name from config.json"
+  exit 1
+fi
+
+# Remove TAP if it exists in a bad state
+if ip link show "$TAP" &>/dev/null; then
+  echo "[INFO] Removing existing TAP device $TAP..."
+  sudo ip link set "$TAP" down 2>/dev/null || true
+  sudo ip link delete "$TAP" 2>/dev/null || true
+fi
+
+# Create fresh TAP device
+echo "[INFO] Creating TAP device $TAP..."
+sudo ip tuntap add "$TAP" mode tap user "$(whoami)"
+sudo ip link set "$TAP" up
+sudo ip link set "$TAP" master "$BRIDGE"
+sudo ip link set "$TAP" type bridge_slave isolated on
+echo "[INFO] TAP device $TAP ready"
+
 LOG_FILE="$VM_DIR/logs/console.log"
 
 echo "[INFO] Starting cloud-hypervisor for restore..."
