@@ -163,6 +163,24 @@ RESUME_TIME=$((RESUME_END - RESUME_START))
 
 echo "[INFO] VM resumed successfully"
 
+# Restore memory to full 4GB (virtio-mem hot-plug)
+echo "[INFO] Restoring memory to 4GB..."
+MEMORY_RESTORE_START=$(date +%s%3N)
+TARGET_MEMORY="4294967296"  # 4GB in bytes
+
+if sudo ch-remote --api-socket "$SOCKET" resize --memory "$TARGET_MEMORY" 2>&1; then
+  MEMORY_RESTORE_END=$(date +%s%3N)
+  MEMORY_RESTORE_TIME=$((MEMORY_RESTORE_END - MEMORY_RESTORE_START))
+  
+  # Verify memory was restored
+  FINAL_SIZE=$(sudo ch-remote --api-socket "$SOCKET" info 2>/dev/null | jq -r '.config.memory.size' || echo "0")
+  FINAL_SIZE_MB=$((FINAL_SIZE / 1048576))
+  echo "[INFO] Memory restored to ${FINAL_SIZE_MB}MB ($((MEMORY_RESTORE_TIME))ms)"
+else
+  echo "[WARN] Could not restore memory to 4GB, VM running at reduced size"
+  MEMORY_RESTORE_TIME=0
+fi
+
 # Log the operation
 TIMESTAMP=$(date -Iseconds)
 echo "$TIMESTAMP - VM $VM_ID restored from standby" >> "$VM_DIR/standby.log"
@@ -193,8 +211,11 @@ if sudo ch-remote --api-socket "$SOCKET" info &>/dev/null; then
   echo "  Cloud-hypervisor init: $(format_time $CH_TIME)s"
   echo "  Snapshot restore:      $(format_time $SNAPSHOT_TIME)s"
   echo "  VM resume:             $(format_time $RESUME_TIME)s"
+  echo "  Memory resize (→4GB):  $(format_time $MEMORY_RESTORE_TIME)s"
   echo "  ─────────────────────────────────"
   echo "  Total restore time:    $(format_time $TOTAL_TIME)s"
+  echo ""
+  echo "Memory: ${FINAL_SIZE_MB}MB / 4096MB"
   echo ""
   echo "View logs: ./scripts/logs-vm.sh $VM_NUM"
   echo "Check status: ./scripts/list-vms.sh"
