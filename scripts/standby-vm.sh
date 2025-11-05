@@ -31,6 +31,9 @@ echo "========================================"
 echo "Standby VM: $VM_ID"
 echo "========================================"
 
+# Start overall timing
+STANDBY_START=$(date +%s%3N)
+
 # Check if VM directory exists
 if [ ! -d "$VM_DIR" ]; then
   echo "[ERROR] VM directory not found: $VM_DIR"
@@ -56,16 +59,48 @@ echo "[INFO] Preparing snapshot directory..."
 rm -rf "$SNAPSHOT_DIR" || true
 mkdir -p "$SNAPSHOT_DIR"
 
+# Try to reduce memory before snapshot (virtio-mem hot-unplug)
+echo "[INFO] Attempting to reduce memory to 1GB for snapshot..."
+MEMORY_RESIZE_START=$(date +%s%3N)
+TARGET_SIZE="1073741824"  # 1GB in bytes
+
+# Resize memory down to 1GB (virtio-mem will unplug what it can safely)
+RESIZE_OUTPUT=$(sudo ch-remote --api-socket "$SOCKET" resize --memory "$TARGET_SIZE" 2>&1) || true
+
+MEMORY_RESIZE_END=$(date +%s%3N)
+MEMORY_RESIZE_TIME=$((MEMORY_RESIZE_END - MEMORY_RESIZE_START))
+
+# Check what was actually achieved
+ACTUAL_SIZE=$(sudo ch-remote --api-socket "$SOCKET" info 2>/dev/null | jq -r '.config.memory.size' || echo "unknown")
+ACTUAL_SIZE_MB=$((ACTUAL_SIZE / 1048576))
+
+echo "[INFO] Memory resize completed in $((MEMORY_RESIZE_TIME))ms"
+echo "[INFO] Memory size: ${ACTUAL_SIZE_MB}MB (target was 1024MB)"
+
+if [ "$ACTUAL_SIZE_MB" -gt 1024 ]; then
+  echo "[WARN] Could not reduce to target - guest using more than 1GB"
+  echo "[WARN] Snapshot will be larger than optimal"
+fi
+
+# TODO: why do we need this sleep?
+# For some reason, if I immediately pause the VM then snapshot,
+# the memory isn't yet reduced to 1GB in terms of snapshot size.
+sleep 2
+
 # Pause the VM
 echo "[INFO] Pausing VM..."
+PAUSE_START=$(date +%s%3N)
 if ! sudo ch-remote --api-socket "$SOCKET" pause; then
   echo "[ERROR] Failed to pause VM"
   exit 1
 fi
-echo "[INFO] VM paused successfully"
+PAUSE_END=$(date +%s%3N)
+PAUSE_TIME=$((PAUSE_END - PAUSE_START))
+echo "[INFO] VM paused successfully ($((PAUSE_TIME))ms)"
 
 # Create snapshot
 echo "[INFO] Creating snapshot..."
+SNAPSHOT_START=$(date +%s%3N)
 SNAPSHOT_URL="file://$SNAPSHOT_DIR"
 if ! sudo ch-remote --api-socket "$SOCKET" snapshot "$SNAPSHOT_URL"; then
   echo "[ERROR] Failed to create snapshot"
@@ -73,7 +108,9 @@ if ! sudo ch-remote --api-socket "$SOCKET" snapshot "$SNAPSHOT_URL"; then
   sudo ch-remote --api-socket "$SOCKET" resume || true
   exit 1
 fi
-echo "[INFO] Snapshot created successfully"
+SNAPSHOT_END=$(date +%s%3N)
+SNAPSHOT_TIME=$((SNAPSHOT_END - SNAPSHOT_START))
+echo "[INFO] Snapshot created successfully ($((SNAPSHOT_TIME))ms)"
 
 # Get cloud-hypervisor PID by finding which process has the overlay disk open
 echo "[INFO] Stopping cloud-hypervisor process..."
@@ -132,7 +169,21 @@ fi
 # Log the operation
 echo "[INFO] Logging standby operation..."
 TIMESTAMP=$(date -Iseconds)
-echo "$TIMESTAMP - VM $VM_ID entered standby" >> "$VM_DIR/standby.log"
+STANDBY_END=$(date +%s%3N)
+TOTAL_TIME=$((STANDBY_END - STANDBY_START))
+
+# Get snapshot size
+SNAPSHOT_SIZE=$(du -sh "$SNAPSHOT_DIR" 2>/dev/null | cut -f1 || echo "unknown")
+
+echo "$TIMESTAMP - VM $VM_ID entered standby - Memory: ${ACTUAL_SIZE_MB}MB, Snapshot: $SNAPSHOT_SIZE" >> "$VM_DIR/standby.log"
+
+# Format time helper
+format_time() {
+  local ms=$1
+  local sec=$((ms / 1000))
+  local msec=$((ms % 1000))
+  printf "%d.%03d" $sec $msec
+}
 
 echo ""
 echo "========================================"
@@ -140,7 +191,16 @@ echo "Standby Complete!"
 echo "========================================"
 echo "VM: $VM_ID"
 echo "Snapshot: $SNAPSHOT_DIR"
+echo "Snapshot size: $SNAPSHOT_SIZE"
 echo "Time: $TIMESTAMP"
+echo ""
+echo "Timing Breakdown:"
+echo "  Memory resize:  $(format_time $MEMORY_RESIZE_TIME)s (→ ${ACTUAL_SIZE_MB}MB)"
+echo "  VM pause:       $(format_time $PAUSE_TIME)s"
+echo "  Snapshot save:  $(format_time $SNAPSHOT_TIME)s"
+echo "  Process stop:   (included above)"
+echo "  ─────────────────────────────────"
+echo "  Total time:     $(format_time $TOTAL_TIME)s"
 echo ""
 echo "To restore: ./scripts/restore-vm.sh $VM_NUM"
 echo "========================================"

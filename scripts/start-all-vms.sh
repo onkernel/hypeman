@@ -83,12 +83,13 @@ for i in $(seq 1 $NUM_VMS); do
   
   # Start cloud-hypervisor in background
   # Note: Using nohup and & to run in background, redirecting output to avoid terminal clutter
+  # Using virtio-mem: 1GB base + 3GB hotplug = 4GB max, can resize down for snapshots
   sudo nohup cloud-hypervisor \
     --kernel "$KERNEL" \
     --initramfs "$INITRD" \
     --cmdline 'console=ttyS0' \
     --cpus boot=2 \
-    --memory size=2048M \
+    --memory size=1G,hotplug_method=virtio-mem,hotplug_size=3G \
     --disk path="$ROOTFS",readonly=on path="$OVERLAY_DISK" path="$CONFIG_DISK",readonly=on \
     --net "tap=$TAP,ip=$GUEST_IP,mask=255.255.255.0,mac=$MAC" \
     --serial "file=$LOG_FILE" \
@@ -107,6 +108,14 @@ for i in $(seq 1 $NUM_VMS); do
     echo "[ERROR] VM $i failed to start! Check $VM_DIR/ch-stdout.log"
   else
     echo "       VM $i started successfully!"
+    
+    # Expand memory to full 4GB using virtio-mem
+    echo "       Expanding memory to 4GB..."
+    if sudo ch-remote --api-socket "$SOCKET" resize --memory 4294967296 2>/dev/null; then
+      echo "       Memory expanded to 4GB"
+    else
+      echo "       [WARN] Could not expand memory, running at 1GB"
+    fi
   fi
 done
 
