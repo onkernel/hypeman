@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/pkg/idtools"
 )
 
 // DockerClient wraps Docker API operations
@@ -108,7 +110,13 @@ type containerMetadata struct {
 // extractTar extracts a tar stream to a target directory using Docker's archive package
 func extractTar(reader io.Reader, targetDir string) error {
 	// Use Docker's battle-tested archive extraction with security hardening
+	// Set ownership to current user instead of trying to preserve original ownership
 	return archive.Untar(reader, targetDir, &archive.TarOptions{
-		NoLchown: true, // Don't change ownership (we're not root)
+		NoLchown: true,
+		ChownOpts: &idtools.Identity{
+			UID: os.Getuid(),
+			GID: os.Getgid(),
+		},
+		InUserNS: true, // Skip chown operations (we're in user namespace / not root)
 	})
 }
