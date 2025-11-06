@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/onkernel/hypeman"
+	"github.com/onkernel/hypeman/cmd/api/api"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"golang.org/x/sync/errgroup"
@@ -105,6 +106,8 @@ func run() error {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
+
+	r.Get("/swagger", api.SwaggerUIHandler)
 
 	// Create HTTP server
 	srv := &http.Server{

@@ -34,14 +34,14 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 		// Extract token from Authorization header
 		authHeader := input.RequestValidationInput.Request.Header.Get("Authorization")
 		if authHeader == "" {
-			log.WarnContext(ctx, "missing authorization header")
+			log.DebugContext(ctx, "missing authorization header")
 			return fmt.Errorf("authorization header required")
 		}
 
 		// Extract bearer token
 		token, err := extractBearerToken(authHeader)
 		if err != nil {
-			log.WarnContext(ctx, "invalid authorization header", "error", err)
+			log.DebugContext(ctx, "invalid authorization header", "error", err)
 			return fmt.Errorf("invalid authorization header format")
 		}
 
@@ -56,12 +56,12 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 		})
 
 		if err != nil {
-			log.WarnContext(ctx, "failed to parse JWT", "error", err)
+			log.DebugContext(ctx, "failed to parse JWT", "error", err)
 			return fmt.Errorf("invalid token")
 		}
 
 		if !parsedToken.Valid {
-			log.WarnContext(ctx, "invalid JWT token")
+			log.DebugContext(ctx, "invalid JWT token")
 			return fmt.Errorf("invalid token")
 		}
 
