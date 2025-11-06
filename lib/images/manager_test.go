@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateImage(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -41,7 +41,7 @@ func TestCreateImage(t *testing.T) {
 }
 
 func TestCreateImageWithCustomID(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -60,7 +60,7 @@ func TestCreateImageWithCustomID(t *testing.T) {
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -80,7 +80,7 @@ func TestCreateImageDuplicate(t *testing.T) {
 }
 
 func TestListImages(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -107,7 +107,7 @@ func TestListImages(t *testing.T) {
 }
 
 func TestGetImage(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -146,7 +146,7 @@ func TestGetImageNotFound(t *testing.T) {
 }
 
 func TestDeleteImage(t *testing.T) {
-	dockerClient := skipIfNoDocker(t)
+	dockerClient := requireDocker(t)
 
 	dataDir := t.TempDir()
 	mgr := NewManager(dataDir, dockerClient)
@@ -209,13 +209,13 @@ func TestGenerateImageID(t *testing.T) {
 	}
 }
 
-// skipIfNoDocker skips the test if Docker is not available or accessible
+// requireDocker fails the test if Docker is not available or accessible
 // Returns a DockerClient for use in tests
-func skipIfNoDocker(t *testing.T) *DockerClient {
+func requireDocker(t *testing.T) *DockerClient {
 	// Try to connect to Docker to verify we have permission
 	client, err := NewDockerClient()
 	if err != nil {
-		t.Skipf("cannot connect to docker: %v, skipping test", err)
+		t.Fatalf("cannot connect to docker: %v", err)
 	}
 
 	// Verify we can actually use Docker by pinging it
@@ -223,7 +223,7 @@ func skipIfNoDocker(t *testing.T) *DockerClient {
 	_, err = client.cli.Ping(ctx)
 	if err != nil {
 		client.Close()
-		t.Skipf("docker not available: %v, skipping test", err)
+		t.Fatalf("docker not available: %v", err)
 	}
 
 	return client
