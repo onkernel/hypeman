@@ -12,9 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/onkernel/hypeman"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -49,6 +51,16 @@ func run() error {
 	// Create router
 	r := chi.NewRouter()
 
+	// Load OpenAPI spec for request validation
+	spec, err := oapi.GetSwagger()
+	if err != nil {
+		return fmt.Errorf("failed to load OpenAPI spec: %w", err)
+	}
+
+	// Clear servers to avoid host validation issues
+	// See: https://github.com/oapi-codegen/nethttp-middleware#usage
+	spec.Servers = nil
+
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {
 		// Common middleware
@@ -58,15 +70,22 @@ func run() error {
 		r.Use(middleware.Recoverer)
 		r.Use(middleware.Timeout(60 * time.Second))
 
+		// OpenAPI request validation with authentication
+		validatorOptions := &nethttpmiddleware.Options{
+			Options: openapi3filter.Options{
+				AuthenticationFunc: mw.OapiAuthenticationFunc(app.Config.JwtSecret),
+			},
+			ErrorHandler: mw.OapiErrorHandler,
+		}
+		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
+
 		// Setup strict handler
 		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
 
-		// Mount API routes with JWT authentication
+		// Mount API routes (authentication now handled by validation middleware)
 		oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
-			BaseRouter: r,
-			Middlewares: []oapi.MiddlewareFunc{
-				mw.VerifyJWT(app.Config.JwtSecret),
-			},
+			BaseRouter:  r,
+			Middlewares: []oapi.MiddlewareFunc{},
 		})
 	})
 
