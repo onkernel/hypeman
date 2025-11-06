@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
+	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

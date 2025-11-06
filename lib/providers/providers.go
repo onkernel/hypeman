@@ -5,11 +5,11 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/logger"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/volumes"
 )
 
 // ProvideLogger provides a structured logger

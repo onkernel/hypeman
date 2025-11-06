@@ -7,12 +7,12 @@ import (
 	"log/slog"
 
 	"github.com/google/wire"
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/api"
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/providers"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+	"github.com/onkernel/hypeman/cmd/api/api"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/providers"
+	"github.com/onkernel/hypeman/lib/volumes"
 )
 
 // application struct to hold initialized components

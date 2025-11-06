@@ -1,6 +1,6 @@
-# Cloud Hypervisor Dataplane API
+# Hypeman
 
-[![Test](https://github.com/onkernel/cloud-hypervisor-dataplane/actions/workflows/test.yml/badge.svg)](https://github.com/onkernel/cloud-hypervisor-dataplane/actions/workflows/test.yml)
+[![Test](https://github.com/onkernel/hypeman/actions/workflows/test.yml/badge.svg)](https://github.com/onkernel/hypeman/actions/workflows/test.yml)
 
 Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor).
 

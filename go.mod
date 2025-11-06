@@ -1,4 +1,4 @@
-module github.com/onkernel/cloud-hypervisor-dataplane
+module github.com/onkernel/hypeman
 
 go 1.25.4
 

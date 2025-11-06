@@ -15,8 +15,8 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	openapi "github.com/onkernel/cloud-hypervisor-dataplane"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
+	"github.com/onkernel/hypeman"
+	"github.com/onkernel/hypeman/lib/oapi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -53,11 +53,11 @@ func run() error {
 	// Serve OpenAPI spec
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi")
-		w.Write(openapi.OpenAPIYAML)
+		w.Write(hypeman.OpenAPIYAML)
 	})
 
 	r.Get("/spec.json", func(w http.ResponseWriter, r *http.Request) {
-		jsonData, err := yaml.YAMLToJSON(openapi.OpenAPIYAML)
+		jsonData, err := yaml.YAMLToJSON(hypeman.OpenAPIYAML)
 		if err != nil {
 			http.Error(w, "Failed to convert YAML to JSON", http.StatusInternalServerError)
 			logger.ErrorContext(r.Context(), "Failed to convert YAML to JSON", "error", err)
@@ -86,7 +86,7 @@ func run() error {
 
 	// Run the server
 	grp.Go(func() error {
-		logger.Info("starting cloud hypervisor dataplane API", "port", app.Config.Port)
+		logger.Info("starting hypeman API", "port", app.Config.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", "error", err)
 			return err

@@ -18,7 +18,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:             getEnv("PORT", "8080"),
-		DataDir:          getEnv("DATA_DIR", "/var/lib/cloud-hypervisor-dataplane"),
+		DataDir:          getEnv("DATA_DIR", "/var/lib/hypeman"),
 		BridgeName:       getEnv("BRIDGE_NAME", "vmbr0"),
 		SubnetCIDR:       getEnv("SUBNET_CIDR", "192.168.100.0/24"),
 		SubnetGateway:    getEnv("SUBNET_GATEWAY", "192.168.100.1"),

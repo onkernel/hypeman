@@ -1,11 +1,11 @@
 package api
 
 import (
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/volumes"
 )
 
 // ApiService implements the oapi.StrictServerInterface

@@ -43,7 +43,7 @@ generate-all: oapi-generate generate-wire
 
 # Build the binary
 build: | $(BIN_DIR)
-	go build -o $(BIN_DIR)/dataplane ./cmd/api
+	go build -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Run in development mode with hot reload
 dev: $(AIR)

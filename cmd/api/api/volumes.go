@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/logger"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/volumes"
 )
 
 // ListVolumes lists all volumes

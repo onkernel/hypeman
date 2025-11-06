@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
+	"github.com/onkernel/hypeman/lib/oapi"
 )
 
 // Manager handles volume lifecycle operations

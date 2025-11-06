@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/volumes"
 )
 
 // newTestService creates an ApiService for testing with temporary data directory

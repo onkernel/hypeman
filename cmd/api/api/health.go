@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
+	"github.com/onkernel/hypeman/lib/oapi"
 )
 
 // GetHealth implements health check endpoint
