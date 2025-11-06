@@ -1,16 +1,16 @@
 package images
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/idtools"
 )
 
 // DockerClient wraps Docker API operations
@@ -107,16 +107,53 @@ type containerMetadata struct {
 	WorkingDir string
 }
 
-// extractTar extracts a tar stream to a target directory using Docker's archive package
+// extractTar extracts a tar stream to a target directory
+// Ignores ownership/permission errors (matches POC behavior: docker export | tar -C dir -xf -)
 func extractTar(reader io.Reader, targetDir string) error {
-	// Use Docker's battle-tested archive extraction with security hardening
-	// Set ownership to current user instead of trying to preserve original ownership
-	return archive.Untar(reader, targetDir, &archive.TarOptions{
-		NoLchown: true,
-		ChownOpts: &idtools.Identity{
-			UID: os.Getuid(),
-			GID: os.Getgid(),
-		},
-		InUserNS: true, // Skip chown operations (we're in user namespace / not root)
-	})
+	tarReader := tar.NewReader(reader)
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar header: %w", err)
+		}
+
+		target := filepath.Join(targetDir, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			// Create directory, ignore chmod errors (best effort)
+			os.MkdirAll(target, 0755)
+
+		case tar.TypeReg:
+			// Create parent directory
+			os.MkdirAll(filepath.Dir(target), 0755)
+
+			// Create file, use default permissions if header.Mode fails
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+			if err != nil {
+				return fmt.Errorf("create file %s: %w", target, err)
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return fmt.Errorf("write file %s: %w", target, err)
+			}
+			outFile.Close()
+
+		case tar.TypeSymlink:
+			os.MkdirAll(filepath.Dir(target), 0755)
+			os.Remove(target) // Remove if exists
+			os.Symlink(header.Linkname, target) // Ignore errors
+
+		case tar.TypeLink:
+			linkTarget := filepath.Join(targetDir, header.Linkname)
+			os.Remove(target)
+			os.Link(linkTarget, target) // Ignore errors
+		}
+	}
+
+	return nil
 }
