@@ -29,8 +29,8 @@ type application struct {
 // initializeApp is the injector function
 func initializeApp() (*application, func(), error) {
 	panic(wire.Build(
-		providers.ProvideContext,
 		providers.ProvideLogger,
+		providers.ProvideContext,
 		providers.ProvideConfig,
 		providers.ProvideImageManager,
 		providers.ProvideInstanceManager,

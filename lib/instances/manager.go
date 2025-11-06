@@ -42,22 +42,48 @@ func (m *manager) CreateInstance(ctx context.Context, req oapi.CreateInstanceReq
 }
 
 func (m *manager) GetInstance(ctx context.Context, id string) (*oapi.Instance, error) {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return nil, ErrNotFound
+	}
 	return nil, fmt.Errorf("get instance not yet implemented")
 }
 
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return ErrNotFound
+	}
 	return fmt.Errorf("delete instance not yet implemented")
 }
 
 func (m *manager) StandbyInstance(ctx context.Context, id string) (*oapi.Instance, error) {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return nil, ErrNotFound
+	}
+	// Check if instance is in correct state (e.g., Running)
+	validState := false
+	if !validState {
+		return nil, ErrInvalidState
+	}
 	return nil, fmt.Errorf("standby instance not yet implemented")
 }
 
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*oapi.Instance, error) {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return nil, ErrNotFound
+	}
+	// Check if instance is in Standby state
+	inStandby := false
+	if !inStandby {
+		return nil, ErrInvalidState
+	}
 	return nil, fmt.Errorf("restore instance not yet implemented")
 }
 

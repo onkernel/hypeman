@@ -37,12 +37,25 @@ func (m *manager) CreateVolume(ctx context.Context, req oapi.CreateVolumeRequest
 }
 
 func (m *manager) GetVolume(ctx context.Context, id string) (*oapi.Volume, error) {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return nil, ErrNotFound
+	}
 	return nil, fmt.Errorf("get volume not yet implemented")
 }
 
 func (m *manager) DeleteVolume(ctx context.Context, id string) error {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return ErrNotFound
+	}
+	// Check if volume is attached to any instance
+	inUse := false
+	if inUse {
+		return ErrInUse
+	}
 	return fmt.Errorf("delete volume not yet implemented")
 }
 

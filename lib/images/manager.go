@@ -32,17 +32,27 @@ func (m *manager) ListImages(ctx context.Context) ([]oapi.Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error) {
-	// TODO: implement
+	// TODO: implement actual logic
+	// Example: check if already exists
+	exists := false
+	if exists {
+		return nil, ErrAlreadyExists
+	}
 	return nil, fmt.Errorf("image creation not yet implemented")
 }
 
 func (m *manager) GetImage(ctx context.Context, id string) (*oapi.Image, error) {
-	// TODO: implement
-	return nil, fmt.Errorf("get image not yet implemented")
+	// TODO: implement actual logic
+	// For now, always return not found since we have no images
+	return nil, ErrNotFound
 }
 
 func (m *manager) DeleteImage(ctx context.Context, id string) error {
-	// TODO: implement
+	// TODO: implement actual logic
+	exists := false
+	if !exists {
+		return ErrNotFound
+	}
 	return fmt.Errorf("delete image not yet implemented")
 }
 

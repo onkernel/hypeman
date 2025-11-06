@@ -8,19 +8,20 @@ import (
 	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
 	"github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
 	"github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
+	"github.com/onkernel/cloud-hypervisor-dataplane/lib/logger"
 	"github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
 )
-
-// ProvideContext provides a base context
-func ProvideContext() context.Context {
-	return context.Background()
-}
 
 // ProvideLogger provides a structured logger
 func ProvideLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+}
+
+// ProvideContext provides a context with logger attached
+func ProvideContext(log *slog.Logger) context.Context {
+	return logger.AddToContext(context.Background(), log)
 }
 
 // ProvideConfig provides the application configuration

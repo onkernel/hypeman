@@ -25,8 +25,8 @@ import (
 
 // initializeApp is the injector function
 func initializeApp() (*application, func(), error) {
-	context := providers.ProvideContext()
 	logger := providers.ProvideLogger()
+	context := providers.ProvideContext(logger)
 	config := providers.ProvideConfig()
 	manager := providers.ProvideImageManager(config)
 	instancesManager := providers.ProvideInstanceManager(config)
