@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
@@ -60,23 +61,28 @@ func (m *manager) ListImages(ctx context.Context) ([]oapi.Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error) {
-	if imageExists(m.dataDir, req.Name) {
+	normalizedName, err := normalizeImageName(req.Name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image name: %w", err)
+	}
+
+	if imageExists(m.dataDir, normalizedName) {
 		return nil, ErrAlreadyExists
 	}
 
 	meta := &imageMetadata{
-		Name:      req.Name,
+		Name:      normalizedName,
 		Status:    StatusPending,
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}
 
-	if err := writeMetadata(m.dataDir, req.Name, meta); err != nil {
+	if err := writeMetadata(m.dataDir, normalizedName, meta); err != nil {
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
-	queuePos := m.queue.Enqueue(req.Name, req, func() {
-		m.buildImage(context.Background(), req.Name, req)
+	queuePos := m.queue.Enqueue(normalizedName, req, func() {
+		m.buildImage(context.Background(), normalizedName, req)
 	})
 
 	img := meta.toOAPI()
@@ -179,7 +185,12 @@ func (m *manager) RecoverInterruptedBuilds() {
 }
 
 func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error) {
-	meta, err := readMetadata(m.dataDir, name)
+	normalizedName, err := normalizeImageName(name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image name: %w", err)
+	}
+
+	meta, err := readMetadata(m.dataDir, normalizedName)
 	if err != nil {
 		return nil, err
 	}
@@ -187,14 +198,32 @@ func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error
 	img := meta.toOAPI()
 	
 	if meta.Status == StatusPending {
-		img.QueuePosition = m.queue.GetPosition(name)
+		img.QueuePosition = m.queue.GetPosition(normalizedName)
 	}
 	
 	return img, nil
 }
 
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
-	return deleteImage(m.dataDir, name)
+	normalizedName, err := normalizeImageName(name)
+	if err != nil {
+		return fmt.Errorf("invalid image name: %w", err)
+	}
+	return deleteImage(m.dataDir, normalizedName)
+}
+
+// normalizeImageName validates and normalizes an OCI image reference
+// Examples: alpine → docker.io/library/alpine:latest
+//           nginx:1.0 → docker.io/library/nginx:1.0
+func normalizeImageName(name string) (string, error) {
+	named, err := reference.ParseNormalizedNamed(name)
+	if err != nil {
+		return "", err
+	}
+	
+	// Ensure it has a tag (add :latest if missing)
+	tagged := reference.TagNameOnly(named)
+	return tagged.String(), nil
 }
 
 

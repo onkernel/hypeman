@@ -169,6 +169,30 @@ func TestCreateImage_InvalidTag(t *testing.T) {
 	t.Fatal("Build did not fail within timeout")
 }
 
+func TestCreateImage_InvalidName(t *testing.T) {
+	svc := newTestService(t)
+	ctx := ctx()
+
+	invalidNames := []string{
+		"invalid::",
+		"has spaces",
+		"",
+	}
+
+	for _, name := range invalidNames {
+		t.Run(name, func(t *testing.T) {
+			createResp, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+				Body: &oapi.CreateImageRequest{Name: name},
+			})
+			require.NoError(t, err)
+
+			badReq, ok := createResp.(oapi.CreateImage400JSONResponse)
+			require.True(t, ok, "expected 400 bad request for invalid name: %s", name)
+			require.Equal(t, "invalid_name", badReq.Code)
+		})
+	}
+}
+
 func getQueuePos(pos *int) int {
 	if pos == nil {
 		return 0
