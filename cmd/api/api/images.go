@@ -47,11 +47,10 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	return oapi.CreateImage202JSONResponse(*img), nil
 }
 
-// GetImage gets image details
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	img, err := s.ImageManager.GetImage(ctx, request.Id)
+	img, err := s.ImageManager.GetImage(ctx, request.Name)
 	if err != nil {
 		switch {
 		case errors.Is(err, images.ErrNotFound):
@@ -60,7 +59,7 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to get image", "error", err, "id", request.Id)
+			log.Error("failed to get image", "error", err, "name", request.Name)
 			return oapi.GetImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to get image",
@@ -70,11 +69,10 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 	return oapi.GetImage200JSONResponse(*img), nil
 }
 
-// DeleteImage deletes an image
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	err := s.ImageManager.DeleteImage(ctx, request.Id)
+	err := s.ImageManager.DeleteImage(ctx, request.Name)
 	if err != nil {
 		switch {
 		case errors.Is(err, images.ErrNotFound):
@@ -83,7 +81,7 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to delete image", "error", err, "id", request.Id)
+			log.Error("failed to delete image", "error", err, "name", request.Name)
 			return oapi.DeleteImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete image",

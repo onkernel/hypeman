@@ -233,26 +233,18 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
-        id:
-          type: string
-          description: Optional custom identifier (auto-generated if not provided)
-          example: img-nginx-v1
     
     Image:
       type: object
-      required: [id, name, status, created_at]
+      required: [name, status, created_at]
       properties:
-        id:
-          type: string
-          description: Unique identifier
-          example: img-nginx-v1
         name:
           type: string
-          description: OCI image reference
+          description: OCI image reference (also serves as unique identifier)
           example: docker.io/library/nginx:latest
         status:
           type: string
-          enum: [pending, pulling, unpacking, converting, ready, failed]
+          enum: [pending, pulling, converting, ready, failed]
           description: Build status
           example: ready
         queue_position:
@@ -456,18 +448,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
-  /images/{id}:
+  /images/{name}:
     get:
       summary: Get image details
       operationId: getImage
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: name
           in: path
           required: true
           schema:
             type: string
+          description: URL-encoded image name (e.g. docker.io%2Flibrary%2Falpine%3Alatest)
       responses:
         200:
           description: Image details
@@ -493,11 +486,12 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: name
           in: path
           required: true
           schema:
             type: string
+          description: URL-encoded image name
       responses:
         204:
           description: Image deleted

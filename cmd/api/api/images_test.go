@@ -26,7 +26,7 @@ func TestGetImage_NotFound(t *testing.T) {
 	svc := newTestService(t)
 
 	resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-		Id: "non-existent",
+		Name: "non-existent:latest",
 	})
 	require.NoError(t, err)
 
@@ -67,9 +67,8 @@ func TestCreateImage_Async(t *testing.T) {
 
 	img := oapi.Image(acceptedResp)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
-	require.Equal(t, "img-alpine-latest", img.Id)
-	t.Logf("Image created: id=%s, initial_status=%s, queue_position=%v", 
-		img.Id, img.Status, img.QueuePosition)
+	t.Logf("Image created: name=%s, initial_status=%s, queue_position=%v", 
+		img.Name, img.Status, img.QueuePosition)
 
 	// Poll until ready
 	t.Log("Polling for completion...")
@@ -77,7 +76,7 @@ func TestCreateImage_Async(t *testing.T) {
 	lastQueuePos := getQueuePos(img.QueuePosition)
 	
 	for i := 0; i < 3000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Id: img.Id})
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: img.Name})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
@@ -138,12 +137,12 @@ func TestCreateImage_InvalidTag(t *testing.T) {
 
 	img := oapi.Image(acceptedResp)
 	require.Equal(t, "docker.io/library/busybox:foobar", img.Name)
-	t.Logf("Image created: id=%s", img.Id)
+	t.Logf("Image created: name=%s", img.Name)
 
 	// Poll until failed
 	t.Log("Polling for failure...")
 	for i := 0; i < 1000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Id: img.Id})
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: img.Name})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)

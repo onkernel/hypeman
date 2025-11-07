@@ -36,11 +36,11 @@ func (c *OCIClient) Close() error {
 }
 
 func (c *OCIClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
-	ociLayoutDir := filepath.Join(c.cacheDir, fmt.Sprintf("oci-layout-%d", os.Getpid()))
+	// Use persistent OCI layout for caching (parse imageRef into path)
+	ociLayoutDir := filepath.Join(c.cacheDir, imageNameToPath(imageRef))
 	if err := os.MkdirAll(ociLayoutDir, 0755); err != nil {
 		return nil, fmt.Errorf("create oci layout dir: %w", err)
 	}
-	defer os.RemoveAll(ociLayoutDir)
 
 	if err := c.pullToOCILayout(ctx, imageRef, ociLayoutDir); err != nil {
 		return nil, fmt.Errorf("pull to oci layout: %w", err)
@@ -223,7 +223,6 @@ func (c *OCIClient) unpackLayers(ctx context.Context, ociLayoutDir, targetDir st
 	return nil
 }
 
-// containerMetadata holds extracted container metadata
 type containerMetadata struct {
 	Entrypoint []string
 	Cmd        []string

@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -16,7 +14,6 @@ import (
 const (
 	StatusPending    = "pending"
 	StatusPulling    = "pulling"
-	StatusUnpacking  = "unpacking"
 	StatusConverting = "converting"
 	StatusReady      = "ready"
 	StatusFailed     = "failed"
@@ -63,30 +60,23 @@ func (m *manager) ListImages(ctx context.Context) ([]oapi.Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error) {
-	imageID := req.Id
-	if imageID == nil || *imageID == "" {
-		generated := generateImageID(req.Name)
-		imageID = &generated
-	}
-
-	if imageExists(m.dataDir, *imageID) {
+	if imageExists(m.dataDir, req.Name) {
 		return nil, ErrAlreadyExists
 	}
 
 	meta := &imageMetadata{
-		ID:        *imageID,
 		Name:      req.Name,
 		Status:    StatusPending,
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}
 
-	if err := writeMetadata(m.dataDir, *imageID, meta); err != nil {
+	if err := writeMetadata(m.dataDir, req.Name, meta); err != nil {
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
-	queuePos := m.queue.Enqueue(*imageID, req, func() {
-		m.buildImage(context.Background(), *imageID, req)
+	queuePos := m.queue.Enqueue(req.Name, req, func() {
+		m.buildImage(context.Background(), req.Name, req)
 	})
 
 	img := meta.toOAPI()
@@ -96,44 +86,42 @@ func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) 
 	return img, nil
 }
 
-func (m *manager) buildImage(ctx context.Context, imageID string, req oapi.CreateImageRequest) {
-	defer m.queue.MarkComplete(imageID)
+func (m *manager) buildImage(ctx context.Context, imageName string, req oapi.CreateImageRequest) {
+	defer m.queue.MarkComplete(imageName)
 
-	buildDir := filepath.Join(imageDir(m.dataDir, imageID), ".build")
+	buildDir := filepath.Join(imageDir(m.dataDir, imageName), ".build")
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		m.updateStatus(imageID, StatusFailed, fmt.Errorf("create build dir: %w", err))
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("create build dir: %w", err))
 		return
 	}
 
 	defer func() {
-		meta, _ := readMetadata(m.dataDir, imageID)
+		meta, _ := readMetadata(m.dataDir, imageName)
 		if meta != nil && meta.Status == StatusReady {
 			os.RemoveAll(buildDir)
 		}
 	}()
 
-	m.updateStatus(imageID, StatusPulling, nil)
+	m.updateStatus(imageName, StatusPulling, nil)
 	containerMeta, err := m.ociClient.pullAndExport(ctx, req.Name, tempDir)
 	if err != nil {
-		m.updateStatus(imageID, StatusFailed, fmt.Errorf("pull and export: %w", err))
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		return
 	}
 
-	m.updateStatus(imageID, StatusUnpacking, nil)
-	
-	m.updateStatus(imageID, StatusConverting, nil)
-	diskPath := imagePath(m.dataDir, imageID)
+	m.updateStatus(imageName, StatusConverting, nil)
+	diskPath := imagePath(m.dataDir, imageName)
 	diskSize, err := convertToExt4(tempDir, diskPath)
 	if err != nil {
-		m.updateStatus(imageID, StatusFailed, fmt.Errorf("convert to ext4: %w", err))
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("convert to ext4: %w", err))
 		return
 	}
 
-	meta, err := readMetadata(m.dataDir, imageID)
+	meta, err := readMetadata(m.dataDir, imageName)
 	if err != nil {
-		m.updateStatus(imageID, StatusFailed, fmt.Errorf("read metadata: %w", err))
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("read metadata: %w", err))
 		return
 	}
 
@@ -145,14 +133,14 @@ func (m *manager) buildImage(ctx context.Context, imageID string, req oapi.Creat
 	meta.Env = containerMeta.Env
 	meta.WorkingDir = containerMeta.WorkingDir
 
-	if err := writeMetadata(m.dataDir, imageID, meta); err != nil {
-		m.updateStatus(imageID, StatusFailed, fmt.Errorf("write final metadata: %w", err))
+	if err := writeMetadata(m.dataDir, imageName, meta); err != nil {
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("write final metadata: %w", err))
 		return
 	}
 }
 
-func (m *manager) updateStatus(imageID, status string, err error) {
-	meta, readErr := readMetadata(m.dataDir, imageID)
+func (m *manager) updateStatus(imageName, status string, err error) {
+	meta, readErr := readMetadata(m.dataDir, imageName)
 	if readErr != nil {
 		return
 	}
@@ -163,7 +151,7 @@ func (m *manager) updateStatus(imageID, status string, err error) {
 		meta.Error = &errorMsg
 	}
 
-	writeMetadata(m.dataDir, imageID, meta)
+	writeMetadata(m.dataDir, imageName, meta)
 }
 
 func (m *manager) RecoverInterruptedBuilds() {
@@ -179,51 +167,34 @@ func (m *manager) RecoverInterruptedBuilds() {
 
 	for _, meta := range metas {
 		switch meta.Status {
-		case StatusPending, StatusPulling, StatusUnpacking, StatusConverting:
+		case StatusPending, StatusPulling, StatusConverting:
 			if meta.Request != nil {
 				metaCopy := meta
-				m.queue.Enqueue(metaCopy.ID, *metaCopy.Request, func() {
-					m.buildImage(context.Background(), metaCopy.ID, *metaCopy.Request)
+				m.queue.Enqueue(metaCopy.Name, *metaCopy.Request, func() {
+					m.buildImage(context.Background(), metaCopy.Name, *metaCopy.Request)
 				})
 			}
 		}
 	}
 }
 
-func (m *manager) GetImage(ctx context.Context, id string) (*oapi.Image, error) {
-	meta, err := readMetadata(m.dataDir, id)
+func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error) {
+	meta, err := readMetadata(m.dataDir, name)
 	if err != nil {
 		return nil, err
 	}
 	
 	img := meta.toOAPI()
 	
-	// Inject live queue position if pending
 	if meta.Status == StatusPending {
-		img.QueuePosition = m.queue.GetPosition(id)
+		img.QueuePosition = m.queue.GetPosition(name)
 	}
 	
 	return img, nil
 }
 
-func (m *manager) DeleteImage(ctx context.Context, id string) error {
-	return deleteImage(m.dataDir, id)
-}
-
-// generateImageID creates a valid ID from an image name
-// Example: docker.io/library/nginx:latest -> img-nginx-latest
-func generateImageID(imageName string) string {
-	// Extract image name and tag
-	parts := strings.Split(imageName, "/")
-	nameTag := parts[len(parts)-1]
-
-	// Replace special characters with dashes
-	reg := regexp.MustCompile(`[^a-zA-Z0-9]+`)
-	sanitized := reg.ReplaceAllString(nameTag, "-")
-	sanitized = strings.Trim(sanitized, "-")
-
-	// Add prefix
-	return "img-" + sanitized
+func (m *manager) DeleteImage(ctx context.Context, name string) error {
+	return deleteImage(m.dataDir, name)
 }
 
 

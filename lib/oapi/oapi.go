@@ -39,7 +39,6 @@ const (
 	Pending    ImageStatus = "pending"
 	Pulling    ImageStatus = "pulling"
 	Ready      ImageStatus = "ready"
-	Unpacking  ImageStatus = "unpacking"
 )
 
 // Defines values for InstanceState.
@@ -69,9 +68,6 @@ type AttachVolumeRequest struct {
 
 // CreateImageRequest defines model for CreateImageRequest.
 type CreateImageRequest struct {
-	// Id Optional custom identifier (auto-generated if not provided)
-	Id *string `json:"id,omitempty"`
-
 	// Name OCI image reference (e.g., docker.io/library/nginx:latest)
 	Name string `json:"name"`
 }
@@ -168,10 +164,7 @@ type Image struct {
 	// Error Error message if status is failed
 	Error *string `json:"error"`
 
-	// Id Unique identifier
-	Id string `json:"id"`
-
-	// Name OCI image reference
+	// Name OCI image reference (also serves as unique identifier)
 	Name string `json:"name"`
 
 	// QueuePosition Position in build queue (null if not queued)
@@ -414,10 +407,10 @@ type ClientInterface interface {
 	CreateImage(ctx context.Context, body CreateImageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteImage request
-	DeleteImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	DeleteImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetImage request
-	GetImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListInstances request
 	ListInstances(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -513,8 +506,8 @@ func (c *Client) CreateImage(ctx context.Context, body CreateImageJSONRequestBod
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteImageRequest(c.Server, id)
+func (c *Client) DeleteImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteImageRequest(c.Server, name)
 	if err != nil {
 		return nil, err
 	}
@@ -525,8 +518,8 @@ func (c *Client) DeleteImage(ctx context.Context, id string, reqEditors ...Reque
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetImageRequest(c.Server, id)
+func (c *Client) GetImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetImageRequest(c.Server, name)
 	if err != nil {
 		return nil, err
 	}
@@ -824,12 +817,12 @@ func NewCreateImageRequestWithBody(server string, contentType string, body io.Re
 }
 
 // NewDeleteImageRequest generates requests for DeleteImage
-func NewDeleteImageRequest(server string, id string) (*http.Request, error) {
+func NewDeleteImageRequest(server string, name string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "name", runtime.ParamLocationPath, name)
 	if err != nil {
 		return nil, err
 	}
@@ -858,12 +851,12 @@ func NewDeleteImageRequest(server string, id string) (*http.Request, error) {
 }
 
 // NewGetImageRequest generates requests for GetImage
-func NewGetImageRequest(server string, id string) (*http.Request, error) {
+func NewGetImageRequest(server string, name string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "name", runtime.ParamLocationPath, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1451,10 +1444,10 @@ type ClientWithResponsesInterface interface {
 	CreateImageWithResponse(ctx context.Context, body CreateImageJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateImageResponse, error)
 
 	// DeleteImageWithResponse request
-	DeleteImageWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteImageResponse, error)
+	DeleteImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*DeleteImageResponse, error)
 
 	// GetImageWithResponse request
-	GetImageWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetImageResponse, error)
+	GetImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetImageResponse, error)
 
 	// ListInstancesWithResponse request
 	ListInstancesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListInstancesResponse, error)
@@ -1971,8 +1964,8 @@ func (c *ClientWithResponses) CreateImageWithResponse(ctx context.Context, body 
 }
 
 // DeleteImageWithResponse request returning *DeleteImageResponse
-func (c *ClientWithResponses) DeleteImageWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteImageResponse, error) {
-	rsp, err := c.DeleteImage(ctx, id, reqEditors...)
+func (c *ClientWithResponses) DeleteImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*DeleteImageResponse, error) {
+	rsp, err := c.DeleteImage(ctx, name, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -1980,8 +1973,8 @@ func (c *ClientWithResponses) DeleteImageWithResponse(ctx context.Context, id st
 }
 
 // GetImageWithResponse request returning *GetImageResponse
-func (c *ClientWithResponses) GetImageWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetImageResponse, error) {
-	rsp, err := c.GetImage(ctx, id, reqEditors...)
+func (c *ClientWithResponses) GetImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetImageResponse, error) {
+	rsp, err := c.GetImage(ctx, name, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -2868,11 +2861,11 @@ type ServerInterface interface {
 	// (POST /images)
 	CreateImage(w http.ResponseWriter, r *http.Request)
 	// Delete image
-	// (DELETE /images/{id})
-	DeleteImage(w http.ResponseWriter, r *http.Request, id string)
+	// (DELETE /images/{name})
+	DeleteImage(w http.ResponseWriter, r *http.Request, name string)
 	// Get image details
-	// (GET /images/{id})
-	GetImage(w http.ResponseWriter, r *http.Request, id string)
+	// (GET /images/{name})
+	GetImage(w http.ResponseWriter, r *http.Request, name string)
 	// List instances
 	// (GET /instances)
 	ListInstances(w http.ResponseWriter, r *http.Request)
@@ -2937,14 +2930,14 @@ func (_ Unimplemented) CreateImage(w http.ResponseWriter, r *http.Request) {
 }
 
 // Delete image
-// (DELETE /images/{id})
-func (_ Unimplemented) DeleteImage(w http.ResponseWriter, r *http.Request, id string) {
+// (DELETE /images/{name})
+func (_ Unimplemented) DeleteImage(w http.ResponseWriter, r *http.Request, name string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Get image details
-// (GET /images/{id})
-func (_ Unimplemented) GetImage(w http.ResponseWriter, r *http.Request, id string) {
+// (GET /images/{name})
+func (_ Unimplemented) GetImage(w http.ResponseWriter, r *http.Request, name string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -3094,12 +3087,12 @@ func (siw *ServerInterfaceWrapper) DeleteImage(w http.ResponseWriter, r *http.Re
 
 	var err error
 
-	// ------------- Path parameter "id" -------------
-	var id string
+	// ------------- Path parameter "name" -------------
+	var name string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
 		return
 	}
 
@@ -3110,7 +3103,7 @@ func (siw *ServerInterfaceWrapper) DeleteImage(w http.ResponseWriter, r *http.Re
 	r = r.WithContext(ctx)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteImage(w, r, id)
+		siw.Handler.DeleteImage(w, r, name)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3125,12 +3118,12 @@ func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Reque
 
 	var err error
 
-	// ------------- Path parameter "id" -------------
-	var id string
+	// ------------- Path parameter "name" -------------
+	var name string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
 		return
 	}
 
@@ -3141,7 +3134,7 @@ func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Reque
 	r = r.WithContext(ctx)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetImage(w, r, id)
+		siw.Handler.GetImage(w, r, name)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3670,10 +3663,10 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/images", wrapper.CreateImage)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/images/{id}", wrapper.DeleteImage)
+		r.Delete(options.BaseURL+"/images/{name}", wrapper.DeleteImage)
 	})
 	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/images/{id}", wrapper.GetImage)
+		r.Get(options.BaseURL+"/images/{name}", wrapper.GetImage)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/instances", wrapper.ListInstances)
@@ -3813,7 +3806,7 @@ func (response CreateImage500JSONResponse) VisitCreateImageResponse(w http.Respo
 }
 
 type DeleteImageRequestObject struct {
-	Id string `json:"id"`
+	Name string `json:"name"`
 }
 
 type DeleteImageResponseObject interface {
@@ -3847,7 +3840,7 @@ func (response DeleteImage500JSONResponse) VisitDeleteImageResponse(w http.Respo
 }
 
 type GetImageRequestObject struct {
-	Id string `json:"id"`
+	Name string `json:"name"`
 }
 
 type GetImageResponseObject interface {
@@ -4422,10 +4415,10 @@ type StrictServerInterface interface {
 	// (POST /images)
 	CreateImage(ctx context.Context, request CreateImageRequestObject) (CreateImageResponseObject, error)
 	// Delete image
-	// (DELETE /images/{id})
+	// (DELETE /images/{name})
 	DeleteImage(ctx context.Context, request DeleteImageRequestObject) (DeleteImageResponseObject, error)
 	// Get image details
-	// (GET /images/{id})
+	// (GET /images/{name})
 	GetImage(ctx context.Context, request GetImageRequestObject) (GetImageResponseObject, error)
 	// List instances
 	// (GET /instances)
@@ -4577,10 +4570,10 @@ func (sh *strictHandler) CreateImage(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteImage operation middleware
-func (sh *strictHandler) DeleteImage(w http.ResponseWriter, r *http.Request, id string) {
+func (sh *strictHandler) DeleteImage(w http.ResponseWriter, r *http.Request, name string) {
 	var request DeleteImageRequestObject
 
-	request.Id = id
+	request.Name = name
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteImage(ctx, request.(DeleteImageRequestObject))
@@ -4603,10 +4596,10 @@ func (sh *strictHandler) DeleteImage(w http.ResponseWriter, r *http.Request, id 
 }
 
 // GetImage operation middleware
-func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, id string) {
+func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, name string) {
 	var request GetImageRequestObject
 
-	request.Id = id
+	request.Name = name
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetImage(ctx, request.(GetImageRequestObject))
@@ -4985,59 +4978,60 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

@@ -27,22 +27,21 @@ func TestCreateImage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
-	require.Equal(t, "img-alpine-latest", img.Id)
 
-	waitForReady(t, mgr, ctx, img.Id)
+	waitForReady(t, mgr, ctx, img.Name)
 
-	img, err = mgr.GetImage(ctx, img.Id)
+	img, err = mgr.GetImage(ctx, img.Name)
 	require.NoError(t, err)
 	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
 	require.NotNil(t, img.SizeBytes)
 	require.Greater(t, *img.SizeBytes, int64(0))
 
-	diskPath := filepath.Join(dataDir, "images", img.Id, "rootfs.ext4")
+	diskPath := filepath.Join(dataDir, "images", imageNameToPath(img.Name), "rootfs.ext4")
 	_, err = os.Stat(diskPath)
 	require.NoError(t, err)
 }
 
-func TestCreateImageWithCustomID(t *testing.T) {
+func TestCreateImageDifferentTag(t *testing.T) {
 	ociClient, err := NewOCIClient(t.TempDir())
 	require.NoError(t, err)
 
@@ -50,19 +49,16 @@ func TestCreateImageWithCustomID(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	customID := "my-custom-alpine"
 	req := oapi.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
-		Id:   &customID,
+		Name: "docker.io/library/alpine:3.18",
 	}
 
 	img, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, img)
-	require.Equal(t, "my-custom-alpine", img.Id)
+	require.Equal(t, "docker.io/library/alpine:3.18", img.Name)
 
-	// Wait for build to complete
-	waitForReady(t, mgr, ctx, img.Id)
+	waitForReady(t, mgr, ctx, img.Name)
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
@@ -81,10 +77,9 @@ func TestCreateImageDuplicate(t *testing.T) {
 	img1, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
-	// Wait for build to start (moves from pending to pulling)
-	waitForReady(t, mgr, ctx, img1.Id)
+	waitForReady(t, mgr, ctx, img1.Name)
 
-	// Try to create duplicate (should fail even if first still building)
+	// Try to create duplicate
 	_, err = mgr.CreateImage(ctx, req)
 	require.ErrorIs(t, err, ErrAlreadyExists)
 }
@@ -110,8 +105,7 @@ func TestListImages(t *testing.T) {
 	img1, err := mgr.CreateImage(ctx, req1)
 	require.NoError(t, err)
 
-	// Wait for build
-	waitForReady(t, mgr, ctx, img1.Id)
+	waitForReady(t, mgr, ctx, img1.Name)
 
 	// List should return one image
 	images, err = mgr.ListImages(ctx)
@@ -136,14 +130,11 @@ func TestGetImage(t *testing.T) {
 	created, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
-	// Wait for build
-	waitForReady(t, mgr, ctx, created.Id)
+	waitForReady(t, mgr, ctx, created.Name)
 
-	// Get the image
-	img, err := mgr.GetImage(ctx, created.Id)
+	img, err := mgr.GetImage(ctx, created.Name)
 	require.NoError(t, err)
 	require.NotNil(t, img)
-	require.Equal(t, created.Id, img.Id)
 	require.Equal(t, created.Name, img.Name)
 	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
 	require.NotNil(t, img.SizeBytes)
@@ -158,8 +149,7 @@ func TestGetImageNotFound(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Try to get non-existent image
-	_, err = mgr.GetImage(ctx, "nonexistent")
+	_, err = mgr.GetImage(ctx, "nonexistent:latest")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -178,19 +168,15 @@ func TestDeleteImage(t *testing.T) {
 	created, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
-	// Wait for ready
-	waitForReady(t, mgr, ctx, created.Id)
+	waitForReady(t, mgr, ctx, created.Name)
 
-	// Delete the image
-	err = mgr.DeleteImage(ctx, created.Id)
+	err = mgr.DeleteImage(ctx, created.Name)
 	require.NoError(t, err)
 
-	// Verify it's gone
-	_, err = mgr.GetImage(ctx, created.Id)
+	_, err = mgr.GetImage(ctx, created.Name)
 	require.ErrorIs(t, err, ErrNotFound)
 
-	// Verify files were removed
-	imageDir := filepath.Join(dataDir, "images", created.Id)
+	imageDir := filepath.Join(dataDir, "images", imageNameToPath(created.Name))
 	_, err = os.Stat(imageDir)
 	require.True(t, os.IsNotExist(err))
 }
@@ -204,35 +190,34 @@ func TestDeleteImageNotFound(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Try to delete non-existent image
-	err = mgr.DeleteImage(ctx, "nonexistent")
+	err = mgr.DeleteImage(ctx, "nonexistent:latest")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
-func TestGenerateImageID(t *testing.T) {
+func TestImageNameToPath(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"docker.io/library/nginx:latest", "img-nginx-latest"},
-		{"docker.io/library/alpine:3.18", "img-alpine-3-18"},
-		{"gcr.io/my-project/my-app:v1.0.0", "img-my-app-v1-0-0"},
-		{"nginx", "img-nginx"},
-		{"ubuntu:22.04", "img-ubuntu-22-04"},
+		{"docker.io/library/nginx:latest", "docker.io/library/nginx/latest"},
+		{"docker.io/library/alpine:3.18", "docker.io/library/alpine/3.18"},
+		{"gcr.io/my-project/my-app:v1.0.0", "gcr.io/my-project/my-app/v1.0.0"},
+		{"nginx", "nginx/latest"},
+		{"ubuntu:22.04", "ubuntu/22.04"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := generateImageID(tt.input)
+			result := imageNameToPath(tt.input)
 			require.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 // waitForReady waits for an image build to complete
-func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageID string) {
+func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageName string) {
 	for i := 0; i < 600; i++ {
-		img, err := mgr.GetImage(ctx, imageID)
+		img, err := mgr.GetImage(ctx, imageName)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
