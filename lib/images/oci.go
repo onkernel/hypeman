@@ -10,7 +10,6 @@ import (
 	"github.com/containers/image/v5/docker"
 	"github.com/containers/image/v5/oci/layout"
 	"github.com/containers/image/v5/signature"
-	"github.com/containers/image/v5/types"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	rspec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -36,35 +35,22 @@ func (c *OCIClient) Close() error {
 	return nil
 }
 
-// pullAndExport pulls an OCI image and exports its rootfs to a directory
 func (c *OCIClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
-	return c.pullAndExportWithProgress(ctx, imageRef, exportDir, nil)
-}
-
-// pullAndExportWithProgress pulls an OCI image with progress reporting
-func (c *OCIClient) pullAndExportWithProgress(ctx context.Context, imageRef, exportDir string, tracker *ProgressTracker) (*containerMetadata, error) {
-	// Create temporary OCI layout directory
 	ociLayoutDir := filepath.Join(c.cacheDir, fmt.Sprintf("oci-layout-%d", os.Getpid()))
 	if err := os.MkdirAll(ociLayoutDir, 0755); err != nil {
 		return nil, fmt.Errorf("create oci layout dir: %w", err)
 	}
 	defer os.RemoveAll(ociLayoutDir)
 
-	// Pull image to OCI layout with progress
-	if err := c.pullToOCILayoutWithProgress(ctx, imageRef, ociLayoutDir, tracker); err != nil {
+	if err := c.pullToOCILayout(ctx, imageRef, ociLayoutDir); err != nil {
 		return nil, fmt.Errorf("pull to oci layout: %w", err)
 	}
 
-	// Extract metadata from OCI config
 	meta, err := c.extractOCIMetadata(ociLayoutDir)
 	if err != nil {
 		return nil, fmt.Errorf("extract metadata: %w", err)
 	}
 
-	// Unpack layers to export directory (70-90%)
-	if tracker != nil {
-		tracker.Update(StatusUnpacking, 70, nil)
-	}
 	if err := c.unpackLayers(ctx, ociLayoutDir, exportDir); err != nil {
 		return nil, fmt.Errorf("unpack layers: %w", err)
 	}
@@ -72,13 +58,7 @@ func (c *OCIClient) pullAndExportWithProgress(ctx context.Context, imageRef, exp
 	return meta, nil
 }
 
-// pullToOCILayout pulls an image from a registry to an OCI layout directory
 func (c *OCIClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir string) error {
-	return c.pullToOCILayoutWithProgress(ctx, imageRef, ociLayoutDir, nil)
-}
-
-// pullToOCILayoutWithProgress pulls with progress reporting (0-70%)
-func (c *OCIClient) pullToOCILayoutWithProgress(ctx context.Context, imageRef, ociLayoutDir string, tracker *ProgressTracker) error {
 	// Parse source reference (docker://...)
 	srcRef, err := docker.ParseReference("//" + imageRef)
 	if err != nil {
@@ -100,36 +80,8 @@ func (c *OCIClient) pullToOCILayoutWithProgress(ctx context.Context, imageRef, o
 	}
 	defer policyContext.Destroy()
 
-	// Setup progress reporting if tracker provided
-	var progressChan chan types.ProgressProperties
-	if tracker != nil {
-		progressChan = make(chan types.ProgressProperties)
-		go func() {
-			var totalBytes int64
-			var downloadedBytes int64
-
-			for p := range progressChan {
-				// Track total and downloaded bytes
-				if p.Event == types.ProgressEventNewArtifact {
-					totalBytes += p.Artifact.Size
-				}
-				if p.Event == types.ProgressEventRead {
-					downloadedBytes = int64(p.Offset)
-				}
-
-				// Calculate percentage (0-70% of total progress)
-				if totalBytes > 0 {
-					pct := int((float64(downloadedBytes) / float64(totalBytes)) * 70)
-					tracker.Update(StatusPulling, pct, nil)
-				}
-			}
-		}()
-	}
-
-	// Pull image
 	_, err = copy.Image(ctx, policyContext, destRef, srcRef, &copy.Options{
 		ReportWriter: os.Stdout,
-		Progress:     progressChan,
 	})
 	if err != nil {
 		return fmt.Errorf("copy image: %w", err)

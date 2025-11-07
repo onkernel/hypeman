@@ -10,36 +10,29 @@ import (
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
-// imageMetadata represents the metadata stored on disk
 type imageMetadata struct {
-	ID            string                       `json:"id"`
-	Name          string                       `json:"name"`
-	Status        string                       `json:"status"`
-	Progress      int                          `json:"progress"`
-	QueuePosition *int                         `json:"queue_position,omitempty"`
-	Error         *string                      `json:"error,omitempty"`
-	Request       *oapi.CreateImageRequest     `json:"request,omitempty"`
-	SizeBytes     int64                        `json:"size_bytes"`
-	Entrypoint    []string                     `json:"entrypoint,omitempty"`
-	Cmd           []string                     `json:"cmd,omitempty"`
-	Env           map[string]string            `json:"env,omitempty"`
-	WorkingDir    string                       `json:"working_dir,omitempty"`
-	CreatedAt     time.Time                    `json:"created_at"`
+	ID         string                   `json:"id"`
+	Name       string                   `json:"name"`
+	Status     string                   `json:"status"`
+	Error      *string                  `json:"error,omitempty"`
+	Request    *oapi.CreateImageRequest `json:"request,omitempty"`
+	SizeBytes  int64                    `json:"size_bytes"`
+	Entrypoint []string                 `json:"entrypoint,omitempty"`
+	Cmd        []string                 `json:"cmd,omitempty"`
+	Env        map[string]string        `json:"env,omitempty"`
+	WorkingDir string                   `json:"working_dir,omitempty"`
+	CreatedAt  time.Time                `json:"created_at"`
 }
 
-// toOAPI converts internal metadata to OpenAPI schema
 func (m *imageMetadata) toOAPI() *oapi.Image {
 	img := &oapi.Image{
-		Id:            m.ID,
-		Name:          m.Name,
-		Status:        oapi.ImageStatus(m.Status),
-		Progress:      m.Progress,
-		QueuePosition: m.QueuePosition,
-		Error:         m.Error,
-		CreatedAt:     m.CreatedAt,
+		Id:        m.ID,
+		Name:      m.Name,
+		Status:    oapi.ImageStatus(m.Status),
+		Error:     m.Error,
+		CreatedAt: m.CreatedAt,
 	}
 
-	// Only set size_bytes when ready
 	if m.Status == StatusReady && m.SizeBytes > 0 {
 		sizeBytes := m.SizeBytes
 		img.SizeBytes = &sizeBytes
@@ -61,22 +54,18 @@ func (m *imageMetadata) toOAPI() *oapi.Image {
 	return img
 }
 
-// imageDir returns the directory path for an image
 func imageDir(dataDir, imageID string) string {
 	return filepath.Join(dataDir, "images", imageID)
 }
 
-// imagePath returns the path to the rootfs disk image
 func imagePath(dataDir, imageID string) string {
 	return filepath.Join(imageDir(dataDir, imageID), "rootfs.ext4")
 }
 
-// metadataPath returns the path to the metadata file
 func metadataPath(dataDir, imageID string) string {
 	return filepath.Join(imageDir(dataDir, imageID), "metadata.json")
 }
 
-// writeMetadata writes metadata atomically using temp file + rename
 func writeMetadata(dataDir, imageID string, meta *imageMetadata) error {
 	dir := imageDir(dataDir, imageID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -88,23 +77,20 @@ func writeMetadata(dataDir, imageID string, meta *imageMetadata) error {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	// Write to temp file first
 	tempPath := metadataPath(dataDir, imageID) + ".tmp"
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return fmt.Errorf("write temp metadata: %w", err)
 	}
 
-	// Atomic rename
 	finalPath := metadataPath(dataDir, imageID)
 	if err := os.Rename(tempPath, finalPath); err != nil {
-		os.Remove(tempPath) // cleanup
+		os.Remove(tempPath)
 		return fmt.Errorf("rename metadata: %w", err)
 	}
 
 	return nil
 }
 
-// readMetadata reads metadata from disk
 func readMetadata(dataDir, imageID string) (*imageMetadata, error) {
 	path := metadataPath(dataDir, imageID)
 	data, err := os.ReadFile(path)
@@ -120,19 +106,19 @@ func readMetadata(dataDir, imageID string) (*imageMetadata, error) {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 
-	// Validate that disk image exists
-	diskPath := imagePath(dataDir, imageID)
-	if _, err := os.Stat(diskPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("disk image missing: %s", diskPath)
+	if meta.Status == StatusReady {
+		diskPath := imagePath(dataDir, imageID)
+		if _, err := os.Stat(diskPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("disk image missing: %s", diskPath)
+			}
+			return nil, fmt.Errorf("stat disk image: %w", err)
 		}
-		return nil, fmt.Errorf("stat disk image: %w", err)
 	}
 
 	return &meta, nil
 }
 
-// listMetadata lists all image metadata by scanning the images directory
 func listMetadata(dataDir string) ([]*imageMetadata, error) {
 	imagesDir := filepath.Join(dataDir, "images")
 	entries, err := os.ReadDir(imagesDir)
@@ -151,7 +137,6 @@ func listMetadata(dataDir string) ([]*imageMetadata, error) {
 
 		meta, err := readMetadata(dataDir, entry.Name())
 		if err != nil {
-			// Skip invalid entries, log but don't fail
 			continue
 		}
 		metas = append(metas, meta)
@@ -160,13 +145,11 @@ func listMetadata(dataDir string) ([]*imageMetadata, error) {
 	return metas, nil
 }
 
-// imageExists checks if an image already exists
 func imageExists(dataDir, imageID string) bool {
 	_, err := readMetadata(dataDir, imageID)
 	return err == nil
 }
 
-// deleteImage removes the entire image directory
 func deleteImage(dataDir, imageID string) error {
 	dir := imageDir(dataDir, imageID)
 	if _, err := os.Stat(dir); err != nil {
@@ -182,4 +165,3 @@ func deleteImage(dataDir, imageID string) error {
 
 	return nil
 }
-

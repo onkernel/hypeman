@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/require"
@@ -22,34 +23,20 @@ func TestCreateImage(t *testing.T) {
 		Name: "docker.io/library/alpine:latest",
 	}
 
-	// CreateImage returns immediately with pending status
 	img, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
 	require.Equal(t, "img-alpine-latest", img.Id)
-	require.Contains(t, []oapi.ImageStatus{StatusPending, StatusPulling}, img.Status)
 
-	// Wait for build to complete via progress channel
-	progressCh, err := mgr.GetProgress(ctx, img.Id)
-	require.NoError(t, err)
+	waitForReady(t, mgr, ctx, img.Id)
 
-	for update := range progressCh {
-		if update.Status == StatusReady || update.Status == StatusFailed {
-			require.Equal(t, StatusReady, update.Status)
-			break
-		}
-	}
-
-	// Verify final state
 	img, err = mgr.GetImage(ctx, img.Id)
 	require.NoError(t, err)
 	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
-	require.Equal(t, 100, img.Progress)
 	require.NotNil(t, img.SizeBytes)
 	require.Greater(t, *img.SizeBytes, int64(0))
 
-	// Verify disk image was created
 	diskPath := filepath.Join(dataDir, "images", img.Id, "rootfs.ext4")
 	_, err = os.Stat(diskPath)
 	require.NoError(t, err)
@@ -244,18 +231,33 @@ func TestGenerateImageID(t *testing.T) {
 
 // waitForReady waits for an image build to complete
 func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageID string) {
-	progressCh, err := mgr.GetProgress(ctx, imageID)
-	require.NoError(t, err)
-
-	for update := range progressCh {
-		t.Logf("Progress: status=%s, progress=%d%%", update.Status, update.Progress)
-		if update.Status == StatusReady || update.Status == StatusFailed {
-			if update.Status == StatusFailed {
-				t.Fatalf("Build failed: %v", update.Error)
-			}
-			break
+	for i := 0; i < 600; i++ {
+		img, err := mgr.GetImage(ctx, imageID)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
+
+		if i%10 == 0 {
+			t.Logf("Status: %s", img.Status)
+		}
+
+		if img.Status == oapi.ImageStatus(StatusReady) {
+			return
+		}
+
+		if img.Status == oapi.ImageStatus(StatusFailed) {
+			errMsg := ""
+			if img.Error != nil {
+				errMsg = *img.Error
+			}
+			t.Fatalf("Build failed: %s", errMsg)
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	t.Fatal("Build did not complete within 60 seconds")
 }
 
 

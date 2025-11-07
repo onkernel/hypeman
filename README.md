@@ -33,6 +33,15 @@ sudo mkdir /var/lib/hypeman
 sudo chown $USER:$USER /var/lib/hypeman
 ```
 
+#### Dockerhub login
+
+Requires Docker Hub authentication to avoid rate limits when running the tests:
+```bash
+docker login
+```
+
+Docker itself isn't required to be installed. `~/.docker/config.json` is a standard used for handling registry authentication.
+
 ### Build
 
 ```bash

@@ -68,7 +68,16 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
 
 Requires `-tags containers_image_openpgp` to avoid C dependency on gpgme. This is a build-time option of the containers/image project to select between gpgme C library with go bindings or the pure Go OpenPGP implementation (slightly slower but doesn't need external system dependency).
 
-## Testing
+## Registry Authentication
 
-Integration tests pull alpine:latest (~7MB) and verify full pipeline. No special permissions required.
+containers/image automatically uses `~/.docker/config.json` for registry authentication.
 
+```bash
+# Login to Docker Hub (avoid rate limits)
+docker login
+
+# Works for any registry
+docker login ghcr.io
+```
+
+No code changes needed - credentials are automatically discovered.

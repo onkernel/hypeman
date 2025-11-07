@@ -70,33 +70,6 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 	return oapi.GetImage200JSONResponse(*img), nil
 }
 
-// GetImageProgress streams build progress via SSE
-func (s *ApiService) GetImageProgress(ctx context.Context, request oapi.GetImageProgressRequestObject) (oapi.GetImageProgressResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	progressChan, err := s.ImageManager.GetProgress(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, images.ErrNotFound):
-			return oapi.GetImageProgress404JSONResponse{
-				Code:    "not_found",
-				Message: "image not found",
-			}, nil
-		default:
-			log.Error("failed to get progress", "error", err, "id", request.Id)
-			return oapi.GetImageProgress500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get progress",
-			}, nil
-		}
-	}
-
-	// Return SSE stream (uses helper from progress.go)
-	return oapi.GetImageProgress200TexteventStreamResponse{
-		Body: images.ToSSEReader(progressChan),
-	}, nil
-}
-
 // DeleteImage deletes an image
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
 	log := logger.FromContext(ctx)
