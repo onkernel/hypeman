@@ -32,7 +32,7 @@ func ProvideConfig() *config.Config {
 // ProvideOCIClient provides an OCI client
 func ProvideOCIClient(cfg *config.Config) (*images.OCIClient, error) {
 	// Use a cache directory under dataDir for OCI layouts
-	cacheDir := cfg.DataDir + "/oci-cache"
+	cacheDir := cfg.DataDir + "/system/oci-cache"
 	return images.NewOCIClient(cacheDir)
 }
 

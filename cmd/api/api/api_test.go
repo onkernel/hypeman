@@ -17,7 +17,7 @@ func newTestService(t *testing.T) *ApiService {
 	}
 
 	// Create OCI client for testing
-	ociClient, err := images.NewOCIClient(cfg.DataDir + "/oci-cache")
+	ociClient, err := images.NewOCIClient(cfg.DataDir + "/system/oci-cache")
 	if err != nil {
 		t.Fatalf("failed to create OCI client: %v", err)
 	}
