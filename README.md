@@ -17,9 +17,20 @@ mkfs.ext4 -V
 
 ### Configuration
 
+#### Environment variables
+
 ```bash
 cp .env.example .env
 # Edit .env and set JWT_SECRET
+```
+
+#### Data directory
+
+Hypeman stores data in a configurable directory. Configure permissions for this directory.
+
+```bash
+sudo mkdir /var/lib/hypeman
+sudo chown $USER:$USER /var/lib/hypeman
 ```
 
 ### Build

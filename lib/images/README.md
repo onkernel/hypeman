@@ -61,7 +61,7 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
 
 ## Build Tags
 
-Requires `-tags containers_image_openpgp` to avoid C dependency on gpgme.
+Requires `-tags containers_image_openpgp` to avoid C dependency on gpgme. This is a build-time option of the containers/image project to select between gpgme C library with go bindings or the pure Go OpenPGP implementation (slightly slower but doesn't need external system dependency).
 
 ## Testing
 
