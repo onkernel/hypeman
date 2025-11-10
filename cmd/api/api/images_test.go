@@ -80,7 +80,9 @@ func TestCreateImage_Async(t *testing.T) {
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
-		require.True(t, ok, "expected 200 response")
+		if !ok {
+			t.Fatalf("expected 200 response, got %T: %+v", getResp, getResp)
+		}
 
 		currentImg := oapi.Image(imgResp)
 		currentQueuePos := getQueuePos(currentImg.QueuePosition)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
@@ -69,7 +70,10 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 
 	// Head request to get manifest descriptor - no automatic retries
 	// Rate limits return immediately with actual error
-	descriptor, err := remote.Head(ref, remote.WithContext(ctx))
+	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	descriptor, err := remote.Head(ref, 
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", err)
 	}
@@ -122,7 +126,10 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 	}
 
 	// Fetch image manifest from registry (lazy - doesn't download layers yet)
-	img, err := remote.Image(ref, remote.WithContext(ctx))
+	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	img, err := remote.Image(ref, 
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
 		// Rate limits fail here immediately during manifest fetch
 		return fmt.Errorf("fetch image manifest: %w", err)
