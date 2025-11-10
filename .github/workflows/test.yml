@@ -15,7 +15,10 @@ jobs:
           go-version: '1.25'
       
       - name: Install dependencies
-        run: go mod download
+        run: |
+          set -xe
+          sudo apt-get install -y erofs-utils
+          go mod download
       
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
