@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,82 @@ func TestNormalizedRefParsing(t *testing.T) {
 			require.Equal(t, tt.expectTag, tag)
 		})
 	}
+}
+
+func TestLayerCaching(t *testing.T) {
+	dataDir := t.TempDir()
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 1. Pull alpine:latest by tag
+	t.Log("Pulling alpine:latest by tag...")
+	alpine1, err := mgr.CreateImage(ctx, CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, alpine1.Digest, "should have digest")
+
+	// Wait for first pull to complete (poll by digest)
+	alpine1Ref := "docker.io/library/alpine@" + alpine1.Digest
+	waitForReady(t, mgr, ctx, alpine1Ref)
+
+	// Count blobs after first pull
+	blobsDir := filepath.Join(dataDir, "system", "oci-cache", "blobs", "sha256")
+	blobsAfterFirst, err := countFiles(blobsDir)
+	require.NoError(t, err)
+	t.Logf("Blobs after first pull: %d", blobsAfterFirst)
+	require.Greater(t, blobsAfterFirst, 0, "should have downloaded blobs")
+
+	// 2. Pull the SAME digest but reference it by digest
+	// This guarantees 100% layer overlap - tests cross-reference caching
+	t.Logf("Pulling same image by digest reference: %s", alpine1.Digest)
+	alpine2, err := mgr.CreateImage(ctx, CreateImageRequest{
+		Name: alpine1Ref, // Pull by digest instead of tag
+	})
+	require.NoError(t, err)
+	require.Equal(t, alpine1.Digest, alpine2.Digest, "should have same digest")
+
+	// This should be instant - already cached
+	waitForReady(t, mgr, ctx, alpine1Ref)
+
+	// Count blobs after second pull
+	blobsAfterSecond, err := countFiles(blobsDir)
+	require.NoError(t, err)
+	t.Logf("Blobs after second pull: %d", blobsAfterSecond)
+
+	// 3. Verify layer caching worked - should add ZERO new blobs
+	blobsAdded := blobsAfterSecond - blobsAfterFirst
+	require.Equal(t, 0, blobsAdded,
+		"Pulling same digest with different reference should not download any new blobs (everything cached)")
+
+	// 4. Verify both references work and point to functional images
+	alpine1Parsed, err := ParseNormalizedRef(alpine1.Name)
+	require.NoError(t, err)
+	alpine2Parsed, err := ParseNormalizedRef(alpine2.Name)
+	require.NoError(t, err)
+
+	// Both should point to the same digest directory
+	digestHex := strings.TrimPrefix(alpine1.Digest, "sha256:")
+	disk1 := digestPath(dataDir, alpine1Parsed.Repository(), digestHex)
+	disk2 := digestPath(dataDir, alpine2Parsed.Repository(), digestHex)
+	
+	require.Equal(t, disk1, disk2, "both references should point to same disk")
+
+	stat, err := os.Stat(disk1)
+	require.NoError(t, err)
+	require.Greater(t, stat.Size(), int64(0))
+
+	t.Logf("Layer caching verified: second pull reused all %d cached blobs", blobsAfterFirst)
+}
+
+// countFiles counts the number of files in a directory
+func countFiles(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	return len(entries), nil
 }
 
 // waitForReady waits for an image build to complete
