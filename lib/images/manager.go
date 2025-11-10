@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
-	"github.com/onkernel/hypeman/lib/oapi"
 )
 
 const (
@@ -20,12 +19,11 @@ const (
 	StatusFailed     = "failed"
 )
 
-// Manager handles image lifecycle operations
 type Manager interface {
-	ListImages(ctx context.Context) ([]oapi.Image, error)
-	CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error)
-	GetImage(ctx context.Context, id string) (*oapi.Image, error)
-	DeleteImage(ctx context.Context, id string) error
+	ListImages(ctx context.Context) ([]Image, error)
+	CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error)
+	GetImage(ctx context.Context, name string) (*Image, error)
+	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
 }
 
@@ -46,21 +44,21 @@ func NewManager(dataDir string, ociClient *OCIClient, maxConcurrentBuilds int) M
 	return m
 }
 
-func (m *manager) ListImages(ctx context.Context) ([]oapi.Image, error) {
+func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 	metas, err := listMetadata(m.dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("list metadata: %w", err)
 	}
 
-	images := make([]oapi.Image, 0, len(metas))
+	images := make([]Image, 0, len(metas))
 	for _, meta := range metas {
-		images = append(images, *meta.toOAPI())
+		images = append(images, *meta.toImage())
 	}
 
 	return images, nil
 }
 
-func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error) {
+func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error) {
 	normalizedName, err := normalizeImageName(req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
@@ -85,14 +83,14 @@ func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) 
 		m.buildImage(context.Background(), normalizedName, req)
 	})
 
-	img := meta.toOAPI()
+	img := meta.toImage()
 	if queuePos > 0 {
 		img.QueuePosition = &queuePos
 	}
 	return img, nil
 }
 
-func (m *manager) buildImage(ctx context.Context, imageName string, req oapi.CreateImageRequest) {
+func (m *manager) buildImage(ctx context.Context, imageName string, req CreateImageRequest) {
 	defer m.queue.MarkComplete(imageName)
 
 	buildDir := filepath.Join(imageDir(m.dataDir, imageName), ".build")
@@ -184,7 +182,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 	}
 }
 
-func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error) {
+func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 	normalizedName, err := normalizeImageName(name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
@@ -195,7 +193,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error
 		return nil, err
 	}
 	
-	img := meta.toOAPI()
+	img := meta.toImage()
 	
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(normalizedName)

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +18,7 @@ func TestCreateImage(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	req := oapi.CreateImageRequest{
+	req := CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 
@@ -32,7 +31,7 @@ func TestCreateImage(t *testing.T) {
 
 	img, err = mgr.GetImage(ctx, img.Name)
 	require.NoError(t, err)
-	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
+	require.Equal(t, StatusReady, img.Status)
 	require.NotNil(t, img.SizeBytes)
 	require.Greater(t, *img.SizeBytes, int64(0))
 
@@ -49,7 +48,7 @@ func TestCreateImageDifferentTag(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	req := oapi.CreateImageRequest{
+	req := CreateImageRequest{
 		Name: "docker.io/library/alpine:3.18",
 	}
 
@@ -69,11 +68,10 @@ func TestCreateImageDuplicate(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	req := oapi.CreateImageRequest{
+	req := CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 
-	// Create first image
 	img1, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
@@ -98,8 +96,7 @@ func TestListImages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, images, 0)
 
-	// Create first image
-	req1 := oapi.CreateImageRequest{
+	req1 := CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 	img1, err := mgr.CreateImage(ctx, req1)
@@ -112,7 +109,7 @@ func TestListImages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, images, 1)
 	require.Equal(t, "docker.io/library/alpine:latest", images[0].Name)
-	require.Equal(t, oapi.ImageStatus(StatusReady), images[0].Status)
+	require.Equal(t, StatusReady, images[0].Status)
 }
 
 func TestGetImage(t *testing.T) {
@@ -123,7 +120,7 @@ func TestGetImage(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	req := oapi.CreateImageRequest{
+	req := CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 
@@ -136,7 +133,7 @@ func TestGetImage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, created.Name, img.Name)
-	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
+	require.Equal(t, StatusReady, img.Status)
 	require.NotNil(t, img.SizeBytes)
 }
 
@@ -161,7 +158,7 @@ func TestDeleteImage(t *testing.T) {
 	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
-	req := oapi.CreateImageRequest{
+	req := CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 
@@ -227,11 +224,11 @@ func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageName stri
 			t.Logf("Status: %s", img.Status)
 		}
 
-		if img.Status == oapi.ImageStatus(StatusReady) {
+		if img.Status == StatusReady {
 			return
 		}
 
-		if img.Status == oapi.ImageStatus(StatusFailed) {
+		if img.Status == StatusFailed {
 			errMsg := ""
 			if img.Error != nil {
 				errMsg = *img.Error

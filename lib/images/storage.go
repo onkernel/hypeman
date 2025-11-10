@@ -7,27 +7,25 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/onkernel/hypeman/lib/oapi"
 )
 
 type imageMetadata struct {
-	Name       string                   `json:"name"`
-	Status     string                   `json:"status"`
-	Error      *string                  `json:"error,omitempty"`
-	Request    *oapi.CreateImageRequest `json:"request,omitempty"`
-	SizeBytes  int64                    `json:"size_bytes"`
-	Entrypoint []string                 `json:"entrypoint,omitempty"`
-	Cmd        []string                 `json:"cmd,omitempty"`
-	Env        map[string]string        `json:"env,omitempty"`
-	WorkingDir string                   `json:"working_dir,omitempty"`
-	CreatedAt  time.Time                `json:"created_at"`
+	Name       string               `json:"name"`
+	Status     string               `json:"status"`
+	Error      *string              `json:"error,omitempty"`
+	Request    *CreateImageRequest  `json:"request,omitempty"`
+	SizeBytes  int64                `json:"size_bytes"`
+	Entrypoint []string             `json:"entrypoint,omitempty"`
+	Cmd        []string             `json:"cmd,omitempty"`
+	Env        map[string]string    `json:"env,omitempty"`
+	WorkingDir string               `json:"working_dir,omitempty"`
+	CreatedAt  time.Time            `json:"created_at"`
 }
 
-func (m *imageMetadata) toOAPI() *oapi.Image {
-	img := &oapi.Image{
+func (m *imageMetadata) toImage() *Image {
+	img := &Image{
 		Name:      m.Name,
-		Status:    oapi.ImageStatus(m.Status),
+		Status:    m.Status,
 		Error:     m.Error,
 		CreatedAt: m.CreatedAt,
 	}
@@ -38,16 +36,16 @@ func (m *imageMetadata) toOAPI() *oapi.Image {
 	}
 
 	if len(m.Entrypoint) > 0 {
-		img.Entrypoint = &m.Entrypoint
+		img.Entrypoint = m.Entrypoint
 	}
 	if len(m.Cmd) > 0 {
-		img.Cmd = &m.Cmd
+		img.Cmd = m.Cmd
 	}
 	if len(m.Env) > 0 {
-		img.Env = &m.Env
+		img.Env = m.Env
 	}
 	if m.WorkingDir != "" {
-		img.WorkingDir = &m.WorkingDir
+		img.WorkingDir = m.WorkingDir
 	}
 
 	return img

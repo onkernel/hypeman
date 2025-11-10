@@ -9,11 +9,10 @@ import (
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
-// ListImages lists all images
 func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequestObject) (oapi.ListImagesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	imgs, err := s.ImageManager.ListImages(ctx)
+	domainImages, err := s.ImageManager.ListImages(ctx)
 	if err != nil {
 		log.Error("failed to list images", "error", err)
 		return oapi.ListImages500JSONResponse{
@@ -21,14 +20,23 @@ func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequ
 			Message: "failed to list images",
 		}, nil
 	}
-	return oapi.ListImages200JSONResponse(imgs), nil
+	
+	oapiImages := make([]oapi.Image, len(domainImages))
+	for i, img := range domainImages {
+		oapiImages[i] = imageToOAPI(img)
+	}
+	
+	return oapi.ListImages200JSONResponse(oapiImages), nil
 }
 
-// CreateImage creates a new image from an OCI reference
 func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRequestObject) (oapi.CreateImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	img, err := s.ImageManager.CreateImage(ctx, *request.Body)
+	domainReq := images.CreateImageRequest{
+		Name: request.Body.Name,
+	}
+
+	img, err := s.ImageManager.CreateImage(ctx, domainReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, images.ErrInvalidName):
@@ -49,7 +57,7 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 			}, nil
 		}
 	}
-	return oapi.CreateImage202JSONResponse(*img), nil
+	return oapi.CreateImage202JSONResponse(imageToOAPI(*img)), nil
 }
 
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {
@@ -71,7 +79,7 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 			}, nil
 		}
 	}
-	return oapi.GetImage200JSONResponse(*img), nil
+	return oapi.GetImage200JSONResponse(imageToOAPI(*img)), nil
 }
 
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
@@ -96,3 +104,28 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 	return oapi.DeleteImage204Response{}, nil
 }
 
+func imageToOAPI(img images.Image) oapi.Image {
+	oapiImg := oapi.Image{
+		Name:          img.Name,
+		Status:        oapi.ImageStatus(img.Status),
+		QueuePosition: img.QueuePosition,
+		Error:         img.Error,
+		SizeBytes:     img.SizeBytes,
+		CreatedAt:     img.CreatedAt,
+	}
+
+	if len(img.Entrypoint) > 0 {
+		oapiImg.Entrypoint = &img.Entrypoint
+	}
+	if len(img.Cmd) > 0 {
+		oapiImg.Cmd = &img.Cmd
+	}
+	if len(img.Env) > 0 {
+		oapiImg.Env = &img.Env
+	}
+	if img.WorkingDir != "" {
+		oapiImg.WorkingDir = &img.WorkingDir
+	}
+
+	return oapiImg
+}

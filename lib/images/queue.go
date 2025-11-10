@@ -1,14 +1,10 @@
 package images
 
-import (
-	"sync"
-
-	"github.com/onkernel/hypeman/lib/oapi"
-)
+import "sync"
 
 type QueuedBuild struct {
 	ImageName string
-	Request   oapi.CreateImageRequest
+	Request   CreateImageRequest
 	StartFn   func()
 }
 
@@ -31,7 +27,7 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 	}
 }
 
-func (q *BuildQueue) Enqueue(imageName string, req oapi.CreateImageRequest, startFn func()) int {
+func (q *BuildQueue) Enqueue(imageName string, req CreateImageRequest, startFn func()) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
