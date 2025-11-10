@@ -29,16 +29,9 @@ func ProvideConfig() *config.Config {
 	return config.Load()
 }
 
-// ProvideOCIClient provides an OCI client
-func ProvideOCIClient(cfg *config.Config) (*images.OCIClient, error) {
-	// Use a cache directory under dataDir for OCI layouts
-	cacheDir := cfg.DataDir + "/system/oci-cache"
-	return images.NewOCIClient(cacheDir)
-}
-
 // ProvideImageManager provides the image manager
-func ProvideImageManager(cfg *config.Config, ociClient *images.OCIClient) images.Manager {
-	return images.NewManager(cfg.DataDir, ociClient, cfg.MaxConcurrentBuilds)
+func ProvideImageManager(cfg *config.Config) (images.Manager, error) {
+	return images.NewManager(cfg.DataDir, cfg.MaxConcurrentBuilds)
 }
 
 // ProvideInstanceManager provides the instance manager

@@ -30,20 +30,27 @@ type Manager interface {
 
 type manager struct {
 	dataDir  string
-	ociClient *OCIClient
+	ociClient *ociClient
 	queue     *BuildQueue
 	createMu  sync.Mutex
 }
 
-// NewManager creates a new image manager with OCI client
-func NewManager(dataDir string, ociClient *OCIClient, maxConcurrentBuilds int) Manager {
+// NewManager creates a new image manager
+func NewManager(dataDir string, maxConcurrentBuilds int) (Manager, error) {
+	// Create cache directory under dataDir for OCI layouts
+	cacheDir := filepath.Join(dataDir, "system", "oci-cache")
+	ociClient, err := newOCIClient(cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("create oci client: %w", err)
+	}
+	
 	m := &manager{
 		dataDir:   dataDir,
 		ociClient: ociClient,
 		queue:     NewBuildQueue(maxConcurrentBuilds),
 	}
 	m.RecoverInterruptedBuilds()
-	return m
+	return m, nil
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {

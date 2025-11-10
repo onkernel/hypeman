@@ -11,11 +11,9 @@ import (
 )
 
 func TestCreateImage(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req := CreateImageRequest{
@@ -41,11 +39,9 @@ func TestCreateImage(t *testing.T) {
 }
 
 func TestCreateImageDifferentTag(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req := CreateImageRequest{
@@ -61,11 +57,9 @@ func TestCreateImageDifferentTag(t *testing.T) {
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req := CreateImageRequest{
@@ -86,11 +80,9 @@ func TestCreateImageDuplicate(t *testing.T) {
 }
 
 func TestListImages(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -116,11 +108,9 @@ func TestListImages(t *testing.T) {
 }
 
 func TestGetImage(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req := CreateImageRequest{
@@ -141,11 +131,9 @@ func TestGetImage(t *testing.T) {
 }
 
 func TestGetImageNotFound(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -154,11 +142,9 @@ func TestGetImageNotFound(t *testing.T) {
 }
 
 func TestDeleteImage(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req := CreateImageRequest{
@@ -182,11 +168,9 @@ func TestDeleteImage(t *testing.T) {
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
-	ociClient, err := NewOCIClient(t.TempDir())
-	require.NoError(t, err)
-
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient, 1)
+	mgr, err := NewManager(dataDir, 1)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 

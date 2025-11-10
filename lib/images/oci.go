@@ -17,25 +17,20 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 )
 
-// OCIClient handles OCI image operations without requiring Docker daemon
-type OCIClient struct {
+// ociClient handles OCI image operations without requiring Docker daemon
+type ociClient struct {
 	cacheDir string
 }
 
-// NewOCIClient creates a new OCI client
-func NewOCIClient(cacheDir string) (*OCIClient, error) {
+// newOCIClient creates a new OCI client
+func newOCIClient(cacheDir string) (*ociClient, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
-	return &OCIClient{cacheDir: cacheDir}, nil
+	return &ociClient{cacheDir: cacheDir}, nil
 }
 
-// Close closes the OCI client (no-op for now)
-func (c *OCIClient) Close() error {
-	return nil
-}
-
-func (c *OCIClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
+func (c *ociClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
 	// Use persistent OCI layout for caching (parse imageRef into path)
 	ociLayoutDir := filepath.Join(c.cacheDir, imageNameToPath(imageRef))
 	if err := os.MkdirAll(ociLayoutDir, 0755); err != nil {
@@ -58,7 +53,7 @@ func (c *OCIClient) pullAndExport(ctx context.Context, imageRef, exportDir strin
 	return meta, nil
 }
 
-func (c *OCIClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir string) error {
+func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir string) error {
 	// Parse source reference (docker://...)
 	srcRef, err := docker.ParseReference("//" + imageRef)
 	if err != nil {
@@ -91,7 +86,7 @@ func (c *OCIClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir 
 }
 
 // extractOCIMetadata reads metadata from OCI layout config.json
-func (c *OCIClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata, error) {
+func (c *ociClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata, error) {
 	// Open the OCI layout
 	casEngine, err := dir.Open(ociLayoutDir)
 	if err != nil {
@@ -159,7 +154,7 @@ func (c *OCIClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata,
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci
-func (c *OCIClient) unpackLayers(ctx context.Context, ociLayoutDir, targetDir string) error {
+func (c *ociClient) unpackLayers(ctx context.Context, ociLayoutDir, targetDir string) error {
 	// Open OCI layout
 	casEngine, err := dir.Open(ociLayoutDir)
 	if err != nil {
