@@ -17,10 +17,10 @@ OCI Registry → go-containerregistry → OCI Layout → umoci → rootfs/ → m
 **Why:** 
 - Lightweight library from Google (used by ko, crane, etc.)
 - Works directly with registries (no daemon required)
-- No automatic retries on rate limits (immediate error propagation)
+- Can propagate errors from registry (like 429)
 - Supports all registry authentication methods
 
-**Alternative:** containers/image - has automatic retry logic that delays error reporting
+**Alternative:** containers/image - has automatic retry logic that delays error reporting, can't fail fast for registry rate limits. Heavier, supporting more use cases in comparison to go-containerregistry.
 
 ### Why umoci? (oci.go)
 
@@ -45,7 +45,7 @@ OCI Registry → go-containerregistry → OCI Layout → umoci → rootfs/ → m
 - No journal/inode overhead
 
 **Options:**
-- `-zlz4` - Fast compression (good balance for development)
+- `-zlz4` - Fast compression
 
 **Alternative:** ext4 without journal works but erofs is optimized for this exact use case
 
