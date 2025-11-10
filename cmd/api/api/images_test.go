@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,16 +68,22 @@ func TestCreateImage_Async(t *testing.T) {
 
 	img := oapi.Image(acceptedResp)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
-	t.Logf("Image created: name=%s, initial_status=%s, queue_position=%v", 
-		img.Name, img.Status, img.QueuePosition)
+	require.NotEmpty(t, img.Digest, "digest should be populated immediately")
+	t.Logf("Image created: name=%s, digest=%s, initial_status=%s, queue_position=%v", 
+		img.Name, img.Digest, img.Status, img.QueuePosition)
 
-	// Poll until ready
+	// Construct digest reference for polling: repository@digest
+	// GetImage expects format like "docker.io/library/alpine@sha256:..."
+	digestRef := "docker.io/library/alpine@" + img.Digest
+	t.Logf("Polling with digest reference: %s", digestRef)
+
+	// Poll until ready using digest (tag symlink doesn't exist until status=ready)
 	t.Log("Polling for completion...")
 	lastStatus := img.Status
 	lastQueuePos := getQueuePos(img.QueuePosition)
 	
 	for i := 0; i < 3000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: img.Name})
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: digestRef})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
@@ -192,10 +199,11 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	require.True(t, ok, "expected 202 response")
 	img1 := oapi.Image(accepted1)
 	require.Equal(t, imageName, img1.Name)
+	require.NotEmpty(t, img1.Digest, "digest should be populated immediately")
 	require.Equal(t, oapi.ImageStatus(images.StatusPending), img1.Status)
 	require.NotNil(t, img1.QueuePosition, "should have queue position")
 	require.Equal(t, 1, *img1.QueuePosition, "should be at position 1")
-	t.Logf("First call: status=%s, queue_position=%v", img1.Status, formatQueuePos(img1.QueuePosition))
+	t.Logf("First call: name=%s, digest=%s, status=%s, queue_position=%v", img1.Name, img1.Digest, img1.Status, formatQueuePos(img1.QueuePosition))
 
 	// Second call immediately - should return existing with same queue position
 	t.Log("Second CreateImage call (immediate duplicate)...")
@@ -208,15 +216,34 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	require.True(t, ok, "expected 202 response")
 	img2 := oapi.Image(accepted2)
 	require.Equal(t, imageName, img2.Name)
+	require.Equal(t, img1.Digest, img2.Digest, "should have same digest")
+	
+	// Log actual status to see what's happening
+	t.Logf("Second call: digest=%s, status=%s, queue_position=%v, error=%v", 
+		img2.Digest, img2.Status, formatQueuePos(img2.QueuePosition), img2.Error)
+	
+	// If it failed, we need to see why
+	if img2.Status == oapi.ImageStatus(images.StatusFailed) {
+		if img2.Error != nil {
+			t.Logf("Build failed with error: %s", *img2.Error)
+		}
+		t.Fatal("Build failed - this is the root cause of test failures")
+	}
+	
 	require.Equal(t, oapi.ImageStatus(images.StatusPending), img2.Status)
 	require.NotNil(t, img2.QueuePosition, "should have queue position")
 	require.Equal(t, 1, *img2.QueuePosition, "should still be at position 1")
-	t.Logf("Second call: status=%s, queue_position=%v", img2.Status, formatQueuePos(img2.QueuePosition))
 
-	// Wait for build to complete
+	// Construct digest reference: repository@digest
+	// Extract repository from imageName (strip tag part)
+	repository := strings.Split(imageName, ":")[0]
+	digestRef := repository + "@" + img1.Digest
+	t.Logf("Polling with digest reference: %s", digestRef)
+
+	// Wait for build to complete - poll by digest (tag symlink doesn't exist until status=ready)
 	t.Log("Waiting for build to complete...")
 	for i := 0; i < 3000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: imageName})
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: digestRef})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
