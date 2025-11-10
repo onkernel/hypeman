@@ -5,21 +5,22 @@ Converts OCI images to bootable erofs disks for Cloud Hypervisor VMs.
 ## Architecture
 
 ```
-OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.erofs → disk.erofs
+OCI Registry → go-containerregistry → OCI Layout → umoci → rootfs/ → mkfs.erofs → disk.erofs
 ```
 
 ## Design Decisions
 
-### Why containers/image? (oci.go)
+### Why go-containerregistry? (oci.go)
 
 **What:** Pull OCI images from any registry (Docker Hub, ghcr.io, etc.)
 
 **Why:** 
-- Standard library used by Podman, Skopeo, Buildah
+- Lightweight library from Google (used by ko, crane, etc.)
 - Works directly with registries (no daemon required)
+- No automatic retries on rate limits (immediate error propagation)
 - Supports all registry authentication methods
 
-**Alternative:** Docker API - requires Docker daemon running
+**Alternative:** containers/image - has automatic retry logic that delays error reporting
 
 ### Why umoci? (oci.go)
 
@@ -120,11 +121,11 @@ Validation via `github.com/distribution/reference`:
 
 ## Build Tags
 
-Requires `-tags containers_image_openpgp` to avoid C dependency on gpgme. This is a build-time option of the containers/image project to select between gpgme C library with go bindings or the pure Go OpenPGP implementation (slightly slower but doesn't need external system dependency).
+Requires `-tags containers_image_openpgp` for umoci dependency compatibility.
 
 ## Registry Authentication
 
-containers/image automatically uses `~/.docker/config.json` for registry authentication.
+go-containerregistry automatically uses `~/.docker/config.json` via `authn.DefaultKeychain`.
 
 ```bash
 # Login to Docker Hub (avoid rate limits)
