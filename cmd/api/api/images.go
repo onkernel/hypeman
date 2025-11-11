@@ -20,12 +20,12 @@ func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequ
 			Message: "failed to list images",
 		}, nil
 	}
-	
+
 	oapiImages := make([]oapi.Image, len(domainImages))
 	for i, img := range domainImages {
 		oapiImages[i] = imageToOAPI(img)
 	}
-	
+
 	return oapi.ListImages200JSONResponse(oapiImages), nil
 }
 
