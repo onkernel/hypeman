@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -37,7 +36,7 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
 
-	// 4. Reduce memory to base size (virtio-mem balloon)
+	// 4. Reduce memory to base size (virtio-mem hotplug)
 	if err := reduceMemory(ctx, client, inst.Size); err != nil {
 		// Log warning but continue - snapshot will just be larger
 	}
@@ -67,15 +66,12 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 7. Compress snapshot (best effort)
-	compressSnapshot(snapshotDir)
-
-	// 8. Stop VMM
+	// 7. Stop VMM
 	if err := m.stopVMM(ctx, inst); err != nil {
 		// Log but continue - snapshot was created successfully
 	}
 
-	// 9. Transition: Paused → Standby
+	// 8. Transition: Paused → Standby
 	inst.State = StateStandby
 	inst.HasSnapshot = true
 	now := time.Now()
@@ -96,7 +92,7 @@ func reduceMemory(ctx context.Context, client *vmm.VMM, targetBytes int64) error
 		return fmt.Errorf("memory resize failed")
 	}
 
-	// Wait for balloon to deflate
+	// Wait for memory to be reduced
 	// TODO: Poll actual memory usage instead of fixed sleep
 	time.Sleep(2 * time.Second)
 
@@ -123,25 +119,6 @@ func createSnapshot(ctx context.Context, client *vmm.VMM, snapshotDir string) er
 	}
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("snapshot failed with status %d", resp.StatusCode())
-	}
-
-	return nil
-}
-
-// compressSnapshot compresses the memory-ranges file with LZ4 (best effort)
-func compressSnapshot(snapshotDir string) error {
-	memoryFile := filepath.Join(snapshotDir, "memory-ranges")
-
-	// Check if memory-ranges exists
-	if _, err := os.Stat(memoryFile); os.IsNotExist(err) {
-		return nil // No memory file, nothing to compress
-	}
-
-	// Compress with lz4 fast mode (-1), remove original
-	cmd := exec.Command("lz4", "-1", "--rm", memoryFile, memoryFile+".lz4")
-	if err := cmd.Run(); err != nil {
-		// Best effort - don't fail standby if compression fails
-		return err
 	}
 
 	return nil

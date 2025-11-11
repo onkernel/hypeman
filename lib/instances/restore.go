@@ -3,8 +3,6 @@ package instances
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -35,9 +33,8 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
-	// 3. Decompress snapshot if needed
+	// 3. Get snapshot directory
 	snapshotDir := filepath.Join(inst.DataDir, "snapshots", "snapshot-latest")
-	decompressSnapshot(snapshotDir) // Best effort
 
 	// 4. Transition: Standby → Paused (start VMM + restore)
 	if err := m.restoreFromSnapshot(ctx, inst, snapshotDir); err != nil {
@@ -108,27 +105,6 @@ func (m *manager) restoreFromSnapshot(
 	if resp.StatusCode() != 204 {
 		client.ShutdownVMMWithResponse(ctx) // Cleanup
 		return fmt.Errorf("restore failed with status %d", resp.StatusCode())
-	}
-
-	return nil
-}
-
-// decompressSnapshot decompresses the memory-ranges file if compressed (best effort)
-func decompressSnapshot(snapshotDir string) error {
-	compressedFile := filepath.Join(snapshotDir, "memory-ranges.lz4")
-
-	// Check if compressed file exists
-	if _, err := os.Stat(compressedFile); os.IsNotExist(err) {
-		return nil // Not compressed, nothing to do
-	}
-
-	// Decompress
-	memoryFile := filepath.Join(snapshotDir, "memory-ranges")
-	cmd := exec.Command("lz4", "-d", "--rm", compressedFile, memoryFile)
-	if err := cmd.Run(); err != nil {
-		// Best effort - don't fail restore if decompression fails
-		// Cloud Hypervisor might still be able to use the compressed file
-		return err
 	}
 
 	return nil

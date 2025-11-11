@@ -48,7 +48,6 @@ Manages VM instance lifecycle using Cloud Hypervisor.
         snapshot-latest/        # Snapshot directory
           vm.json               # VM configuration
           memory-ranges         # Memory state
-          memory-ranges.lz4     # Compressed (optional)
 ```
 
 **Benefits:**
@@ -73,20 +72,18 @@ Stopped → Created → Running
 **StandbyInstance:**
 ```
 Running → Paused → Standby
-1. Reduce memory (virtio-mem balloon)
+1. Reduce memory (virtio-mem hotplug)
 2. Pause VM
 3. Create snapshot
-4. Compress snapshot (LZ4, optional)
-5. Stop VMM
+4. Stop VMM
 ```
 
 **RestoreInstance:**
 ```
 Standby → Paused → Running
-1. Decompress snapshot (if compressed)
-2. Start VMM
-3. Restore from snapshot
-4. Resume VM
+1. Start VMM
+2. Restore from snapshot
+3. Resume VM
 ```
 
 **DeleteInstance:**
@@ -99,12 +96,10 @@ Any State → Stopped
 ## Snapshot Optimization (standby.go, restore.go)
 
 **Reduce snapshot size:**
-- Memory balloon: Deflate to base size before snapshot
-- LZ4 compression: Fast compression of memory-ranges (~2x ratio)
-- Sparse overlays: Only store diffs
+- Memory hotplug: Reduce to base size before snapshot (virtio-mem)
+- Sparse overlays: Only store diffs from base image
 
 **Fast restore:**
-- Decompress to memory (tmpfs) during restore
 - Don't prefault pages (lazy loading)
 - Parallel with TAP device setup
 
@@ -137,5 +132,5 @@ TestStorageOperations - metadata persistence, directory cleanup
 - `lib/images` - Image manager for OCI image validation
 - `lib/system` - System manager for kernel/initrd files
 - `lib/vmm` - Cloud Hypervisor client for VM operations
-- System tools: `mkfs.erofs`, `lz4`, `cpio`, `gzip`
+- System tools: `mkfs.erofs`, `cpio`, `gzip`
 

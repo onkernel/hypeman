@@ -20,7 +20,6 @@ import (
 //     snapshot-latest/ # Snapshot directory
 //       vm.json
 //       memory-ranges
-//       memory-ranges.lz4  # Compressed (optional)
 
 // metadata wraps Instance with additional serialization
 type metadata struct {
