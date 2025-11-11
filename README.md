@@ -8,11 +8,16 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Go 1.25.4+**, **Cloud Hypervisor**, **KVM**, **erofs-utils**
+**Go 1.25.4+**, **KVM**, **erofs-utils**
 
 ```bash
-cloud-hypervisor --version
 mkfs.erofs --version
+```
+
+**KVM Access:** User must be in `kvm` group for VM access:
+```bash
+sudo usermod -aG kvm $USER
+# Log out and back in, or use: newgrp kvm
 ```
 
 ### Configuration
