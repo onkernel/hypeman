@@ -59,9 +59,10 @@ func digestDir(dataDir, repository, digestHex string) string {
 	return filepath.Join(dataDir, "images", repository, digestHex)
 }
 
-// digestPath returns the path to the rootfs.erofs file for a digest
+// digestPath returns the path to the rootfs disk file for a digest
+// Currently uses .ext4 extension (can change to .erofs when kernel supports it)
 func digestPath(dataDir, repository, digestHex string) string {
-	return filepath.Join(digestDir(dataDir, repository, digestHex), "rootfs.erofs")
+	return filepath.Join(digestDir(dataDir, repository, digestHex), "rootfs.ext4")
 }
 
 // GetDiskPath returns the filesystem path to an image's rootfs.erofs file (public for instances manager)

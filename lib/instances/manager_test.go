@@ -93,10 +93,10 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.DirExists(t, instDir)
 	assert.FileExists(t, filepath.Join(instDir, "metadata.json"))
 	assert.FileExists(t, filepath.Join(instDir, "overlay.raw"))
-	assert.FileExists(t, filepath.Join(instDir, "config.erofs"))
+	assert.FileExists(t, filepath.Join(instDir, "config.ext4"))
 
 	// Give VM a moment to fully start
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	// Get instance
 	retrieved, err := manager.GetInstance(ctx, inst.Id)
@@ -110,10 +110,14 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.Len(t, instances, 1)
 	assert.Equal(t, inst.Id, instances[0].Id)
 
-	// Get logs (should have boot output)
-	logs, err := manager.GetInstanceLogs(ctx, inst.Id, false, 10)
+	// Get logs (should have boot output and nginx start)
+	// Get more lines to see full nginx startup
+	logs, err := manager.GetInstanceLogs(ctx, inst.Id, false, 100)
 	require.NoError(t, err)
-	t.Logf("Instance logs: %s", logs)
+	t.Logf("Instance logs (last 100 lines):\n%s", logs)
+	
+	// Verify nginx started successfully
+	assert.Contains(t, logs, "start worker processes", "Nginx should have started worker processes")
 
 	// Delete instance
 	t.Log("Deleting instance...")

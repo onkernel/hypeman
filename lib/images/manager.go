@@ -168,9 +168,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
 	diskPath := digestPath(m.dataDir, ref.Repository(), ref.DigestHex())
-	diskSize, err := convertToErofs(tempDir, diskPath)
+	// Use default image format (ext4 for now, easy to switch to erofs later)
+	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to erofs: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
 		return
 	}
 

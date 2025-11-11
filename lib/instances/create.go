@@ -264,7 +264,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		},
 		// Config disk (read-only)
 		{
-			Path:     ptr(filepath.Join(inst.DataDir, "config.erofs")),
+			Path:     ptr(filepath.Join(inst.DataDir, "config.ext4")),
 			Readonly: ptr(true),
 		},
 	}

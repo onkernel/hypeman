@@ -22,12 +22,12 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 			Message: "failed to list instances",
 		}, nil
 	}
-
+	
 	oapiInsts := make([]oapi.Instance, len(domainInsts))
 	for i, inst := range domainInsts {
 		oapiInsts[i] = instanceToOAPI(inst)
 	}
-
+	
 	return oapi.ListInstances200JSONResponse(oapiInsts), nil
 }
 
@@ -79,11 +79,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Message: "instance already exists",
 			}, nil
 		default:
-			log.Error("failed to create instance", "error", err, "image", request.Body.Image)
-			return oapi.CreateInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to create instance",
-			}, nil
+		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
+		return oapi.CreateInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to create instance",
+		}, nil
 		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
@@ -229,18 +229,18 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
-	return oapi.AttachVolume500JSONResponse{
+			return oapi.AttachVolume500JSONResponse{
 		Code:    "not_implemented",
 		Message: "volume attachment not yet implemented",
-	}, nil
+			}, nil
 }
 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolumeRequestObject) (oapi.DetachVolumeResponseObject, error) {
-	return oapi.DetachVolume500JSONResponse{
+			return oapi.DetachVolume500JSONResponse{
 		Code:    "not_implemented",
 		Message: "volume detachment not yet implemented",
-	}, nil
+			}, nil
 }
 
 // instanceToOAPI converts domain Instance to OAPI Instance

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -49,11 +48,14 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) erro
 		return fmt.Errorf("write metadata.json: %w", err)
 	}
 
-	// Create erofs disk with lz4 compression
-	diskPath := filepath.Join(m.dataDir, "guests", inst.Id, "config.erofs")
-	cmd := exec.Command("mkfs.erofs", "-zlz4", diskPath, tmpDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("mkfs.erofs failed: %w: %s", err, output)
+	// Create ext4 disk with config files
+	// Use ext4 for now (can switch to erofs when kernel supports it)
+	diskPath := filepath.Join(m.dataDir, "guests", inst.Id, "config.ext4")
+	
+	// Calculate size (config files are tiny, use 1MB minimum)
+	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
+	if err != nil {
+		return fmt.Errorf("create config disk: %w", err)
 	}
 
 	return nil
@@ -66,18 +68,18 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) 
 	script.WriteString("#!/bin/sh\n")
 	script.WriteString("# Generated config for instance: " + inst.Id + "\n\n")
 
-	// Set entrypoint
+	// Set entrypoint and cmd as quoted strings
+	// Wrap the entire value in double quotes so it's safe to source
 	if len(imageInfo.Entrypoint) > 0 {
 		script.WriteString("# Entrypoint from image\n")
-		script.WriteString(fmt.Sprintf("ENTRYPOINT=%s\n", shellQuoteArray(imageInfo.Entrypoint)))
+		script.WriteString(fmt.Sprintf("ENTRYPOINT=\"%s\"\n", shellQuoteArray(imageInfo.Entrypoint)))
 	} else {
 		script.WriteString("ENTRYPOINT=\"\"\n")
 	}
 
-	// Set CMD
 	if len(imageInfo.Cmd) > 0 {
 		script.WriteString("# CMD from image\n")
-		script.WriteString(fmt.Sprintf("CMD=%s\n", shellQuoteArray(imageInfo.Cmd)))
+		script.WriteString(fmt.Sprintf("CMD=\"%s\"\n", shellQuoteArray(imageInfo.Cmd)))
 	} else {
 		script.WriteString("CMD=\"\"\n")
 	}
@@ -126,7 +128,8 @@ func shellQuote(s string) string {
 	return "'" + s + "'"
 }
 
-// shellQuoteArray quotes an array of strings as a space-separated shell string
+// shellQuoteArray quotes each element of an array for safe shell evaluation
+// Each element is single-quoted to preserve special characters like semicolons
 func shellQuoteArray(arr []string) string {
 	if len(arr) == 0 {
 		return "\"\""

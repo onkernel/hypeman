@@ -33,10 +33,13 @@ exec >/dev/ttyS0 2>&1
 
 echo "overlay-init: redirected to serial console"
 
-# Mount readonly rootfs from /dev/vda
+# Wait for block devices to be ready
+sleep 0.5
+
+# Mount readonly rootfs from /dev/vda (ext4 filesystem)
 mkdir -p /lower
-mount -o ro /dev/vda /lower
-echo "overlay-init: mounted readonly rootfs from /dev/vda"
+mount -t ext4 -o ro /dev/vda /lower
+echo "overlay-init: mounted rootfs from /dev/vda"
 
 # Mount writable overlay disk from /dev/vdb
 mkdir -p /overlay
@@ -65,13 +68,12 @@ else
   exit 1
 fi
 
-# Move mounts to new root before chroot
+# Move essential mounts to new root before chroot
 cd /overlay/newroot
-mkdir -p proc sys dev mnt
+mkdir -p proc sys dev
 mount --move /proc proc
 mount --move /sys sys
 mount --move /dev dev
-mount --move /mnt mnt
 
 echo "overlay-init: moved mounts to new root"
 
@@ -99,13 +101,14 @@ export HOME='/root'
 echo "overlay-init: launching entrypoint"
 echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
 
-# Change to workdir
+# Change to workdir  
 cd ${WORKDIR:-/}
 
 # Execute entrypoint with cmd as arguments
-# Using chroot + exec to run as PID 1 in the new root
+# Using eval to properly handle quoted arguments in ENTRYPOINT and CMD
+# This preserves arguments like 'daemon off;' as single args
 # When it exits, the VM stops (like Docker containers)
-exec chroot /overlay/newroot ${ENTRYPOINT} ${CMD}
+eval "exec chroot /overlay/newroot ${ENTRYPOINT} ${CMD}"
 `
 }
 

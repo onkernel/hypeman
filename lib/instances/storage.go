@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -11,7 +12,7 @@ import (
 // {dataDir}/guests/{instance-id}/
 //   metadata.json      # Instance metadata
 //   overlay.raw        # 50GB sparse overlay disk
-//   config.erofs       # Read-only config disk (generated)
+//   config.ext4        # Read-only config disk (generated)
 //   ch.sock            # Cloud Hypervisor API socket
 //   ch-stdout.log      # CH process output
 //   logs/
@@ -96,11 +97,18 @@ func (m *manager) createOverlayDisk(id string) error {
 	if err != nil {
 		return fmt.Errorf("create overlay disk: %w", err)
 	}
-	defer file.Close()
+	file.Close()
 
-	// Seek to 50GB - 1 byte and write a single byte to create sparse file
-	if err := file.Truncate(50 * 1024 * 1024 * 1024); err != nil {
+	// Truncate to 50GB to create sparse file
+	if err := os.Truncate(overlayPath, 50*1024*1024*1024); err != nil {
 		return fmt.Errorf("truncate overlay disk: %w", err)
+	}
+
+	// Format as ext4 (VM will mount this as writable overlay)
+	cmd := exec.Command("mkfs.ext4", "-F", overlayPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.ext4 on overlay: %w, output: %s", err, output)
 	}
 
 	return nil
