@@ -3,6 +3,9 @@ package instances
 import (
 	"context"
 	"fmt"
+	"sync"
+
+	"github.com/onkernel/hypeman/lib/images"
 )
 
 type Manager interface {
@@ -18,47 +21,74 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir string
+	dataDir      string
+	imageManager images.Manager
+	mu           sync.RWMutex // Protects concurrent access to instances
 }
 
-func NewManager(dataDir string) Manager {
+// NewManager creates a new instances manager
+func NewManager(dataDir string, imageManager images.Manager) Manager {
 	return &manager{
-		dataDir: dataDir,
+		dataDir:      dataDir,
+		imageManager: imageManager,
 	}
 }
 
-func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
-	return []Instance{}, nil
-}
-
+// CreateInstance creates and starts a new instance
 func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error) {
-	return nil, fmt.Errorf("instance creation not yet implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.createInstance(ctx, req)
 }
 
-func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error) {
-	return nil, ErrNotFound
-}
-
+// DeleteInstance stops and deletes an instance
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
-	return ErrNotFound
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deleteInstance(ctx, id)
 }
 
+// StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 func (m *manager) StandbyInstance(ctx context.Context, id string) (*Instance, error) {
-	return nil, fmt.Errorf("standby instance not yet implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.standbyInstance(ctx, id)
 }
 
+// RestoreInstance restores an instance from standby
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
-	return nil, fmt.Errorf("restore instance not yet implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.restoreInstance(ctx, id)
 }
 
+// ListInstances returns all instances
+func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.listInstances(ctx)
+}
+
+// GetInstance returns a single instance
+func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.getInstance(ctx, id)
+}
+
+// GetInstanceLogs returns instance console logs
 func (m *manager) GetInstanceLogs(ctx context.Context, id string, follow bool, tail int) (string, error) {
-	return "", fmt.Errorf("get instance logs not yet implemented")
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.getInstanceLogs(ctx, id, follow, tail)
 }
 
+// AttachVolume attaches a volume to an instance (not yet implemented)
 func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error) {
 	return nil, fmt.Errorf("attach volume not yet implemented")
 }
 
+// DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
 }

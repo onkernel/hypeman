@@ -35,8 +35,8 @@ func ProvideImageManager(cfg *config.Config) (images.Manager, error) {
 }
 
 // ProvideInstanceManager provides the instance manager
-func ProvideInstanceManager(cfg *config.Config) instances.Manager {
-	return instances.NewManager(cfg.DataDir)
+func ProvideInstanceManager(cfg *config.Config, imageManager images.Manager) instances.Manager {
+	return instances.NewManager(cfg.DataDir, imageManager)
 }
 
 // ProvideVolumeManager provides the volume manager

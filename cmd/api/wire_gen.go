@@ -32,7 +32,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	instancesManager := providers.ProvideInstanceManager(config)
+	instancesManager := providers.ProvideInstanceManager(config, manager)
 	volumesManager := providers.ProvideVolumeManager(config)
 	apiService := api.New(config, manager, instancesManager, volumesManager)
 	mainApplication := &application{

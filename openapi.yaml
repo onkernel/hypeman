@@ -91,30 +91,28 @@ components:
     
     CreateInstanceRequest:
       type: object
-      required: [id, name, image]
+      required: [name, image]
       properties:
-        id:
-          type: string
-          description: Unique identifier for the instance (provided by caller)
-          example: inst-abc123
         name:
           type: string
           description: Human-readable name
           example: my-workload-1
         image:
           type: string
-          description: Image identifier
-          example: img-chrome-v1
-        memory_mb:
+          description: OCI image reference
+          example: docker.io/library/alpine:latest
+        size:
           type: integer
-          description: Base memory in MB
-          default: 1024
-          example: 2048
-        memory_max_mb:
+          format: int64
+          description: Base memory size in bytes (matches Cloud Hypervisor MemoryConfig.size)
+          default: 1073741824
+          example: 2147483648
+        hotplug_size:
           type: integer
-          description: Maximum memory with hotplug in MB
-          default: 4096
-          example: 4096
+          format: int64
+          description: Additional memory for hotplug in bytes (matches Cloud Hypervisor MemoryConfig.hotplug_size)
+          default: 3221225472
+          example: 2147483648
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -128,21 +126,7 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
-        timeout_seconds:
-          type: integer
-          description: Timeout for scale-to-zero semantics
-          default: 3600
-          example: 7200
-        volumes:
-          type: array
-          description: Volumes to attach
-          items:
-            $ref: "#/components/schemas/VolumeAttachment"
-        port_mappings:
-          type: array
-          description: Port mappings from host to guest
-          items:
-            $ref: "#/components/schemas/PortMapping"
+        # Future: volumes, port_mappings, timeout_seconds
     
     Instance:
       type: object
@@ -150,36 +134,28 @@ components:
       properties:
         id:
           type: string
-          description: Unique identifier
-          example: inst-abc123
+          description: Auto-generated unique identifier (ULID format)
+          example: 01H8X9Y5GJ2K3M4N5P6Q7R8S9T
         name:
           type: string
           description: Human-readable name
           example: my-workload-1
         image:
           type: string
-          description: Image identifier
-          example: img-chrome-v1
+          description: OCI image reference
+          example: docker.io/library/alpine:latest
         state:
           $ref: "#/components/schemas/InstanceState"
-        fqdn:
-          type: string
-          description: Fully qualified domain name
-          example: inst-abc123.local
-          nullable: true
-        private_ip:
-          type: string
-          description: Private IP address
-          example: 192.168.100.10
-          nullable: true
-        memory_mb:
+        size:
           type: integer
-          description: Configured base memory in MB
-          example: 2048
-        memory_max_mb:
+          format: int64
+          description: Base memory in bytes
+          example: 2147483648
+        hotplug_size:
           type: integer
-          description: Configured maximum memory in MB
-          example: 4096
+          format: int64
+          description: Hotplug memory in bytes
+          example: 2147483648
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -189,10 +165,6 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
-        timeout_seconds:
-          type: integer
-          description: Timeout configuration
-          example: 7200
         created_at:
           type: string
           format: date-time
@@ -210,16 +182,6 @@ components:
           description: Stop timestamp (RFC3339)
           example: "2025-01-15T12:30:00Z"
           nullable: true
-        volumes:
-          type: array
-          description: Attached volumes
-          items:
-            $ref: "#/components/schemas/VolumeAttachment"
-        port_mappings:
-          type: array
-          description: Port mappings
-          items:
-            $ref: "#/components/schemas/PortMapping"
         has_snapshot:
           type: boolean
           description: Whether a snapshot exists for this instance

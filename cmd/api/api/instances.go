@@ -22,12 +22,12 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 			Message: "failed to list instances",
 		}, nil
 	}
-	
+
 	oapiInsts := make([]oapi.Instance, len(domainInsts))
 	for i, inst := range domainInsts {
 		oapiInsts[i] = instanceToOAPI(inst)
 	}
-	
+
 	return oapi.ListInstances200JSONResponse(oapiInsts), nil
 }
 
@@ -35,19 +35,56 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Apply defaults
+	size := int64(1073741824) // 1GB default
+	if request.Body.Size != nil {
+		size = *request.Body.Size
+	}
+
+	hotplugSize := int64(3221225472) // 3GB default
+	if request.Body.HotplugSize != nil {
+		hotplugSize = *request.Body.HotplugSize
+	}
+
+	vcpus := 2
+	if request.Body.Vcpus != nil {
+		vcpus = *request.Body.Vcpus
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
 	domainReq := instances.CreateInstanceRequest{
-		Id:    request.Body.Id,
-		Name:  request.Body.Name,
-		Image: request.Body.Image,
+		Name:        request.Body.Name,
+		Image:       request.Body.Image,
+		Size:        size,
+		HotplugSize: hotplugSize,
+		Vcpus:       vcpus,
+		Env:         env,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
-		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
-		return oapi.CreateInstance500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to create instance",
-		}, nil
+		switch {
+		case errors.Is(err, instances.ErrImageNotReady):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "image_not_ready",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrAlreadyExists):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "already_exists",
+				Message: "instance already exists",
+			}, nil
+		default:
+			log.Error("failed to create instance", "error", err, "image", request.Body.Image)
+			return oapi.CreateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to create instance",
+			}, nil
+		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
 }
@@ -74,8 +111,6 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 	}
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
-
-
 
 // DeleteInstance stops and deletes an instance
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
@@ -115,7 +150,7 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StandbyInstance409JSONResponse{
 				Code:    "invalid_state",
-				Message: "instance is not in a valid state for standby",
+				Message: err.Error(),
 			}, nil
 		default:
 			log.Error("failed to standby instance", "error", err, "id", request.Id)
@@ -143,7 +178,7 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
 				Code:    "invalid_state",
-				Message: "instance is not in standby state",
+				Message: err.Error(),
 			}, nil
 		default:
 			log.Error("failed to restore instance", "error", err, "id", request.Id)
@@ -192,61 +227,41 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 	}, nil
 }
 
-// AttachVolume attaches a volume to an instance
+// AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	domainReq := instances.AttachVolumeRequest{
-		MountPath: request.Body.MountPath,
-	}
-
-	inst, err := s.InstanceManager.AttachVolume(ctx, request.Id, request.VolumeId, domainReq)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.AttachVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "instance or volume not found",
-			}, nil
-		default:
-			log.Error("failed to attach volume", "error", err, "instance_id", request.Id, "volume_id", request.VolumeId)
-			return oapi.AttachVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to attach volume",
-			}, nil
-		}
-	}
-	return oapi.AttachVolume200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.AttachVolume500JSONResponse{
+		Code:    "not_implemented",
+		Message: "volume attachment not yet implemented",
+	}, nil
 }
 
-// DetachVolume detaches a volume from an instance
+// DetachVolume detaches a volume from an instance (not yet implemented)
 func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolumeRequestObject) (oapi.DetachVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	inst, err := s.InstanceManager.DetachVolume(ctx, request.Id, request.VolumeId)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.DetachVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "instance or volume not found",
-			}, nil
-		default:
-			log.Error("failed to detach volume", "error", err, "instance_id", request.Id, "volume_id", request.VolumeId)
-			return oapi.DetachVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to detach volume",
-			}, nil
-		}
-	}
-	return oapi.DetachVolume200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.DetachVolume500JSONResponse{
+		Code:    "not_implemented",
+		Message: "volume detachment not yet implemented",
+	}, nil
 }
 
+// instanceToOAPI converts domain Instance to OAPI Instance
 func instanceToOAPI(inst instances.Instance) oapi.Instance {
-	return oapi.Instance{
-		Id:        inst.Id,
-		Name:      inst.Name,
-		Image:     inst.Image,
-		CreatedAt: inst.CreatedAt,
+	oapiInst := oapi.Instance{
+		Id:          inst.Id,
+		Name:        inst.Name,
+		Image:       inst.Image,
+		State:       oapi.InstanceState(inst.State),
+		Size:        &inst.Size,
+		HotplugSize: &inst.HotplugSize,
+		Vcpus:       &inst.Vcpus,
+		CreatedAt:   inst.CreatedAt,
+		StartedAt:   inst.StartedAt,
+		StoppedAt:   inst.StoppedAt,
+		HasSnapshot: &inst.HasSnapshot,
 	}
+
+	if len(inst.Env) > 0 {
+		oapiInst.Env = &inst.Env
+	}
+
+	return oapiInst
 }
