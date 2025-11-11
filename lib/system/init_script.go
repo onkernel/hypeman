@@ -15,6 +15,9 @@ set -xe
 
 echo "overlay-init: start (` + string(version) + `)" > /dev/kmsg
 
+# Create mount points
+mkdir -p /proc /sys /dev
+
 # Mount essential filesystems
 mount -t proc none /proc
 mount -t sysfs none /sys  

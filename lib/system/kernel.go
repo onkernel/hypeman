@@ -22,15 +22,21 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 		return fmt.Errorf("create kernel directory: %w", err)
 	}
 
-	// Download kernel
-	resp, err := http.Get(url)
+	// Download kernel (GitHub releases return 302 redirects)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+	
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+		return fmt.Errorf("download failed with status %d from %s", resp.StatusCode, url)
 	}
 
 	// Create output file

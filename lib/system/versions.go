@@ -9,9 +9,8 @@ type KernelVersion string
 type InitrdVersion string
 
 const (
-	// Kernel versions from Cloud Hypervisor releases
-	KernelV6_12_8 KernelVersion = "ch-v6.12.8"
-	KernelV6_12_9 KernelVersion = "ch-v6.12.9"
+	// Kernel versions from Cloud Hypervisor releases (full version with date)
+	KernelCH_6_12_8_20250613 KernelVersion = "ch-release-v6.12.8-20250613"
 
 	// Initrd versions (our internal versioning)
 	// Bump when init script logic changes
@@ -20,15 +19,15 @@ const (
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = KernelV6_12_9
+	DefaultKernelVersion = KernelCH_6_12_8_20250613
 
 	// DefaultInitrdVersion is the initrd version used for new instances
 	DefaultInitrdVersion = InitrdV1_0_0
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
-		KernelV6_12_8,
-		KernelV6_12_9,
+		KernelCH_6_12_8_20250613,
+		// Add future versions here
 	}
 
 	// SupportedInitrdVersions lists all supported initrd versions
@@ -39,14 +38,11 @@ var (
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
-	KernelV6_12_8: {
-		"x86_64":  "https://github.com/cloud-hypervisor/linux/releases/download/ch-v6.12.8/vmlinux-x86_64",
-		"aarch64": "https://github.com/cloud-hypervisor/linux/releases/download/ch-v6.12.8/Image-aarch64",
+	KernelCH_6_12_8_20250613: {
+		"x86_64":  "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.12.8-20250613/vmlinux-x86_64",
+		"aarch64": "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.12.8-20250613/Image-aarch64",
 	},
-	KernelV6_12_9: {
-		"x86_64":  "https://github.com/cloud-hypervisor/linux/releases/download/ch-v6.12.9/vmlinux-x86_64",
-		"aarch64": "https://github.com/cloud-hypervisor/linux/releases/download/ch-v6.12.9/Image-aarch64",
-	},
+	// Add future versions here
 }
 
 // GetArch returns the architecture string for the current platform

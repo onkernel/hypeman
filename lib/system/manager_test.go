@@ -22,9 +22,9 @@ func TestGetPaths(t *testing.T) {
 	mgr := NewManager(tmpDir)
 
 	// Get kernel path
-	kernelPath, err := mgr.GetKernelPath(KernelV6_12_9)
+	kernelPath, err := mgr.GetKernelPath(KernelCH_6_12_8_20250613)
 	require.NoError(t, err)
-	assert.Contains(t, kernelPath, "kernel/ch-v6.12.9")
+	assert.Contains(t, kernelPath, "kernel/ch-release-v6.12.8-20250613")
 	assert.Contains(t, kernelPath, "vmlinux")
 
 	// Get initrd path

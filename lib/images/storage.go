@@ -64,6 +64,20 @@ func digestPath(dataDir, repository, digestHex string) string {
 	return filepath.Join(digestDir(dataDir, repository, digestHex), "rootfs.erofs")
 }
 
+// GetDiskPath returns the filesystem path to an image's rootfs.erofs file (public for instances manager)
+func GetDiskPath(dataDir string, imageName string, digest string) (string, error) {
+	// Parse image name to get repository
+	ref, err := ParseNormalizedRef(imageName)
+	if err != nil {
+		return "", fmt.Errorf("parse image name: %w", err)
+	}
+
+	// Extract digest hex (remove "sha256:" prefix)
+	digestHex := strings.TrimPrefix(digest, "sha256:")
+
+	return digestPath(dataDir, ref.Repository(), digestHex), nil
+}
+
 // metadataPath returns the path to metadata.json for a digest
 func metadataPath(dataDir, repository, digestHex string) string {
 	return filepath.Join(digestDir(dataDir, repository, digestHex), "metadata.json")

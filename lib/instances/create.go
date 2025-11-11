@@ -175,7 +175,10 @@ func (m *manager) startAndBootVM(
 	}
 
 	// Build VM configuration matching Cloud Hypervisor VmConfig
-	vmConfig := m.buildVMConfig(inst, imageInfo)
+	vmConfig, err := m.buildVMConfig(inst, imageInfo)
+	if err != nil {
+		return fmt.Errorf("build vm config: %w", err)
+	}
 
 	// Create VM in VMM
 	createResp, err := client.CreateVMWithResponse(ctx, vmConfig)
@@ -183,7 +186,9 @@ func (m *manager) startAndBootVM(
 		return fmt.Errorf("create vm: %w", err)
 	}
 	if createResp.StatusCode() != 204 {
-		return fmt.Errorf("create vm failed with status %d", createResp.StatusCode())
+		// Include response body for debugging
+		body := string(createResp.Body)
+		return fmt.Errorf("create vm failed with status %d: %s", createResp.StatusCode(), body)
 	}
 
 	// Transition: Created → Running (boot VM)
@@ -197,7 +202,8 @@ func (m *manager) startAndBootVM(
 	if bootResp.StatusCode() != 204 {
 		client.DeleteVMWithResponse(ctx)
 		client.ShutdownVMMWithResponse(ctx)
-		return fmt.Errorf("boot vm failed with status %d", bootResp.StatusCode())
+		body := string(bootResp.Body)
+		return fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), body)
 	}
 
 	// Optional: Expand memory to max if hotplug configured
@@ -212,7 +218,7 @@ func (m *manager) startAndBootVM(
 }
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
-func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) vmm.VmConfig {
+func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.VmConfig, error) {
 	// Get versioned system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath(system.InitrdVersion(inst.InitrdVersion))
@@ -236,12 +242,15 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) vmm.VmC
 	}
 	if inst.HotplugSize > 0 {
 		memory.HotplugSize = &inst.HotplugSize
-		memory.HotplugMethod = ptr("virtio-mem")
+		memory.HotplugMethod = ptr("VirtioMem")  // PascalCase, not kebab-case
 	}
 
 	// Disk configuration
-	// Build path to rootfs disk (images are stored by digest)
-	rootfsPath := filepath.Join(m.dataDir, "images", imageInfo.Name, imageInfo.Digest[:12], "rootfs.erofs")
+	// Get rootfs disk path from image manager
+	rootfsPath, err := images.GetDiskPath(m.dataDir, imageInfo.Name, imageInfo.Digest)
+	if err != nil {
+		return vmm.VmConfig{}, err
+	}
 
 	disks := []vmm.DiskConfig{
 		// Rootfs (from image, read-only)
@@ -278,7 +287,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) vmm.VmC
 		Disks:   &disks,
 		Serial:  &serial,
 		Console: &console,
-	}
+	}, nil
 }
 
 func ptr[T any](v T) *T {
