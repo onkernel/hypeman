@@ -1,10 +1,14 @@
 # Cloud Hypervisor VMM Client
 
-Thin Go wrapper around Cloud Hypervisor's HTTP API (v0.3.0) with embedded binaries.
+Thin Go wrapper around Cloud Hypervisor's HTTP API with embedded binaries.
+
+Supports multiple versions of the Cloud Hypervisor VMM because instances are version-locked to cloud hypervisor if they are in standby. We can switch them to the latest version if we shutdown / reboot the VM.
+
+Embeds the binaries to make it easier to install, instead of managing multiple versions of the Cloud Hypervisor CLI externally + configuring it.
 
 ## Features
 
-- Embedded Cloud Hypervisor binaries (v48.0, v49.0) for x86_64 and aarch64
+- Embedded Cloud Hypervisor binaries of multiple versions
 - Generated HTTP client from official OpenAPI spec
 - Automatic binary extraction to data directory
 - Unix socket communication
@@ -77,6 +81,7 @@ lib/vmm/
 │       └── v49.0/
 │           ├── x86_64/cloud-hypervisor    (4.5MB)
 │           └── aarch64/cloud-hypervisor   (3.3MB)
+|       # There will be additional versions in the future...
 └── client_test.go      # Tests with real Cloud Hypervisor
 ```
 
@@ -84,6 +89,8 @@ lib/vmm/
 
 - Cloud Hypervisor v48.0 (API v0.3.0)
 - Cloud Hypervisor v49.0 (API v0.3.0)
+
+There may be additional versions in the future. Cloud hypervisor versions may update frequently, while the API updates less frequently.
 
 ## Regenerating Client
 
@@ -129,4 +136,3 @@ All Cloud Hypervisor API methods available via embedded `*ClientWithResponses`:
 - And many more...
 
 See generated `vmm.go` for full API surface.
-
