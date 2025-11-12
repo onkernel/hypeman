@@ -21,8 +21,7 @@ func (m *manager) getInstanceLogs(
 		return "", err
 	}
 
-	inst := meta.ToInstance()
-	logPath := filepath.Join(inst.DataDir, "logs", "console.log")
+	logPath := filepath.Join(meta.DataDir, "logs", "console.log")
 
 	// 2. Check if log file exists
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {

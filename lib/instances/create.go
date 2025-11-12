@@ -73,12 +73,10 @@ func (m *manager) createInstance(
 	kernelVer, initrdVer := m.systemManager.GetDefaultVersions()
 
 	// 7. Create instance metadata
-	inst := &Instance{
+	stored := &StoredMetadata{
 		Id:            id,
 		Name:          req.Name,
 		Image:         req.Image,
-		State:         StateStopped,
-		HasSnapshot:   false,
 		Size:          size,
 		HotplugSize:   hotplugSize,
 		OverlaySize:   overlaySize,
@@ -100,43 +98,44 @@ func (m *manager) createInstance(
 	}
 
 	// 9. Create overlay disk with specified size
-	if err := m.createOverlayDisk(id, inst.OverlaySize); err != nil {
+	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 10. Create config disk
+	// 10. Create config disk (needs Instance for buildVMConfig)
+	inst := &Instance{StoredMetadata: *stored}
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 11. Save metadata (state: Stopped)
-	meta := &metadata{Instance: *inst}
+	// 11. Save metadata
+	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 12. Start VMM and boot VM (multi-hop: Stopped → Created → Running)
-	if err := m.startAndBootVM(ctx, inst, imageInfo); err != nil {
+	// 12. Start VMM and boot VM
+	if err := m.startAndBootVM(ctx, stored, imageInfo); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
 
-	// 13. Update state to Running
-	inst.State = StateRunning
+	// 13. Update timestamp after VM is running
 	now := time.Now()
-	inst.StartedAt = &now
+	stored.StartedAt = &now
 
-	meta = &metadata{Instance: *inst}
+	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
-		// Instance is recoverable
-		return inst, nil
+		// Instance is recoverable, state will be derived
 	}
 
-	return inst, nil
+	// Return instance with derived state
+	finalInst := m.toInstance(ctx, meta)
+	return &finalInst, nil
 }
 
 // validateCreateRequest validates the create instance request
@@ -163,30 +162,24 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 }
 
 // startAndBootVM starts the VMM and boots the VM
-// Multi-hop: Stopped → Created → Running
 func (m *manager) startAndBootVM(
 	ctx context.Context,
-	inst *Instance,
+	stored *StoredMetadata,
 	imageInfo *images.Image,
 ) error {
-	// Transition: Stopped → Created (start VMM process)
-	if err := vmm.StartProcess(ctx, m.dataDir, inst.CHVersion, inst.SocketPath); err != nil {
+	// Start VMM process
+	if err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath); err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
 
-	inst.State = StateCreated
-	meta := &metadata{Instance: *inst}
-	if err := m.saveMetadata(meta); err != nil {
-		// VMM is running but metadata failed - continue anyway
-	}
-
 	// Create VMM client
-	client, err := vmm.NewVMM(inst.SocketPath)
+	client, err := vmm.NewVMM(stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("create vmm client: %w", err)
 	}
 
 	// Build VM configuration matching Cloud Hypervisor VmConfig
+	inst := &Instance{StoredMetadata: *stored}
 	vmConfig, err := m.buildVMConfig(inst, imageInfo)
 	if err != nil {
 		return fmt.Errorf("build vm config: %w", err)

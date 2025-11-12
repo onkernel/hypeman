@@ -23,7 +23,8 @@ func (m *manager) standbyInstance(
 		return nil, err
 	}
 
-	inst := meta.ToInstance()
+	inst := m.toInstance(ctx, meta)
+	stored := &meta.StoredMetadata
 
 	// 2. Validate state transition (must be Running to start standby flow)
 	if inst.State != StateRunning {
@@ -47,42 +48,31 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("pause vm failed: %w", err)
 	}
 
-	inst.State = StatePaused
-	meta = &metadata{Instance: *inst}
-	if err := m.saveMetadata(meta); err != nil {
-		// Metadata save failed but VM is paused - try to resume
-		client.ResumeVMWithResponse(ctx)
-		return nil, fmt.Errorf("save metadata after pause: %w", err)
-	}
-
 	// 6. Create snapshot
-	snapshotDir := filepath.Join(inst.DataDir, "snapshots", "snapshot-latest")
+	snapshotDir := filepath.Join(stored.DataDir, "snapshots", "snapshot-latest")
 	if err := createSnapshot(ctx, client, snapshotDir); err != nil {
 		// Snapshot failed - try to resume VM
 		client.ResumeVMWithResponse(ctx)
-		inst.State = StateRunning
-		meta := &metadata{Instance: *inst}
-		m.saveMetadata(meta)
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
 	// 7. Stop VMM
-	if err := m.stopVMM(ctx, inst); err != nil {
+	if err := m.stopVMM(ctx, &inst); err != nil {
 		// Log but continue - snapshot was created successfully
 	}
 
-	// 8. Transition: Paused → Standby
-	inst.State = StateStandby
-	inst.HasSnapshot = true
+	// 8. Update timestamp
 	now := time.Now()
-	inst.StoppedAt = &now
+	stored.StoppedAt = &now
 
-	meta = &metadata{Instance: *inst}
+	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	return inst, nil
+	// Return instance with derived state (should be Standby now)
+	finalInst := m.toInstance(ctx, meta)
+	return &finalInst, nil
 }
 
 // reduceMemory attempts to reduce VM memory to minimize snapshot size

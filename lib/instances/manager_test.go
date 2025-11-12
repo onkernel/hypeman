@@ -149,12 +149,11 @@ func TestStorageOperations(t *testing.T) {
 	_, err := manager.loadMetadata("nonexistent")
 	assert.ErrorIs(t, err, ErrNotFound)
 
-	// Create instance metadata
-	inst := &Instance{
+	// Create instance metadata (stored fields only)
+	stored := &StoredMetadata{
 		Id:          "test-123",
 		Name:        "test",
 		Image:       "test:latest",
-		State:       StateStopped,
 		Size:        1024 * 1024 * 1024,
 		HotplugSize: 2048 * 1024 * 1024,
 		OverlaySize: 10 * 1024 * 1024 * 1024,
@@ -167,20 +166,20 @@ func TestStorageOperations(t *testing.T) {
 	}
 
 	// Ensure directories
-	err = manager.ensureDirectories(inst.Id)
+	err = manager.ensureDirectories(stored.Id)
 	require.NoError(t, err)
 
 	// Save metadata
-	meta := &metadata{Instance: *inst}
+	meta := &metadata{StoredMetadata: *stored}
 	err = manager.saveMetadata(meta)
 	require.NoError(t, err)
 
 	// Load metadata
-	loaded, err := manager.loadMetadata(inst.Id)
+	loaded, err := manager.loadMetadata(stored.Id)
 	require.NoError(t, err)
-	assert.Equal(t, inst.Id, loaded.Id)
-	assert.Equal(t, inst.Name, loaded.Name)
-	assert.Equal(t, inst.State, loaded.State)
+	assert.Equal(t, stored.Id, loaded.Id)
+	assert.Equal(t, stored.Name, loaded.Name)
+	// State is no longer stored, it's derived
 
 	// List metadata files
 	files, err := manager.listMetadataFiles()
@@ -188,11 +187,11 @@ func TestStorageOperations(t *testing.T) {
 	assert.Len(t, files, 1)
 
 	// Delete instance data
-	err = manager.deleteInstanceData(inst.Id)
+	err = manager.deleteInstanceData(stored.Id)
 	require.NoError(t, err)
 
 	// Verify deletion
-	_, err = manager.loadMetadata(inst.Id)
+	_, err = manager.loadMetadata(stored.Id)
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 

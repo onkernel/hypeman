@@ -22,15 +22,9 @@ import (
 //       vm.json
 //       memory-ranges
 
-// metadata wraps Instance with additional serialization
+// metadata wraps StoredMetadata for JSON serialization
 type metadata struct {
-	Instance
-}
-
-// ToInstance converts metadata to Instance
-func (m *metadata) ToInstance() *Instance {
-	inst := m.Instance
-	return &inst
+	StoredMetadata
 }
 
 // ensureDirectories creates the instance directory structure

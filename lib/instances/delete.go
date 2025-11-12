@@ -9,7 +9,6 @@ import (
 )
 
 // deleteInstance stops and deletes an instance
-// Orchestrates: current state → Shutdown (if needed) → Stopped
 func (m *manager) deleteInstance(
 	ctx context.Context,
 	id string,
@@ -20,11 +19,11 @@ func (m *manager) deleteInstance(
 		return err
 	}
 
-	inst := meta.ToInstance()
+	inst := m.toInstance(ctx, meta)
 
-	// 2. If VMM is running, stop it
+	// 2. If VMM might be running, try to stop it
 	if inst.State.RequiresVMM() {
-		if err := m.stopVMM(ctx, inst); err != nil {
+		if err := m.stopVMM(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
 			// Best effort to clean up even if VMM is unresponsive
 		}
@@ -38,28 +37,32 @@ func (m *manager) deleteInstance(
 	return nil
 }
 
-// stopVMM attempts to gracefully stop the VMM, falls back to force kill
+// stopVMM attempts to gracefully stop the VMM
 func (m *manager) stopVMM(ctx context.Context, inst *Instance) error {
+	// Check if socket exists
+	if _, err := os.Stat(inst.SocketPath); os.IsNotExist(err) {
+		// No socket - VMM not running
+		return nil
+	}
+
 	// Try to connect to VMM
 	client, err := vmm.NewVMM(inst.SocketPath)
 	if err != nil {
-		// Socket doesn't exist or can't connect - might already be stopped
+		// Socket exists but can't connect - stale socket
+		// Don't delete it here - it will be cleaned up by vmm.StartProcess if needed
 		return nil
 	}
 
-	// Try graceful shutdown
-	if resp, err := client.ShutdownVMMWithResponse(ctx); err == nil && resp.StatusCode() < 300 {
+	// Verify VMM responds
+	if _, err := client.GetVmmPingWithResponse(ctx); err != nil {
+		// VMM unresponsive - stale socket
 		return nil
 	}
 
-	// Graceful shutdown failed - force cleanup
-	// Remove socket file
-	os.Remove(inst.SocketPath)
-
-	// Note: In production, you might want to find and kill the process
-	// using lsof on the overlay disk, similar to the POC script
-	// For now, we rely on socket removal
-
+	// VMM is alive - try graceful shutdown
+	client.ShutdownVMMWithResponse(ctx)
+	// Cloud Hypervisor will remove the socket on successful shutdown
+	
 	return nil
 }
 

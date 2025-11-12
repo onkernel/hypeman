@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -22,7 +23,8 @@ func (m *manager) restoreInstance(
 		return nil, err
 	}
 
-	inst := meta.ToInstance()
+	inst := m.toInstance(ctx, meta)
+	stored := &meta.StoredMetadata
 
 	// 2. Validate state
 	if inst.State != StateStandby {
@@ -34,21 +36,15 @@ func (m *manager) restoreInstance(
 	}
 
 	// 3. Get snapshot directory
-	snapshotDir := filepath.Join(inst.DataDir, "snapshots", "snapshot-latest")
+	snapshotDir := filepath.Join(stored.DataDir, "snapshots", "snapshot-latest")
 
 	// 4. Transition: Standby → Paused (start VMM + restore)
-	if err := m.restoreFromSnapshot(ctx, inst, snapshotDir); err != nil {
+	if err := m.restoreFromSnapshot(ctx, stored, snapshotDir); err != nil {
 		return nil, err
 	}
 
-	inst.State = StatePaused
-	meta = &metadata{Instance: *inst}
-	if err := m.saveMetadata(meta); err != nil {
-		// Metadata failed but VM is restored - continue
-	}
-
 	// 5. Create client for resumed VM
-	client, err := vmm.NewVMM(inst.SocketPath)
+	client, err := vmm.NewVMM(stored.SocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
@@ -59,33 +55,36 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 
-	// 7. Update state to Running
-	inst.State = StateRunning
-	now := time.Now()
-	inst.StartedAt = &now
+	// 7. Delete snapshot after successful restore
+	os.RemoveAll(snapshotDir) // Best effort, ignore errors
 
-	meta = &metadata{Instance: *inst}
+	// 8. Update timestamp
+	now := time.Now()
+	stored.StartedAt = &now
+
+	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed
-		return inst, nil
 	}
 
-	return inst, nil
+	// Return instance with derived state (should be Running now)
+	finalInst := m.toInstance(ctx, meta)
+	return &finalInst, nil
 }
 
 // restoreFromSnapshot starts VMM and restores from snapshot
 func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
-	inst *Instance,
+	stored *StoredMetadata,
 	snapshotDir string,
 ) error {
 	// Start VMM process (without VM config - restore will provide it)
-	if err := vmm.StartProcess(ctx, m.dataDir, inst.CHVersion, inst.SocketPath); err != nil {
+	if err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath); err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
 
 	// Create client
-	client, err := vmm.NewVMM(inst.SocketPath)
+	client, err := vmm.NewVMM(stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("create vmm client: %w", err)
 	}

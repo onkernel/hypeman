@@ -18,16 +18,12 @@ const (
 	StateStandby  State = "Standby"  // No VMM, snapshot exists
 )
 
-// Instance represents a virtual machine instance
-type Instance struct {
+// StoredMetadata represents instance metadata that is persisted to disk
+type StoredMetadata struct {
 	// Identification
 	Id    string // Auto-generated ULID
 	Name  string
 	Image string // OCI reference
-
-	// State
-	State       State
-	HasSnapshot bool
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size        int64 // Base memory in bytes
@@ -38,17 +34,28 @@ type Instance struct {
 	// Configuration
 	Env map[string]string
 
-	// Timestamps
+	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
-	StartedAt *time.Time
-	StoppedAt *time.Time
+	StartedAt *time.Time // Last time VM was started
+	StoppedAt *time.Time // Last time VM was stopped
 
-	// Internal (not in API response, used by manager)
+	// Versions
 	KernelVersion string        // Kernel version (e.g., "ch-v6.12.9")
 	InitrdVersion string        // Initrd version (e.g., "v1.0.0")
 	CHVersion     vmm.CHVersion // Cloud Hypervisor version
-	SocketPath    string        // Path to API socket
-	DataDir       string        // Instance data directory
+
+	// Paths
+	SocketPath string // Path to API socket
+	DataDir    string // Instance data directory
+}
+
+// Instance represents a virtual machine instance with derived runtime state
+type Instance struct {
+	StoredMetadata
+
+	// Derived fields (not stored in metadata.json)
+	State       State // Derived from socket + VMM query
+	HasSnapshot bool  // Derived from filesystem check
 }
 
 // CreateInstanceRequest is the domain request for creating an instance

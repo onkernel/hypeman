@@ -2,8 +2,93 @@ package instances
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/vmm"
 )
+
+// deriveState determines instance state by checking socket and querying VMM
+func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) State {
+	// 1. Check if socket exists
+	if _, err := os.Stat(stored.SocketPath); err != nil {
+		// No socket - check for snapshot to distinguish Stopped vs Standby
+		if m.hasSnapshot(stored.DataDir) {
+			return StateStandby
+		}
+		return StateStopped
+	}
+
+	// 2. Socket exists - query VMM for actual state
+	client, err := vmm.NewVMM(stored.SocketPath)
+	if err != nil {
+		// Stale socket - check for snapshot to distinguish Stopped vs Standby
+		if m.hasSnapshot(stored.DataDir) {
+			return StateStandby
+		}
+		return StateStopped
+	}
+
+	resp, err := client.GetVmInfoWithResponse(ctx)
+	if err != nil {
+		// VMM unreachable - stale socket, check for snapshot
+		if m.hasSnapshot(stored.DataDir) {
+			return StateStandby
+		}
+		return StateStopped
+	}
+
+	if resp.StatusCode() != 200 || resp.JSON200 == nil {
+		// VMM returned error - check for snapshot
+		if m.hasSnapshot(stored.DataDir) {
+			return StateStandby
+		}
+		return StateStopped
+	}
+
+	// 3. Map CH state to our state
+	switch resp.JSON200.State {
+	case vmm.Created:
+		return StateCreated
+	case vmm.Running:
+		return StateRunning
+	case vmm.Paused:
+		return StatePaused
+	case vmm.Shutdown:
+		return StateShutdown
+	default:
+		return StateStopped
+	}
+}
+
+// hasSnapshot checks if a snapshot exists for an instance
+func (m *manager) hasSnapshot(dataDir string) bool {
+	snapshotDir := filepath.Join(dataDir, "snapshots", "snapshot-latest")
+	info, err := os.Stat(snapshotDir)
+	if err != nil {
+		return false
+	}
+	// Check directory exists and is not empty
+	if !info.IsDir() {
+		return false
+	}
+	// Read directory to check for any snapshot files
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+// toInstance converts stored metadata to Instance with derived fields
+func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
+	inst := Instance{
+		StoredMetadata: meta.StoredMetadata,
+		State:          m.deriveState(ctx, &meta.StoredMetadata),
+		HasSnapshot:    m.hasSnapshot(meta.StoredMetadata.DataDir),
+	}
+	return inst
+}
 
 // listInstances returns all instances
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
@@ -24,7 +109,8 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 			continue
 		}
 
-		result = append(result, meta.Instance)
+		inst := m.toInstance(ctx, meta)
+		result = append(result, inst)
 	}
 
 	return result, nil
@@ -37,6 +123,7 @@ func (m *manager) getInstance(ctx context.Context, id string) (*Instance, error)
 		return nil, err
 	}
 
-	return meta.ToInstance(), nil
+	inst := m.toInstance(ctx, meta)
+	return &inst, nil
 }
 
