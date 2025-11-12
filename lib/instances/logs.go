@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/logger"
 )
 
 // getInstanceLogs returns the last N lines of instance console logs
@@ -15,9 +17,13 @@ func (m *manager) getInstanceLogs(
 	follow bool,
 	tail int,
 ) (string, error) {
+	log := logger.FromContext(ctx)
+	log.DebugContext(ctx, "getting instance logs", "id", id, "follow", follow, "tail", tail)
+	
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
+		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
 		return "", err
 	}
 
@@ -25,16 +31,25 @@ func (m *manager) getInstanceLogs(
 
 	// 2. Check if log file exists
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		log.DebugContext(ctx, "no log file exists yet", "id", id)
 		return "", nil // No logs yet
 	}
 
 	// 3. For now, only support tail (not follow)
 	if follow {
+		log.WarnContext(ctx, "follow mode not yet implemented", "id", id)
 		return "", fmt.Errorf("follow not yet implemented")
 	}
 
 	// 4. Read last N lines
-	return tailFile(logPath, tail)
+	result, err := tailFile(logPath, tail)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to read log file", "id", id, "error", err)
+		return "", err
+	}
+	
+	log.DebugContext(ctx, "retrieved instance logs", "id", id, "bytes", len(result))
+	return result, nil
 }
 
 // tailFile reads the last n lines from a file efficiently

@@ -8,6 +8,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
@@ -18,14 +19,20 @@ func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
 ) (*Instance, error) {
+	log := logger.FromContext(ctx)
+	log.InfoContext(ctx, "creating instance", "name", req.Name, "image", req.Image, "vcpus", req.Vcpus)
+	
 	// 1. Validate request
 	if err := validateCreateRequest(req); err != nil {
+		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
 
 	// 2. Validate image exists and is ready
+	log.DebugContext(ctx, "validating image", "image", req.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, req.Image)
 	if err != nil {
+		log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
 		if err == images.ErrNotFound {
 			return nil, fmt.Errorf("image %s: %w", req.Image, err)
 		}
@@ -33,11 +40,13 @@ func (m *manager) createInstance(
 	}
 
 	if imageInfo.Status != images.StatusReady {
+		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
 	}
 
 	// 3. Generate instance ID (ULID for time-ordered IDs)
 	id := ulid.Make().String()
+	log.DebugContext(ctx, "generated instance ID", "id", id)
 
 	// 4. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
@@ -93,32 +102,42 @@ func (m *manager) createInstance(
 	}
 
 	// 8. Ensure directories
+	log.DebugContext(ctx, "creating instance directories", "id", id)
 	if err := m.ensureDirectories(id); err != nil {
+		log.ErrorContext(ctx, "failed to create directories", "id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
 	// 9. Create overlay disk with specified size
+	log.DebugContext(ctx, "creating overlay disk", "id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+		log.ErrorContext(ctx, "failed to create overlay disk", "id", id, "error", err)
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
 	// 10. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
+	log.DebugContext(ctx, "creating config disk", "id", id)
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
+		log.ErrorContext(ctx, "failed to create config disk", "id", id, "error", err)
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
 	// 11. Save metadata
+	log.DebugContext(ctx, "saving instance metadata", "id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
+		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
 	// 12. Start VMM and boot VM
+	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo); err != nil {
+		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
@@ -131,10 +150,12 @@ func (m *manager) createInstance(
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
 		// Instance is recoverable, state will be derived
+		log.WarnContext(ctx, "failed to update metadata after VM start", "id", id, "error", err)
 	}
 
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)
+	log.InfoContext(ctx, "instance created successfully", "id", id, "name", req.Name, "state", finalInst.State)
 	return &finalInst, nil
 }
 
@@ -167,7 +188,10 @@ func (m *manager) startAndBootVM(
 	stored *StoredMetadata,
 	imageInfo *images.Image,
 ) error {
+	log := logger.FromContext(ctx)
+	
 	// Start VMM process and capture PID
+	log.DebugContext(ctx, "starting VMM process", "id", stored.Id, "version", stored.CHVersion)
 	pid, err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
@@ -175,6 +199,7 @@ func (m *manager) startAndBootVM(
 	
 	// Store the PID for later cleanup
 	stored.CHPID = &pid
+	log.DebugContext(ctx, "VMM process started", "id", stored.Id, "pid", pid)
 
 	// Create VMM client
 	client, err := vmm.NewVMM(stored.SocketPath)
@@ -190,6 +215,7 @@ func (m *manager) startAndBootVM(
 	}
 
 	// Create VM in VMM
+	log.DebugContext(ctx, "creating VM in VMM", "id", stored.Id)
 	createResp, err := client.CreateVMWithResponse(ctx, vmConfig)
 	if err != nil {
 		return fmt.Errorf("create vm: %w", err)
@@ -197,10 +223,12 @@ func (m *manager) startAndBootVM(
 	if createResp.StatusCode() != 204 {
 		// Include response body for debugging
 		body := string(createResp.Body)
+		log.ErrorContext(ctx, "create VM failed", "id", stored.Id, "status", createResp.StatusCode(), "body", body)
 		return fmt.Errorf("create vm failed with status %d: %s", createResp.StatusCode(), body)
 	}
 
 	// Transition: Created → Running (boot VM)
+	log.DebugContext(ctx, "booting VM", "id", stored.Id)
 	bootResp, err := client.BootVMWithResponse(ctx)
 	if err != nil {
 		// Try to cleanup
@@ -212,15 +240,19 @@ func (m *manager) startAndBootVM(
 		client.DeleteVMWithResponse(ctx)
 		client.ShutdownVMMWithResponse(ctx)
 		body := string(bootResp.Body)
+		log.ErrorContext(ctx, "boot VM failed", "id", stored.Id, "status", bootResp.StatusCode(), "body", body)
 		return fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), body)
 	}
 
 	// Optional: Expand memory to max if hotplug configured
 	if inst.HotplugSize > 0 {
 		totalBytes := inst.Size + inst.HotplugSize
+		log.DebugContext(ctx, "expanding VM memory", "id", stored.Id, "total_bytes", totalBytes)
 		resizeConfig := vmm.VmResize{DesiredRam: &totalBytes}
 		// Best effort, ignore errors
-		client.PutVmResizeWithResponse(ctx, resizeConfig)
+		if resp, err := client.PutVmResizeWithResponse(ctx, resizeConfig); err != nil || resp.StatusCode() != 204 {
+			log.WarnContext(ctx, "failed to expand VM memory", "id", stored.Id, "error", err)
+		}
 	}
 
 	return nil

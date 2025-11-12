@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
 
@@ -92,8 +93,12 @@ func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
 
 // listInstances returns all instances
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
+	log := logger.FromContext(ctx)
+	log.DebugContext(ctx, "listing all instances")
+	
 	files, err := m.listMetadataFiles()
 	if err != nil {
+		log.ErrorContext(ctx, "failed to list metadata files", "error", err)
 		return nil, err
 	}
 
@@ -106,6 +111,7 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			// Skip instances with invalid metadata
+			log.WarnContext(ctx, "skipping instance with invalid metadata", "id", id, "error", err)
 			continue
 		}
 
@@ -113,17 +119,23 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		result = append(result, inst)
 	}
 
+	log.DebugContext(ctx, "listed instances", "count", len(result))
 	return result, nil
 }
 
 // getInstance returns a single instance by ID
 func (m *manager) getInstance(ctx context.Context, id string) (*Instance, error) {
+	log := logger.FromContext(ctx)
+	log.DebugContext(ctx, "getting instance", "id", id)
+	
 	meta, err := m.loadMetadata(id)
 	if err != nil {
+		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
 		return nil, err
 	}
 
 	inst := m.toInstance(ctx, meta)
+	log.DebugContext(ctx, "retrieved instance", "id", id, "state", inst.State)
 	return &inst, nil
 }
 
