@@ -101,11 +101,75 @@ func reduceMemory(ctx context.Context, client *vmm.VMM, targetBytes int64) error
 		return fmt.Errorf("memory resize failed")
 	}
 
-	// Wait for memory to be reduced
-	// TODO: Poll actual memory usage instead of fixed sleep
-	time.Sleep(2 * time.Second)
+	// Poll actual memory usage until it reaches target size
+	return pollVMMemory(ctx, client, targetBytes, 5*time.Second)
+}
 
-	return nil
+// pollVMMemory polls VM memory usage until it reduces and stabilizes
+func pollVMMemory(ctx context.Context, client *vmm.VMM, targetBytes int64, timeout time.Duration) error {
+	log := logger.FromContext(ctx)
+	deadline := time.Now().Add(timeout)
+	
+	// Use 20ms for fast response with minimal overhead
+	const pollInterval = 20 * time.Millisecond
+	const stabilityThreshold = 3 // Memory unchanged for 3 checks = stable
+	
+	var previousSize *int64
+	unchangedCount := 0
+	
+	for time.Now().Before(deadline) {
+		infoResp, err := client.GetVmInfoWithResponse(ctx)
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+		
+		if infoResp.StatusCode() != 200 || infoResp.JSON200 == nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+		
+		actualSize := infoResp.JSON200.MemoryActualSize
+		if actualSize == nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+		
+		currentSize := *actualSize
+		
+		// Best case: reached target or below
+		if currentSize <= targetBytes {
+			log.DebugContext(ctx, "memory reduced to target",
+				"target_mb", targetBytes/(1024*1024),
+				"actual_mb", currentSize/(1024*1024))
+			return nil
+		}
+		
+		// Check if memory has stopped shrinking (stabilized above target)
+		if previousSize != nil {
+			if currentSize == *previousSize {
+				unchangedCount++
+				if unchangedCount >= stabilityThreshold {
+					// Memory has stabilized but above target
+					// Guest OS couldn't free more memory - accept this as "done"
+					log.WarnContext(ctx, "memory reduction stabilized above target",
+						"target_mb", targetBytes/(1024*1024),
+						"actual_mb", currentSize/(1024*1024),
+						"diff_mb", (currentSize-targetBytes)/(1024*1024))
+					return nil // Not an error - snapshot will just be larger
+				}
+			} else if currentSize < *previousSize {
+				// Still shrinking - reset counter
+				unchangedCount = 0
+			}
+		}
+		
+		previousSize = &currentSize
+		time.Sleep(pollInterval)
+	}
+	
+	// Timeout - memory never stabilized
+	return fmt.Errorf("memory reduction did not complete within %v", timeout)
 }
 
 // createSnapshot creates a Cloud Hypervisor snapshot
@@ -156,7 +220,7 @@ func (m *manager) shutdownVMM(ctx context.Context, inst *Instance) error {
 	
 	// Wait for process to exit
 	if inst.CHPID != nil {
-		if !waitForProcessExit(*inst.CHPID, 2*time.Second) {
+		if !WaitForProcessExit(*inst.CHPID, 2*time.Second) {
 			log.WarnContext(ctx, "VMM did not exit gracefully in time", "id", inst.Id, "pid", *inst.CHPID)
 		} else {
 			log.DebugContext(ctx, "VMM shutdown gracefully", "id", inst.Id, "pid", *inst.CHPID)

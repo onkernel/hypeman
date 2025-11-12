@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -34,6 +35,42 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	return mgr, tmpDir
 }
 
+// waitForVMReady polls VM state via VMM API until it's running or times out
+func waitForVMReady(ctx context.Context, socketPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	
+	for time.Now().Before(deadline) {
+		// Try to connect to VMM
+		client, err := vmm.NewVMM(socketPath)
+		if err != nil {
+			// Socket might not be ready yet
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		
+		// Get VM info
+		infoResp, err := client.GetVmInfoWithResponse(ctx)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		
+		if infoResp.StatusCode() != 200 || infoResp.JSON200 == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		
+		// Check if VM is running
+		if infoResp.JSON200.State == vmm.Running {
+			return nil
+		}
+		
+		time.Sleep(100 * time.Millisecond)
+	}
+	
+	return fmt.Errorf("VM did not reach running state within %v", timeout)
+}
+
 // cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
 func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 	// Find all metadata files
@@ -61,8 +98,8 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 				t.Logf("Cleaning up orphaned Cloud Hypervisor process: PID %d (instance %s)", pid, id)
 				syscall.Kill(pid, syscall.SIGKILL)
 				
-				// Wait briefly for it to die
-				time.Sleep(100 * time.Millisecond)
+				// Wait for process to exit
+				WaitForProcessExit(pid, 1*time.Second)
 			}
 		}
 	}
@@ -147,8 +184,9 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.FileExists(t, filepath.Join(instDir, "overlay.raw"))
 	assert.FileExists(t, filepath.Join(instDir, "config.ext4"))
 
-	// Give VM a moment to fully start
-	time.Sleep(2 * time.Second)
+	// Wait for VM to be fully running
+	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
+	require.NoError(t, err, "VM should reach running state")
 
 	// Get instance
 	retrieved, err := manager.GetInstance(ctx, inst.Id)
@@ -302,8 +340,9 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Give VM a moment to boot
-	time.Sleep(1 * time.Second)
+	// Wait for VM to be fully running before standby
+	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
+	require.NoError(t, err, "VM should reach running state")
 
 	// Standby instance
 	t.Log("Standing by instance...")
@@ -326,8 +365,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
 
-	// Cleanup
-	time.Sleep(500 * time.Millisecond)
+	// Cleanup (no sleep needed - DeleteInstance handles process cleanup)
 	t.Log("Cleaning up...")
 	err = manager.DeleteInstance(ctx, inst.Id)
 	require.NoError(t, err)

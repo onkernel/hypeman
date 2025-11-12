@@ -67,7 +67,7 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			syscall.Kill(pid, syscall.SIGKILL)
 			
 			// Wait for process to die (SIGKILL is guaranteed, usually instant)
-			if !waitForProcessExit(pid, 1*time.Second) {
+			if !WaitForProcessExit(pid, 1*time.Second) {
 				log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
 			} else {
 				log.DebugContext(ctx, "VMM process killed successfully", "id", inst.Id, "pid", pid)
@@ -83,8 +83,9 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 	return nil
 }
 
-// waitForProcessExit polls for a process to exit, returns true if exited within timeout
-func waitForProcessExit(pid int, timeout time.Duration) bool {
+// WaitForProcessExit polls for a process to exit, returns true if exited within timeout.
+// Exported for use in tests.
+func WaitForProcessExit(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	
 	for time.Now().Before(deadline) {
@@ -94,6 +95,7 @@ func waitForProcessExit(pid int, timeout time.Duration) bool {
 			return true
 		}
 		// Still alive, wait a bit before checking again
+		// 10ms polling interval balances responsiveness with CPU usage
 		time.Sleep(10 * time.Millisecond)
 	}
 	
