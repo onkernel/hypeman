@@ -25,8 +25,8 @@ type manager struct {
 	dataDir        string
 	imageManager   images.Manager
 	systemManager  system.Manager
-	maxOverlaySize int64        // Maximum overlay disk size in bytes
-	mu             sync.RWMutex // Protects concurrent access to instances
+	maxOverlaySize int64    // Maximum overlay disk size in bytes
+	instanceLocks  sync.Map // map[string]*sync.RWMutex - per-instance locks
 }
 
 // NewManager creates a new instances manager
@@ -36,55 +36,76 @@ func NewManager(dataDir string, imageManager images.Manager, systemManager syste
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		maxOverlaySize: maxOverlaySize,
+		instanceLocks:  sync.Map{},
 	}
+}
+
+// getInstanceLock returns or creates a lock for a specific instance
+func (m *manager) getInstanceLock(id string) *sync.RWMutex {
+	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
 }
 
 // CreateInstance creates and starts a new instance
 func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Note: ID is generated inside createInstance, so we can't lock before calling it.
+	// This is safe because:
+	// 1. ULID generation is unique
+	// 2. Filesystem mkdir is atomic per instance directory
+	// 3. Concurrent creates of different instances don't conflict
 	return m.createInstance(ctx, req)
 }
 
 // DeleteInstance stops and deletes an instance
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.deleteInstance(ctx, id)
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	
+	err := m.deleteInstance(ctx, id)
+	if err == nil {
+		// Clean up the lock after successful deletion
+		m.instanceLocks.Delete(id)
+	}
+	return err
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 func (m *manager) StandbyInstance(ctx context.Context, id string) (*Instance, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	return m.standbyInstance(ctx, id)
 }
 
 // RestoreInstance restores an instance from standby
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
 	return m.restoreInstance(ctx, id)
 }
 
 // ListInstances returns all instances
 func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// No lock - eventual consistency is acceptable for list operations.
+	// State is derived dynamically, so list is always reasonably current.
 	return m.listInstances(ctx)
 }
 
 // GetInstance returns a single instance
 func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	lock := m.getInstanceLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
 	return m.getInstance(ctx, id)
 }
 
 // GetInstanceLogs returns instance console logs
 func (m *manager) GetInstanceLogs(ctx context.Context, id string, follow bool, tail int) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	lock := m.getInstanceLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
 	return m.getInstanceLogs(ctx, id, follow, tail)
 }
 
