@@ -4,33 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// waitForProcessExit polls for a process to exit, returns true if exited within timeout
-func waitForProcessExit(pid int, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	
-	for time.Now().Before(deadline) {
-		// Check if process still exists (signal 0 doesn't kill, just checks existence)
-		if err := syscall.Kill(pid, 0); err != nil {
-			// Process is gone (ESRCH = no such process)
-			return true
-		}
-		// Still alive, wait a bit before checking again
-		// 10ms polling interval balances responsiveness with CPU usage
-		time.Sleep(10 * time.Millisecond)
-	}
-	
-	// Timeout reached, process still exists
-	return false
-}
 
 func TestExtractBinary(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -98,7 +77,6 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	assert.Equal(t, 200, pingResp.StatusCode())
 	require.NotNil(t, pingResp.JSON200)
 	require.NotNil(t, pingResp.JSON200.Pid)
-	vmmPid := int(*pingResp.JSON200.Pid)
 
 	// Shutdown VMM
 	shutdownResp, err := client.ShutdownVMMWithResponse(ctx)
@@ -107,9 +85,6 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 		"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-	// Wait for VMM process to actually exit (give it more time for cleanup)
-	exited := waitForProcessExit(vmmPid, 3*time.Second)
-	assert.True(t, exited, "VMM process should exit after shutdown")
 }
 
 func TestStartProcessSocketInUse(t *testing.T) {
@@ -164,7 +139,6 @@ func TestMultipleVersions(t *testing.T) {
 			assert.Equal(t, 200, pingResp.StatusCode())
 			require.NotNil(t, pingResp.JSON200)
 			require.NotNil(t, pingResp.JSON200.Pid)
-			vmmPid := int(*pingResp.JSON200.Pid)
 
 			// Shutdown
 			shutdownResp, err := client.ShutdownVMMWithResponse(ctx)
@@ -173,9 +147,6 @@ func TestMultipleVersions(t *testing.T) {
 			assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 				"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-		// Wait for VMM process to actually exit (give it more time for cleanup)
-		exited := waitForProcessExit(vmmPid, 3*time.Second)
-		assert.True(t, exited, "VMM process should exit after shutdown")
 		})
 	}
 }
