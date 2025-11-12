@@ -63,45 +63,50 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) erro
 
 // generateConfigScript creates the shell script that will be sourced by init
 func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) string {
-	var script strings.Builder
-
-	script.WriteString("#!/bin/sh\n")
-	script.WriteString("# Generated config for instance: " + inst.Id + "\n\n")
-
-	// Set entrypoint and cmd as quoted strings
-	// Wrap the entire value in double quotes so it's safe to source
+	// Prepare entrypoint value
+	entrypoint := ""
 	if len(imageInfo.Entrypoint) > 0 {
-		script.WriteString("# Entrypoint from image\n")
-		script.WriteString(fmt.Sprintf("ENTRYPOINT=\"%s\"\n", shellQuoteArray(imageInfo.Entrypoint)))
-	} else {
-		script.WriteString("ENTRYPOINT=\"\"\n")
+		entrypoint = shellQuoteArray(imageInfo.Entrypoint)
 	}
-
+	
+	// Prepare cmd value
+	cmd := ""
 	if len(imageInfo.Cmd) > 0 {
-		script.WriteString("# CMD from image\n")
-		script.WriteString(fmt.Sprintf("CMD=\"%s\"\n", shellQuoteArray(imageInfo.Cmd)))
-	} else {
-		script.WriteString("CMD=\"\"\n")
+		cmd = shellQuoteArray(imageInfo.Cmd)
 	}
-
-	// Set working directory
+	
+	// Prepare workdir value
+	workdir := shellQuote("/")
 	if imageInfo.WorkingDir != "" {
-		script.WriteString(fmt.Sprintf("WORKDIR=%s\n", shellQuote(imageInfo.WorkingDir)))
-	} else {
-		script.WriteString("WORKDIR=\"/\"\n")
+		workdir = shellQuote(imageInfo.WorkingDir)
 	}
-
-	script.WriteString("\n# Environment variables\n")
-
-	// Merge image env and instance env
+	
+	// Build environment variable exports
+	var envLines strings.Builder
 	mergedEnv := mergeEnv(imageInfo.Env, inst.Env)
-
-	// Export all environment variables
 	for key, value := range mergedEnv {
-		script.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
+		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
+	
+	// Generate script as a readable template block
+	script := fmt.Sprintf(`#!/bin/sh
+# Generated config for instance: %s
 
-	return script.String()
+# Container execution parameters
+ENTRYPOINT="%s"
+CMD="%s"
+WORKDIR=%s
+
+# Environment variables
+%s`, 
+		inst.Id,
+		entrypoint,
+		cmd,
+		workdir,
+		envLines.String(),
+	)
+	
+	return script
 }
 
 // mergeEnv merges image environment variables with instance overrides
