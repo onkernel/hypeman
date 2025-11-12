@@ -95,8 +95,8 @@ components:
       properties:
         name:
           type: string
-          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash; no consecutive dashes)
-          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
           maxLength: 63
           example: my-workload-1
         image:

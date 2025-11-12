@@ -77,7 +77,7 @@ type CreateInstanceRequest struct {
 	// Image OCI image reference
 	Image string `json:"image"`
 
-	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash; no consecutive dashes)
+	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
 	Name string `json:"name"`
 
 	// OverlaySize Writable overlay disk size (human-readable format like "10GB", "50G")

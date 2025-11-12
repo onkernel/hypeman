@@ -165,13 +165,13 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 		return fmt.Errorf("name is required")
 	}
 	// Validate name format: lowercase letters, digits, dashes only
-	// No starting/ending with dashes, no consecutive dashes, max 63 characters
+	// No starting/ending with dashes, max 63 characters
 	if len(req.Name) > 63 {
 		return fmt.Errorf("name must be 63 characters or less")
 	}
-	namePattern := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	namePattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	if !namePattern.MatchString(req.Name) {
-		return fmt.Errorf("name must contain only lowercase letters, digits, and dashes; cannot start or end with a dash; cannot have consecutive dashes")
+		return fmt.Errorf("name must contain only lowercase letters, digits, and dashes; cannot start or end with a dash")
 	}
 	if req.Image == "" {
 		return fmt.Errorf("image is required")
