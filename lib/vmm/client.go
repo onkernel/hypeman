@@ -47,6 +47,12 @@ func NewVMM(socketPath string) (*VMM, error) {
 // It extracts the embedded binary if needed and starts the VMM as a daemon.
 // Returns the process ID of the started Cloud Hypervisor process.
 func StartProcess(ctx context.Context, p *paths.Paths, version CHVersion, socketPath string) (int, error) {
+	return StartProcessWithArgs(ctx, p, version, socketPath, nil)
+}
+
+// StartProcessWithArgs starts a Cloud Hypervisor VMM process with additional command-line arguments.
+// This is useful for testing or when you need to pass specific flags like verbosity.
+func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion, socketPath string, extraArgs []string) (int, error) {
 	// Get binary path (extracts if needed)
 	binaryPath, err := GetBinaryPath(p, version)
 	if err != nil {
@@ -62,8 +68,12 @@ func StartProcess(ctx context.Context, p *paths.Paths, version CHVersion, socket
 	// Ignore error - if we can't remove it, CH will fail with clearer error
 	os.Remove(socketPath)
 
+	// Build command arguments
+	args := []string{"--api-socket", socketPath}
+	args = append(args, extraArgs...)
+	
 	// Use Command (not CommandContext) so process survives parent context cancellation
-	cmd := exec.Command(binaryPath, "--api-socket", socketPath)
+	cmd := exec.Command(binaryPath, args...)
 	
 	// Daemonize: detach from parent process group
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -80,6 +90,9 @@ func StartProcess(ctx context.Context, p *paths.Paths, version CHVersion, socket
 	if err != nil {
 		return 0, fmt.Errorf("create stdout log: %w", err)
 	}
+	// Note: These defers close the parent's file descriptors after cmd.Start().
+	// The child process receives duplicated file descriptors during fork/exec,
+	// so it can continue writing to the log files even after we close them here.
 	defer stdoutFile.Close()
 	
 	stderrFile, err := os.OpenFile(
