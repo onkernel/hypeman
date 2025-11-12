@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/onkernel/hypeman/lib/logger"
 )
@@ -20,14 +19,14 @@ func (m *manager) getInstanceLogs(
 	log := logger.FromContext(ctx)
 	log.DebugContext(ctx, "getting instance logs", "id", id, "follow", follow, "tail", tail)
 	
-	// 1. Load instance
-	meta, err := m.loadMetadata(id)
+	// 1. Verify instance exists
+	_, err := m.loadMetadata(id)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
 		return "", err
 	}
 
-	logPath := filepath.Join(meta.DataDir, "logs", "console.log")
+	logPath := m.paths.InstanceConsoleLog(id)
 
 	// 2. Check if log file exists
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {

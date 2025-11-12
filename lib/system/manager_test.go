@@ -4,13 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetDefaultVersions(t *testing.T) {
 	tmpDir := t.TempDir()
-	mgr := NewManager(tmpDir)
+	mgr := NewManager(paths.New(tmpDir))
 
 	kernelVer, initrdVer := mgr.GetDefaultVersions()
 	assert.Equal(t, DefaultKernelVersion, kernelVer)
@@ -19,7 +20,7 @@ func TestGetDefaultVersions(t *testing.T) {
 
 func TestGetPaths(t *testing.T) {
 	tmpDir := t.TempDir()
-	mgr := NewManager(tmpDir)
+	mgr := NewManager(paths.New(tmpDir))
 
 	// Get kernel path
 	kernelPath, err := mgr.GetKernelPath(KernelCH_6_12_8_20250613)
@@ -43,7 +44,7 @@ func TestEnsureSystemFiles(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	ctx := context.Background()
-	mgr := NewManager(tmpDir).(*manager)
+	mgr := NewManager(paths.New(tmpDir)).(*manager)
 
 	// Ensure files
 	err := mgr.EnsureSystemFiles(ctx)

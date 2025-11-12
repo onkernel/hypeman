@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,7 +82,7 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
-	systemMgr := system.NewManager(svc.Config.DataDir)
+	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
 	err = systemMgr.EnsureSystemFiles(ctx())
 	require.NoError(t, err)
 	t.Log("System files ready!")

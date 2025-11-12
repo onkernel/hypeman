@@ -29,12 +29,10 @@ type metadata struct {
 
 // ensureDirectories creates the instance directory structure
 func (m *manager) ensureDirectories(id string) error {
-	instDir := filepath.Join(m.dataDir, "guests", id)
-
 	dirs := []string{
-		instDir,
-		filepath.Join(instDir, "logs"),
-		filepath.Join(instDir, "snapshots"),
+		m.paths.InstanceDir(id),
+		m.paths.InstanceLogs(id),
+		m.paths.InstanceSnapshots(id),
 	}
 
 	for _, dir := range dirs {
@@ -48,7 +46,7 @@ func (m *manager) ensureDirectories(id string) error {
 
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
-	metaPath := filepath.Join(m.dataDir, "guests", id, "metadata.json")
+	metaPath := m.paths.InstanceMetadata(id)
 
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
@@ -68,7 +66,7 @@ func (m *manager) loadMetadata(id string) (*metadata, error) {
 
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
-	metaPath := filepath.Join(m.dataDir, "guests", meta.Id, "metadata.json")
+	metaPath := m.paths.InstanceMetadata(meta.Id)
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -84,7 +82,7 @@ func (m *manager) saveMetadata(meta *metadata) error {
 
 // createOverlayDisk creates a sparse overlay disk for the instance
 func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
-	overlayPath := filepath.Join(m.dataDir, "guests", id, "overlay.raw")
+	overlayPath := m.paths.InstanceOverlay(id)
 
 	// Create sparse file
 	file, err := os.Create(overlayPath)
@@ -110,7 +108,7 @@ func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
 
 // deleteInstanceData removes all instance data from disk
 func (m *manager) deleteInstanceData(id string) error {
-	instDir := filepath.Join(m.dataDir, "guests", id)
+	instDir := m.paths.InstanceDir(id)
 
 	if err := os.RemoveAll(instDir); err != nil {
 		return fmt.Errorf("remove instance directory: %w", err)
@@ -121,7 +119,7 @@ func (m *manager) deleteInstanceData(id string) error {
 
 // listMetadataFiles returns paths to all instance metadata files
 func (m *manager) listMetadataFiles() ([]string, error) {
-	guestsDir := filepath.Join(m.dataDir, "guests")
+	guestsDir := m.paths.GuestsDir()
 
 	// Ensure guests directory exists
 	if err := os.MkdirAll(guestsDir, 0755); err != nil {

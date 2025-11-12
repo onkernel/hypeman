@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ func TestMemoryReduction(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup: create Alpine and nginx images and system files
-	imageManager, err := images.NewManager(tmpDir, 1)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -72,7 +73,7 @@ func TestMemoryReduction(t *testing.T) {
 	t.Log("PHP image ready")
 
 	// Ensure system files
-	systemManager := system.NewManager(tmpDir)
+	systemManager := system.NewManager(paths.New(tmpDir))
 	t.Log("Ensuring system files...")
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)

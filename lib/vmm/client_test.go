@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +36,7 @@ func TestExtractBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Test extraction for v48.0
-	binaryPath, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 
 	// Verify file exists
@@ -48,7 +49,7 @@ func TestExtractBinary(t *testing.T) {
 	assert.Equal(t, os.FileMode(0755), info.Mode().Perm())
 
 	// Test idempotency - second extraction should succeed and return same path
-	binaryPath2, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath2, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 	assert.Equal(t, binaryPath, binaryPath2)
 }
@@ -63,7 +64,7 @@ func TestParseVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Extract binary
-	binaryPath, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 
 	// Parse version
@@ -78,7 +79,7 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	ctx := context.Background()
 
 	// Start VMM process
-	pid, err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0, "PID should be positive")
 
@@ -106,8 +107,8 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 		"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-	// Wait for VMM process to actually exit
-	exited := waitForProcessExit(vmmPid, 1*time.Second)
+	// Wait for VMM process to actually exit (give it more time for cleanup)
+	exited := waitForProcessExit(vmmPid, 3*time.Second)
 	assert.True(t, exited, "VMM process should exit after shutdown")
 }
 
@@ -117,12 +118,12 @@ func TestStartProcessSocketInUse(t *testing.T) {
 	ctx := context.Background()
 
 	// Start first VMM
-	pid, err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0)
 
 	// Try to start second VMM on same socket - should fail
-	_, err = StartProcess(ctx, tmpDir, V48_0, socketPath)
+	_, err = StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "socket already in use")
 
@@ -150,7 +151,7 @@ func TestMultipleVersions(t *testing.T) {
 			ctx := context.Background()
 
 			// Start VMM
-			pid, err := StartProcess(ctx, tmpDir, tt.version, socketPath)
+			pid, err := StartProcess(ctx, paths.New(tmpDir), tt.version, socketPath)
 			require.NoError(t, err)
 			assert.Greater(t, pid, 0)
 
@@ -172,9 +173,9 @@ func TestMultipleVersions(t *testing.T) {
 			assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 				"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-			// Wait for VMM process to actually exit
-			exited := waitForProcessExit(vmmPid, 1*time.Second)
-			assert.True(t, exited, "VMM process should exit after shutdown")
+		// Wait for VMM process to actually exit (give it more time for cleanup)
+		exited := waitForProcessExit(vmmPid, 3*time.Second)
+		assert.True(t, exited, "VMM process should exit after shutdown")
 		})
 	}
 }

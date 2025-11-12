@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
@@ -61,7 +60,7 @@ func (m *manager) standbyInstance(
 	}
 
 	// 6. Create snapshot
-	snapshotDir := filepath.Join(stored.DataDir, "snapshots", "snapshot-latest")
+	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	log.DebugContext(ctx, "creating snapshot", "id", id, "snapshot_dir", snapshotDir)
 	if err := createSnapshot(ctx, client, snapshotDir); err != nil {
 		// Snapshot failed - try to resume VM

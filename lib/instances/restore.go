@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
@@ -44,7 +43,7 @@ func (m *manager) restoreInstance(
 	}
 
 	// 3. Get snapshot directory
-	snapshotDir := filepath.Join(stored.DataDir, "snapshots", "snapshot-latest")
+	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 
 	// 4. Transition: Standby → Paused (start VMM + restore)
 	log.DebugContext(ctx, "restoring from snapshot", "id", id, "snapshot_dir", snapshotDir)
@@ -98,7 +97,7 @@ func (m *manager) restoreFromSnapshot(
 	
 	// Start VMM process and capture PID
 	log.DebugContext(ctx, "starting VMM process for restore", "id", stored.Id, "version", stored.CHVersion)
-	pid, err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath)
+	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}

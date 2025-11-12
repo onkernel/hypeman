@@ -3,7 +3,6 @@ package instances
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -97,8 +96,8 @@ func (m *manager) createInstance(
 		KernelVersion: string(kernelVer),
 		InitrdVersion: string(initrdVer),
 		CHVersion:     vmm.V49_0, // Use latest
-		SocketPath:    filepath.Join(m.dataDir, "guests", id, "ch.sock"),
-		DataDir:       filepath.Join(m.dataDir, "guests", id),
+		SocketPath:    m.paths.InstanceSocket(id),
+		DataDir:       m.paths.InstanceDir(id),
 	}
 
 	// 8. Ensure directories
@@ -192,7 +191,7 @@ func (m *manager) startAndBootVM(
 	
 	// Start VMM process and capture PID
 	log.DebugContext(ctx, "starting VMM process", "id", stored.Id, "version", stored.CHVersion)
-	pid, err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath)
+	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
@@ -288,7 +287,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 
 	// Disk configuration
 	// Get rootfs disk path from image manager
-	rootfsPath, err := images.GetDiskPath(m.dataDir, imageInfo.Name, imageInfo.Digest)
+	rootfsPath, err := images.GetDiskPath(m.paths, imageInfo.Name, imageInfo.Digest)
 	if err != nil {
 		return vmm.VmConfig{}, err
 	}
@@ -301,11 +300,11 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		},
 		// Overlay disk (writable)
 		{
-			Path: ptr(filepath.Join(inst.DataDir, "overlay.raw")),
+			Path: ptr(m.paths.InstanceOverlay(inst.Id)),
 		},
 		// Config disk (read-only)
 		{
-			Path:     ptr(filepath.Join(inst.DataDir, "config.ext4")),
+			Path:     ptr(m.paths.InstanceConfigDisk(inst.Id)),
 			Readonly: ptr(true),
 		},
 	}
@@ -313,7 +312,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 	// Serial console configuration
 	serial := vmm.ConsoleConfig{
 		Mode: vmm.ConsoleConfigMode("File"),
-		File: ptr(filepath.Join(inst.DataDir, "logs", "console.log")),
+		File: ptr(m.paths.InstanceConsoleLog(inst.Id)),
 	}
 
 	// Console off (we use serial)

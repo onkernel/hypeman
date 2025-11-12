@@ -3,7 +3,8 @@ package system
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 // Manager handles system files (kernel, initrd)
@@ -22,13 +23,13 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir string
+	paths *paths.Paths
 }
 
 // NewManager creates a new system manager
-func NewManager(dataDir string) Manager {
+func NewManager(p *paths.Paths) Manager {
 	return &manager{
-		dataDir: dataDir,
+		paths: p,
 	}
 }
 
@@ -52,14 +53,14 @@ func (m *manager) EnsureSystemFiles(ctx context.Context) error {
 // GetKernelPath returns the path to a kernel version
 func (m *manager) GetKernelPath(version KernelVersion) (string, error) {
 	arch := GetArch()
-	path := filepath.Join(m.dataDir, "system", "kernel", string(version), arch, "vmlinux")
+	path := m.paths.SystemKernel(string(version), arch)
 	return path, nil
 }
 
 // GetInitrdPath returns the path to an initrd version
 func (m *manager) GetInitrdPath(version InitrdVersion) (string, error) {
 	arch := GetArch()
-	path := filepath.Join(m.dataDir, "system", "initrd", string(version), arch, "initrd")
+	path := m.paths.SystemInitrd(string(version), arch)
 	return path, nil
 }
 

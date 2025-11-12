@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"syscall"
 	"testing"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
@@ -21,15 +21,16 @@ func newTestService(t *testing.T) *ApiService {
 		DataDir: t.TempDir(),
 	}
 
-	imageMgr, err := images.NewManager(cfg.DataDir, 1)
+	p := paths.New(cfg.DataDir)
+	imageMgr, err := images.NewManager(p, 1)
 	if err != nil {
 		t.Fatalf("failed to create image manager: %v", err)
 	}
 
-	systemMgr := system.NewManager(cfg.DataDir)
+	systemMgr := system.NewManager(p)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB for tests
-	instanceMgr := instances.NewManager(cfg.DataDir, imageMgr, systemMgr, maxOverlaySize)
-	volumeMgr := volumes.NewManager(cfg.DataDir)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, maxOverlaySize)
+	volumeMgr := volumes.NewManager(p)
 
 	// Register cleanup for orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -46,7 +47,8 @@ func newTestService(t *testing.T) *ApiService {
 
 // cleanupOrphanedProcesses kills Cloud Hypervisor processes from metadata files
 func cleanupOrphanedProcesses(t *testing.T, dataDir string) {
-	guestsDir := filepath.Join(dataDir, "guests")
+	p := paths.New(dataDir)
+	guestsDir := p.GuestsDir()
 	
 	entries, err := os.ReadDir(guestsDir)
 	if err != nil {
@@ -58,7 +60,7 @@ func cleanupOrphanedProcesses(t *testing.T, dataDir string) {
 			continue
 		}
 		
-		metaPath := filepath.Join(guestsDir, entry.Name(), "metadata.json")
+		metaPath := p.InstanceMetadata(entry.Name())
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			continue

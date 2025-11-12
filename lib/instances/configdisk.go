@@ -50,7 +50,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) erro
 
 	// Create ext4 disk with config files
 	// Use ext4 for now (can switch to erofs when kernel supports it)
-	diskPath := filepath.Join(m.dataDir, "guests", inst.Id, "config.ext4")
+	diskPath := m.paths.InstanceConfigDisk(inst.Id)
 	
 	// Calculate size (config files are tiny, use 1MB minimum)
 	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)

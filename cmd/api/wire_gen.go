@@ -29,16 +29,17 @@ func initializeApp() (*application, func(), error) {
 	logger := providers.ProvideLogger()
 	context := providers.ProvideContext(logger)
 	config := providers.ProvideConfig()
-	manager, err := providers.ProvideImageManager(config)
+	paths := providers.ProvidePaths(config)
+	manager, err := providers.ProvideImageManager(paths, config)
 	if err != nil {
 		return nil, nil, err
 	}
-	systemManager := providers.ProvideSystemManager(config)
-	instancesManager, err := providers.ProvideInstanceManager(config, manager, systemManager)
+	systemManager := providers.ProvideSystemManager(paths)
+	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager)
 	if err != nil {
 		return nil, nil, err
 	}
-	volumesManager := providers.ProvideVolumeManager(config)
+	volumesManager := providers.ProvideVolumeManager(paths)
 	apiService := api.New(config, manager, instancesManager, volumesManager)
 	mainApplication := &application{
 		Ctx:             context,

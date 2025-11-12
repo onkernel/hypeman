@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/stretchr/testify/assert"
@@ -20,12 +22,12 @@ import (
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 	
-	imageManager, err := images.NewManager(tmpDir, 1)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
 	require.NoError(t, err)
 	
-	systemManager := system.NewManager(tmpDir)
+	systemManager := system.NewManager(paths.New(tmpDir))
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
+	mgr := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -115,7 +117,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	ctx := context.Background()
 
 	// Get the image manager from the manager (we need it for image operations)
-	imageManager, err := images.NewManager(tmpDir, 1)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
 	require.NoError(t, err)
 
 	// Pull nginx image (runs a daemon, won't exit)
@@ -143,7 +145,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	t.Log("Nginx image ready")
 
 	// Ensure system files
-	systemManager := system.NewManager(tmpDir)
+	systemManager := system.NewManager(paths.New(tmpDir))
 	t.Log("Ensuring system files (downloads kernel ~70MB and builds initrd ~1MB)...")
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
@@ -178,11 +180,11 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.NotEmpty(t, inst.InitrdVersion)
 
 	// Verify directories exist
-	instDir := filepath.Join(tmpDir, "guests", inst.Id)
-	assert.DirExists(t, instDir)
-	assert.FileExists(t, filepath.Join(instDir, "metadata.json"))
-	assert.FileExists(t, filepath.Join(instDir, "overlay.raw"))
-	assert.FileExists(t, filepath.Join(instDir, "config.ext4"))
+	p := paths.New(tmpDir)
+	assert.DirExists(t, p.InstanceDir(inst.Id))
+	assert.FileExists(t, p.InstanceMetadata(inst.Id))
+	assert.FileExists(t, p.InstanceOverlay(inst.Id))
+	assert.FileExists(t, p.InstanceConfigDisk(inst.Id))
 
 	// Wait for VM to be fully running
 	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
@@ -200,14 +202,24 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.Len(t, instances, 1)
 	assert.Equal(t, inst.Id, instances[0].Id)
 
-	// Get logs (should have boot output and nginx start)
-	// Get more lines to see full nginx startup
-	logs, err := manager.GetInstanceLogs(ctx, inst.Id, false, 100)
-	require.NoError(t, err)
+	// Poll for logs to contain nginx startup message
+	var logs string
+	foundNginxStartup := false
+	for i := 0; i < 50; i++ { // Poll for up to 5 seconds (50 * 100ms)
+		logs, err = manager.GetInstanceLogs(ctx, inst.Id, false, 100)
+		require.NoError(t, err)
+		
+		if strings.Contains(logs, "start worker processes") {
+			foundNginxStartup = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	
 	t.Logf("Instance logs (last 100 lines):\n%s", logs)
 	
 	// Verify nginx started successfully
-	assert.Contains(t, logs, "start worker processes", "Nginx should have started worker processes")
+	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
 
 	// Delete instance
 	t.Log("Deleting instance...")
@@ -215,7 +227,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify cleanup
-	assert.NoDirExists(t, instDir)
+	assert.NoDirExists(t, p.InstanceDir(inst.Id))
 
 	// Verify instance no longer exists
 	_, err = manager.GetInstance(ctx, inst.Id)
@@ -228,10 +240,10 @@ func TestStorageOperations(t *testing.T) {
 	// Test storage layer without starting VMs
 	tmpDir := t.TempDir()
 
-	imageManager, _ := images.NewManager(tmpDir, 1)
-	systemManager := system.NewManager(tmpDir)
+	imageManager, _ := images.NewManager(paths.New(tmpDir), 1)
+	systemManager := system.NewManager(paths.New(tmpDir))
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
+	manager := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -250,7 +262,7 @@ func TestStorageOperations(t *testing.T) {
 		CreatedAt:   time.Now(),
 		CHVersion:   vmm.V49_0,
 		SocketPath:  "/tmp/test.sock",
-		DataDir:     filepath.Join(tmpDir, "guests", "test-123"),
+		DataDir:     paths.New(tmpDir).InstanceDir("test-123"),
 	}
 
 	// Ensure directories
@@ -293,7 +305,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	ctx := context.Background()
 
 	// Create image manager for pulling nginx
-	imageManager, err := images.NewManager(tmpDir, 1)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
 	require.NoError(t, err)
 
 	// Pull nginx image (reuse if already pulled in previous test)
@@ -319,7 +331,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
 
 	// Ensure system files
-	systemManager := system.NewManager(tmpDir)
+	systemManager := system.NewManager(paths.New(tmpDir))
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
 
@@ -353,7 +365,8 @@ func TestStandbyAndRestore(t *testing.T) {
 	t.Log("Instance in standby")
 
 	// Verify snapshot exists
-	snapshotDir := filepath.Join(tmpDir, "guests", inst.Id, "snapshots", "snapshot-latest")
+	p := paths.New(tmpDir)
+	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
 	assert.DirExists(t, snapshotDir)
 	assert.FileExists(t, filepath.Join(snapshotDir, "memory-ranges"))
 	// Cloud Hypervisor creates various snapshot files, just verify directory exists

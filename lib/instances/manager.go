@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 )
 
@@ -22,7 +23,7 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir        string
+	paths          *paths.Paths
 	imageManager   images.Manager
 	systemManager  system.Manager
 	maxOverlaySize int64    // Maximum overlay disk size in bytes
@@ -30,9 +31,9 @@ type manager struct {
 }
 
 // NewManager creates a new instances manager
-func NewManager(dataDir string, imageManager images.Manager, systemManager system.Manager, maxOverlaySize int64) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, maxOverlaySize int64) Manager {
 	return &manager{
-		dataDir:        dataDir,
+		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		maxOverlaySize: maxOverlaySize,

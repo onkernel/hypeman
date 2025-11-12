@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 // VMM wraps the generated Cloud Hypervisor client (API v0.3.0)
@@ -44,9 +46,9 @@ func NewVMM(socketPath string) (*VMM, error) {
 // StartProcess starts a Cloud Hypervisor VMM process with the given version
 // It extracts the embedded binary if needed and starts the VMM as a daemon.
 // Returns the process ID of the started Cloud Hypervisor process.
-func StartProcess(ctx context.Context, dataDir string, version CHVersion, socketPath string) (int, error) {
+func StartProcess(ctx context.Context, p *paths.Paths, version CHVersion, socketPath string) (int, error) {
 	// Get binary path (extracts if needed)
-	binaryPath, err := GetBinaryPath(dataDir, version)
+	binaryPath, err := GetBinaryPath(p, version)
 	if err != nil {
 		return 0, fmt.Errorf("get binary: %w", err)
 	}

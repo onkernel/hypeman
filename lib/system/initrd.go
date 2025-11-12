@@ -27,7 +27,7 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 	}
 
 	// Create a temporary OCI client (reuses image manager's cache)
-	cacheDir := filepath.Join(m.dataDir, "system", "oci-cache")
+	cacheDir := m.paths.SystemOCICache()
 	ociClient, err := images.NewOCIClient(cacheDir)
 	if err != nil {
 		return fmt.Errorf("create oci client: %w", err)
@@ -52,7 +52,7 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 	}
 
 	// Package as cpio.gz (initramfs format)
-	outputPath := filepath.Join(m.dataDir, "system", "initrd", string(version), arch, "initrd")
+	outputPath := m.paths.SystemInitrd(string(version), arch)
 	if _, err := images.ExportRootfs(rootfsDir, outputPath, images.FormatCpio); err != nil {
 		return fmt.Errorf("export initrd: %w", err)
 	}
@@ -64,7 +64,7 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 func (m *manager) ensureInitrd(ctx context.Context, version InitrdVersion) (string, error) {
 	arch := GetArch()
 
-	initrdPath := filepath.Join(m.dataDir, "system", "initrd", string(version), arch, "initrd")
+	initrdPath := m.paths.SystemInitrd(string(version), arch)
 
 	// Check if already exists
 	if _, err := os.Stat(initrdPath); err == nil {

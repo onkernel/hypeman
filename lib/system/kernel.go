@@ -15,7 +15,7 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 		return fmt.Errorf("unsupported kernel version/arch: %s/%s", version, arch)
 	}
 
-	destPath := filepath.Join(m.dataDir, "system", "kernel", string(version), arch, "vmlinux")
+	destPath := m.paths.SystemKernel(string(version), arch)
 
 	// Create parent directory
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
@@ -64,7 +64,7 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 func (m *manager) ensureKernel(version KernelVersion) (string, error) {
 	arch := GetArch()
 
-	kernelPath := filepath.Join(m.dataDir, "system", "kernel", string(version), arch, "vmlinux")
+	kernelPath := m.paths.SystemKernel(string(version), arch)
 
 	// Check if already exists
 	if _, err := os.Stat(kernelPath); err == nil {
