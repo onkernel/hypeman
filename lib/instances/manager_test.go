@@ -163,7 +163,6 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create instance with real nginx image (stays running)
-	noNetwork := ""
 	req := CreateInstanceRequest{
 		Name:        "test-nginx",
 		Image:       "docker.io/library/nginx:alpine",
@@ -171,7 +170,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 		HotplugSize: 512 * 1024 * 1024,      // 512MB
 		OverlaySize: 10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:       1,
-		Network:     &noNetwork, // No network for tests
+		NetworkEnabled: false, // No network for tests
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
 		},
@@ -359,7 +358,6 @@ func TestStandbyAndRestore(t *testing.T) {
 
 	// Create instance
 	t.Log("Creating instance...")
-	noNetwork := ""
 	req := CreateInstanceRequest{
 		Name:        "test-standby",
 		Image:       "docker.io/library/nginx:alpine",
@@ -367,7 +365,7 @@ func TestStandbyAndRestore(t *testing.T) {
 		HotplugSize: 512 * 1024 * 1024,
 		OverlaySize: 10 * 1024 * 1024 * 1024,
 		Vcpus:       1,
-		Network:     &noNetwork, // No network for tests
+		NetworkEnabled: false, // No network for tests
 		Env:         map[string]string{},
 	}
 

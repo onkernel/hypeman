@@ -36,16 +36,9 @@ type NetworkConfig struct {
 }
 
 // AllocateRequest is the request to allocate network for an instance
+// Always allocates from the default network
 type AllocateRequest struct {
 	InstanceID   string
 	InstanceName string
-	Network      string // "default", "internal", or "" for no network
-}
-
-// CreateNetworkRequest is the request to create a new network
-type CreateNetworkRequest struct {
-	Name     string // Required, lowercase alphanumeric with dashes
-	Subnet   string // Required, CIDR notation (e.g., "192.168.101.0/24")
-	Isolated bool   // Optional, defaults to true
 }
 

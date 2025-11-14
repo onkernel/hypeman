@@ -79,10 +79,10 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Determine network (default to "default" unless specified)
-	networkName := "default"
-	if req.Network != nil {
-		networkName = *req.Network // Use specified (can be "" for no network)
+	// 6. Determine network based on NetworkEnabled flag
+	networkName := ""
+	if req.NetworkEnabled {
+		networkName = "default"
 	}
 
 	// 7. Get default system versions
@@ -90,23 +90,23 @@ func (m *manager) createInstance(
 
 	// 8. Create instance metadata
 	stored := &StoredMetadata{
-		Id:            id,
-		Name:          req.Name,
-		Image:         req.Image,
-		Size:          size,
-		HotplugSize:   hotplugSize,
-		OverlaySize:   overlaySize,
-		Vcpus:         vcpus,
-		Env:           req.Env,
-		Network:       networkName,
-		CreatedAt:     time.Now(),
-		StartedAt:     nil,
-		StoppedAt:     nil,
-		KernelVersion: string(kernelVer),
-		InitrdVersion: string(initrdVer),
-		CHVersion:     vmm.V49_0, // Use latest
-		SocketPath:    m.paths.InstanceSocket(id),
-		DataDir:       m.paths.InstanceDir(id),
+		Id:             id,
+		Name:           req.Name,
+		Image:          req.Image,
+		Size:           size,
+		HotplugSize:    hotplugSize,
+		OverlaySize:    overlaySize,
+		Vcpus:          vcpus,
+		Env:            req.Env,
+		NetworkEnabled: req.NetworkEnabled,
+		CreatedAt:      time.Now(),
+		StartedAt:      nil,
+		StoppedAt:      nil,
+		KernelVersion:  string(kernelVer),
+		InitrdVersion:  string(initrdVer),
+		CHVersion:      vmm.V49_0, // Use latest
+		SocketPath:     m.paths.InstanceSocket(id),
+		DataDir:        m.paths.InstanceDir(id),
 	}
 
 	// 8. Ensure directories
@@ -124,14 +124,13 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 10. Allocate network (if network specified)
+	// 10. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "id", id, "network", networkName)
 		netConfig, err = m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
 			InstanceID:   id,
 			InstanceName: req.Name,
-			Network:      networkName,
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "id", id, "network", networkName, "error", err)
@@ -146,7 +145,8 @@ func (m *manager) createInstance(
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "id", id, "error", err)
 		// Cleanup network allocation
-		// TODO @sjmiller609 review: what does it mean to release the network and is this handled automatically in case of unexpected scenarios like power loss?
+		// Network cleanup: TAP devices and DNS entries are removed when ReleaseNetwork is called.
+		// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
 		if networkName != "" {
 			m.networkManager.ReleaseNetwork(ctx, id)
 		}

@@ -1,6 +1,10 @@
 # Network Manager
 
-Manages virtual networks for instances using Linux bridges, TAP devices, and dnsmasq for DNS.
+Manages the default virtual network for instances using a Linux bridge, TAP devices, and dnsmasq for DNS.
+
+## Overview
+
+Hypeman provides a single default network that all instances can optionally connect to. There is no support for multiple custom networks - instances either have networking enabled (connected to the default network) or disabled (no network connectivity).
 
 ## Design Decisions
 
@@ -22,13 +26,13 @@ Manages virtual networks for instances using Linux bridges, TAP devices, and dns
 **Metadata storage:**
 ```
 /var/lib/hypeman/guests/{instance-id}/
-  metadata.json        # Contains: network field ("default", "internal", or "")
+  metadata.json        # Contains: network_enabled field (bool)
   snapshots/
     snapshot-latest/
       vm.json          # Cloud Hypervisor's config with IP/MAC/TAP
 ```
 
-### Hybrid Network Model (Option 3)
+### Hybrid Network Model
 
 **Standby → Restore: Network Fixed**
 - TAP device deleted on standby (VMM shutdown)
@@ -37,9 +41,9 @@ Manages virtual networks for instances using Linux bridges, TAP devices, and dns
 - DNS entries unchanged
 - Fast resume path
 
-**Shutdown → Boot: Network Changeable**
+**Shutdown → Boot: Network Reconfigurable**
 - TAP device deleted, DNS unregistered
-- Can boot with different network
+- Can boot with different network settings (enabled/disabled)
 - Allows upgrades, migrations, reconfiguration
 - Full recreate path
 
@@ -47,53 +51,47 @@ Manages virtual networks for instances using Linux bridges, TAP devices, and dns
 
 - Auto-created on first `Initialize()` call
 - Configured from environment variables (BRIDGE_NAME, SUBNET_CIDR, SUBNET_GATEWAY)
-- Cannot be deleted (returns error)
-- Named "default"
-- Always uses bridge_slave isolated mode
+- Named "default" (only network in the system)
+- Always uses bridge_slave isolated mode for VM-to-VM isolation
 
-### Name Uniqueness Per Network
+### Name Uniqueness
 
-Instance names must be unique within each network:
+Instance names must be globally unique:
 - Prevents DNS collisions
-- Scoped per network (can have "my-app" in both "default" and "internal")
 - Enforced at allocation time by checking all running/standby instances
+- Simpler than per-network scoping
 
 ### DNS Resolution
 
 **Naming convention:**
 ```
-{instance-name}.{network}.hypeman  → IP
-{instance-id}.{network}.hypeman    → IP
+{instance-name}.default.hypeman  → IP
+{instance-id}.default.hypeman    → IP
 ```
 
 **Examples:**
 ```
 my-app.default.hypeman          → 192.168.100.10
-instance-xyz.default.hypeman    → 192.168.100.10
-worker.internal.hypeman         → 192.168.101.10
+tz4a98xxat96iws9zmbrgj3a.default.hypeman → 192.168.100.10
 ```
 
-**Single dnsmasq instance:**
-- Listens on all bridge gateway IPs
-- Serves all networks (no DNS isolation)
+**dnsmasq configuration:**
+- Listens on default bridge gateway IP (typically 192.168.100.1)
 - Forwards unknown queries to 1.1.1.1
 - Reloads with SIGHUP signal when allocations change
-
-**Why no DNS isolation:**
-- Instance proxy needs cross-network resolution
-- Network isolation (bridge_slave) prevents actual VM-VM traffic
-- Simpler implementation
-- Can add DNS filtering later if needed
+- Hosts file regenerated from scanning guest directories
 
 ### Dependencies
 
 **Go libraries:**
 - `github.com/vishvananda/netlink` - Bridge/TAP operations (standard, used by Docker/K8s)
 
-**Shell commands (justified):**
-- `dnsmasq` - No Go library exists for DNS forwarder
+**Shell commands:**
+- `dnsmasq` - DNS forwarder (no viable Go library alternative)
 - `iptables` - Complex rule manipulation not well-supported in netlink
 - `ip link set X type bridge_slave isolated on` - Netlink library doesn't expose this flag
+
+**Why dnsmasq:** Lightweight, battle-tested, simple configuration. Alternatives like coredns would add complexity without significant benefit for a single-network setup.
 
 ### Permissions
 
@@ -111,12 +109,12 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 ```
 /var/lib/hypeman/
   network/
-    dnsmasq.conf      # Generated config (listen addresses, upstreams)
+    dnsmasq.conf      # Generated config (listen address, upstream DNS)
     dnsmasq.hosts     # Generated from scanning guest dirs
     dnsmasq.pid       # Process PID
   guests/
     {instance-id}/
-      metadata.json   # Contains: network field
+      metadata.json   # Contains: network_enabled field (bool)
       snapshots/
         snapshot-latest/
           vm.json     # Contains: IP/MAC/TAP (source of truth)
@@ -125,21 +123,21 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 ## Network Operations
 
 ### Initialize
-- Create default network bridge (vmbr0)
+- Create default network bridge (vmbr0 or configured name)
 - Assign gateway IP
 - Setup iptables NAT and forwarding
 - Start dnsmasq
 
 ### AllocateNetwork
-1. Validate network exists
-2. Check name uniqueness in network
-3. Allocate next available IP (starting from .10)
-4. Generate MAC (02:00:00:... format)
-5. Generate TAP name (tap-{first8chars})
+1. Get default network details
+2. Check name uniqueness globally
+3. Allocate next available IP (starting from .2, after gateway at .1)
+4. Generate MAC (02:00:00:... format - locally administered)
+5. Generate TAP name (tap-{first8chars-of-instance-id})
 6. Create TAP device and attach to bridge
 7. Reload DNS
 
-### RecreateNetwork (for restore)
+### RecreateNetwork (for restore from standby)
 1. Derive allocation from snapshot vm.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
@@ -149,30 +147,28 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 2. Delete TAP device
 3. Reload DNS (removes entries)
 
+Note: In case of unexpected scenarios like power loss, straggler TAP devices may persist until manual cleanup or host reboot.
+
 ## IP Allocation Strategy
 
-- Start from .10 (reserve .1-.9 for infrastructure)
+- Gateway at .1 (first IP in subnet)
+- Instance IPs start from .2
 - Sequential allocation through subnet
 - Scan existing allocations to find next free IP
-- Skip broadcast address (.255)
-
-## Bridge Naming
-
-- Default: vmbr0
-- Custom networks: vmbr1, vmbr2, etc. (auto-assigned sequentially)
-- Within Linux interface name limits
+- Skip network address and broadcast address
 
 ## Security
 
 **Bridge_slave isolated mode:**
 - Prevents layer-2 VM-to-VM communication
-- VMs can only communicate with gateway (for internet)
-- Instance proxy can route traffic between VMs if needed
+- VMs can only communicate with gateway (for internet access)
+- Instance proxy could route traffic between VMs if needed in the future
 
 **iptables rules:**
 - NAT for outbound connections
 - Stateful firewall (only allow ESTABLISHED,RELATED inbound)
 - Default DENY for forwarding
+- Rules added on Initialize, per-subnet basis
 
 ## Testing
 
@@ -205,17 +201,9 @@ Network integration tests use per-test unique configuration for safe parallel ex
 
 Cleanup happens automatically via `t.Cleanup()`, which runs even on test failure or panic.
 
-**If tests are killed (Ctrl+C)**, stale resources may remain. Manual cleanup:
-
-```bash
-./scripts/cleanup-test-networks.sh
-```
-
-This removes all test bridges (matching `t[0-9a-f]{3}`) and TAP devices (matching `tap-*`).
-
 ### Unit Tests vs Integration Tests
 
-- **Unit tests** (TestGenerateMAC, TestValidateNetworkName, etc.): Run without permissions, test logic only
+- **Unit tests** (TestGenerateMAC, etc.): Run without permissions, test logic only
 - **Integration tests** (TestInitializeIntegration, TestAllocateNetworkIntegration, etc.): Require permissions, create real devices
 
 All tests run via `make test` - no separate commands needed.

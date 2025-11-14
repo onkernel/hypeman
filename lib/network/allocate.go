@@ -10,53 +10,49 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 )
 
-// AllocateNetwork allocates IP/MAC/TAP for instance
+// AllocateNetwork allocates IP/MAC/TAP for instance on the default network
 func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
 	log := logger.FromContext(ctx)
 
-	// 1. If no network requested, return nil (no network)
-	if req.Network == "" {
-		return nil, nil
-	}
-
-	// 2. Validate network exists
-	network, err := m.GetNetwork(ctx, req.Network)
+	// 1. Get default network
+	network, err := m.getDefaultNetwork(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get default network: %w", err)
 	}
 
-	// 3. Check name uniqueness in network
-	exists, err := m.NameExistsInNetwork(ctx, req.InstanceName, req.Network)
+	// 2. Check name uniqueness
+	exists, err := m.NameExists(ctx, req.InstanceName)
 	if err != nil {
 		return nil, fmt.Errorf("check name exists: %w", err)
 	}
 	if exists {
-		return nil, fmt.Errorf("%w: instance name '%s' already exists in network '%s'",
-			ErrNameExists, req.InstanceName, req.Network)
+		return nil, fmt.Errorf("%w: instance name '%s' already exists",
+			ErrNameExists, req.InstanceName)
 	}
 
-	// 4. Allocate next available IP
-	// TODO @sjmiller609 review: does random IP decrease probability of conflict in case of moving standby VMs across hosts?
-	ip, err := m.allocateNextIP(ctx, req.Network, network.Subnet)
+	// 3. Allocate next available IP
+	// Note: Random IP selection could help reduce conflicts when moving standby VMs across hosts,
+	// but sequential allocation is simpler and more predictable for debugging.
+	ip, err := m.allocateNextIP(ctx, network.Subnet)
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
-	// 5. Generate MAC (02:00:00:... format - locally administered)
+	// 4. Generate MAC (02:00:00:... format - locally administered)
 	mac, err := generateMAC()
 	if err != nil {
 		return nil, fmt.Errorf("generate MAC: %w", err)
 	}
 
-	// 6. Generate TAP name (tap-{first8chars-of-id})
+	// 5. Generate TAP name (tap-{first8chars-of-id})
 	tap := generateTAPName(req.InstanceID)
 
-	// 7. Create TAP device
+	// 6. Create TAP device
 	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated); err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 
-	// 8. Register DNS
+	// 7. Register DNS
 	if err := m.reloadDNS(ctx); err != nil {
 		// Cleanup TAP on DNS failure
 		m.deleteTAPDevice(tap)
@@ -66,16 +62,16 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
 		"instance_name", req.InstanceName,
-		"network", req.Network,
+		"network", "default",
 		"ip", ip,
 		"mac", mac,
 		"tap", tap)
 
-	// 9. Calculate netmask from subnet
+	// 8. Calculate netmask from subnet
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
-	// 10. Return config (will be used in CH VmConfig)
+	// 9. Return config (will be used in CH VmConfig)
 	return &NetworkConfig{
 		IP:        ip,
 		MAC:       mac,
@@ -100,10 +96,10 @@ func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error 
 		return nil
 	}
 
-	// 2. Get network details
-	network, err := m.GetNetwork(ctx, alloc.Network)
+	// 2. Get default network details
+	network, err := m.getDefaultNetwork(ctx)
 	if err != nil {
-		return fmt.Errorf("get network: %w", err)
+		return fmt.Errorf("get default network: %w", err)
 	}
 
 	// 3. Recreate TAP device with same name
@@ -113,13 +109,16 @@ func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error 
 
 	log.InfoContext(ctx, "recreated network for restore",
 		"instance_id", instanceID,
-		"network", alloc.Network,
+		"network", "default",
 		"tap", alloc.TAPDevice)
 
 	return nil
 }
 
 // ReleaseNetwork cleans up network allocation (shutdown/delete)
+// Note: TAP devices are automatically cleaned up when the VMM process exits.
+// However, in case of unexpected scenarios like host power loss, straggler TAP devices
+// may remain until the host is rebooted or manually cleaned up.
 func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 	log := logger.FromContext(ctx)
 
@@ -131,7 +130,6 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 	}
 
 	// 2. Delete TAP device (best effort)
-	// TODO @sjmiller609 review: possibility / how to address straggler TAP devices, e.g. host power loss what happens
 	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	}
@@ -143,21 +141,21 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 
 	log.InfoContext(ctx, "released network",
 		"instance_id", instanceID,
-		"network", alloc.Network,
+		"network", "default",
 		"ip", alloc.IP)
 
 	return nil
 }
 
 // allocateNextIP finds the next available IP in the subnet
-func (m *manager) allocateNextIP(ctx context.Context, networkName, subnet string) (string, error) {
+func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, error) {
 	// Parse subnet
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("parse subnet: %w", err)
 	}
 
-	// Get all currently allocated IPs in this network
+	// Get all currently allocated IPs
 	allocations, err := m.ListAllocations(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list allocations: %w", err)
@@ -165,9 +163,7 @@ func (m *manager) allocateNextIP(ctx context.Context, networkName, subnet string
 
 	usedIPs := make(map[string]bool)
 	for _, alloc := range allocations {
-		if alloc.Network == networkName {
-			usedIPs[alloc.IP] = true
-		}
+		usedIPs[alloc.IP] = true
 	}
 
 	// Reserve network address and gateway (.0 and .1 relative to network)

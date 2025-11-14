@@ -62,15 +62,14 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Create instance with default network
 	t.Log("Creating instance with default network...")
-	networkDefault := "default"
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:        "test-net-instance",
-		Image:       "docker.io/library/alpine:latest",
-		Size:        512 * 1024 * 1024,
-		HotplugSize: 512 * 1024 * 1024,
-		OverlaySize: 5 * 1024 * 1024 * 1024,
-		Vcpus:       1,
-		Network:     &networkDefault, // Use default network
+		Name:           "test-net-instance",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           512 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    5 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true, // Enable default network
 		Env: map[string]string{
 			"CMD": "sleep 300",
 		},
@@ -106,7 +105,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Logf("TAP device verified: %s", alloc.TAPDevice)
 
 	// Verify TAP attached to bridge
-	defaultNet, err := manager.networkManager.GetNetwork(ctx, "default")
+	defaultNet, err := manager.networkManager.getDefaultNetwork(ctx)
 	require.NoError(t, err)
 	bridge, err := netlink.LinkByName(defaultNet.Bridge)
 	require.NoError(t, err)
@@ -118,15 +117,11 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify TAP deleted after instance cleanup
-	// Wait a moment for async cleanup to complete
-	time.Sleep(500 * time.Millisecond)
 	t.Log("Verifying TAP deleted after cleanup...")
 	_, err = netlink.LinkByName(alloc.TAPDevice)
-	if err == nil {
-		t.Logf("Note: TAP device still exists after cleanup - will be cleaned up by test cleanup")
-		// This is acceptable - cleanup might be async or TAP reused
-		// TODO @sjmiller609 review: no it shoudln't be here and we shouldn't arbitrary sleep above also delete instance should have the instance fully deleted and cleaned up before returning
-	}
+	// TAP device should be deleted by DeleteInstance before it returns
+	// If it still exists, that's a bug in the cleanup logic
+	assert.Error(t, err, "TAP device should be deleted after instance cleanup")
 
 
 	t.Log("Network integration test complete!")

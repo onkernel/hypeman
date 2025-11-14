@@ -13,23 +13,23 @@ import (
 
 // instanceMetadata is the minimal metadata we need to derive allocations
 type instanceMetadata struct {
-	Name    string `json:"name"`
-	Network string `json:"network"`
+	Name           string `json:"name"`
+	NetworkEnabled bool   `json:"network_enabled"`
 }
 
 // deriveAllocation derives network allocation from CH or snapshot
 func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*Allocation, error) {
 	log := logger.FromContext(ctx)
 
-	// 1. Load instance metadata to get network name and instance name
+	// 1. Load instance metadata to get instance name and network status
 	meta, err := m.loadInstanceMetadata(instanceID)
 	if err != nil {
 		log.DebugContext(ctx, "failed to load instance metadata", "instance_id", instanceID, "error", err)
 		return nil, err
 	}
 
-	// 2. If no network configured, return nil
-	if meta.Network == "" {
+	// 2. If network not enabled, return nil
+	if !meta.NetworkEnabled {
 		return nil, nil
 	}
 
@@ -47,7 +47,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 					return &Allocation{
 						InstanceID:   instanceID,
 						InstanceName: meta.Name,
-						Network:      meta.Network,
+						Network:      "default",
 						IP:           *net.Ip,
 						MAC:          *net.Mac,
 						TAPDevice:    *net.Tap,
@@ -69,7 +69,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 				return &Allocation{
 					InstanceID:   instanceID,
 					InstanceName: meta.Name,
-					Network:      meta.Network,
+					Network:      "default",
 					IP:           *nets[0].Ip,
 					MAC:          *nets[0].Mac,
 					TAPDevice:    *nets[0].Tap,
@@ -111,15 +111,15 @@ func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
 	return allocations, nil
 }
 
-// NameExistsInNetwork checks if instance name is already used in network
-func (m *manager) NameExistsInNetwork(ctx context.Context, name, network string) (bool, error) {
+// NameExists checks if instance name is already used in the default network
+func (m *manager) NameExists(ctx context.Context, name string) (bool, error) {
 	allocations, err := m.ListAllocations(ctx)
 	if err != nil {
 		return false, err
 	}
 
 	for _, alloc := range allocations {
-		if alloc.InstanceName == name && alloc.Network == network {
+		if alloc.InstanceName == name {
 			return true, nil
 		}
 	}

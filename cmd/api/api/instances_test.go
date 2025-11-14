@@ -93,7 +93,7 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 	overlaySize := "5GB"
 
 	t.Log("Creating instance with human-readable sizes...")
-	noNetwork := ""
+	networkEnabled := false
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:        "test-sizes",
@@ -101,7 +101,11 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 			Size:        &size,
 			HotplugSize: &hotplugSize,
 			OverlaySize: &overlaySize,
-			Network:     &noNetwork, // No network for tests
+			Network: &struct {
+				Enabled *bool `json:"enabled,omitempty"`
+			}{
+				Enabled: &networkEnabled,
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -134,14 +138,18 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 
 	// Test with invalid size format
 	invalidSize := "not-a-size"
-	noNetwork := ""
+	networkDisabled := false
 
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
-			Name:    "test-invalid",
-			Image:   "docker.io/library/alpine:latest",
-			Size:    &invalidSize,
-			Network: &noNetwork, // No network for tests
+			Name:  "test-invalid",
+			Image: "docker.io/library/alpine:latest",
+			Size:  &invalidSize,
+			Network: &struct {
+				Enabled *bool `json:"enabled,omitempty"`
+			}{
+				Enabled: &networkDisabled,
+			},
 		},
 	})
 	require.NoError(t, err)

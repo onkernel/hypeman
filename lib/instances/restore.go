@@ -45,9 +45,9 @@ func (m *manager) restoreInstance(
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 
-	// 4. Recreate TAP device if network configured
-	if stored.Network != "" {
-		log.DebugContext(ctx, "recreating network for restore", "id", id, "network", stored.Network)
+	// 4. Recreate TAP device if network enabled
+	if stored.NetworkEnabled {
+		log.DebugContext(ctx, "recreating network for restore", "id", id, "network", "default")
 		if err := m.networkManager.RecreateNetwork(ctx, id); err != nil {
 			log.ErrorContext(ctx, "failed to recreate network", "id", id, "error", err)
 			return nil, fmt.Errorf("recreate network: %w", err)
@@ -59,7 +59,10 @@ func (m *manager) restoreInstance(
 	if err := m.restoreFromSnapshot(ctx, stored, snapshotDir); err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "id", id, "error", err)
 		// Cleanup network on failure
-		if stored.Network != "" {
+		// Note: Network cleanup is explicitly called on failure paths to ensure TAP devices
+		// and DNS entries are removed. In production, stale TAP devices from unexpected
+		// failures (e.g., power loss) would require manual cleanup or host reboot.
+		if stored.NetworkEnabled {
 			m.networkManager.ReleaseNetwork(ctx, id)
 		}
 		return nil, err
@@ -70,8 +73,7 @@ func (m *manager) restoreInstance(
 	if err != nil {
 		log.ErrorContext(ctx, "failed to create VMM client", "id", id, "error", err)
 		// Cleanup network on failure
-		// TODO @sjmiller609 review: seeing lots of places where we clean up the network, but what does this mean, why not automatically do it if instance is disappeared?
-		if stored.Network != "" {
+		if stored.NetworkEnabled {
 			m.networkManager.ReleaseNetwork(ctx, id)
 		}
 		return nil, fmt.Errorf("create vmm client: %w", err)
@@ -83,7 +85,7 @@ func (m *manager) restoreInstance(
 	if err != nil || resumeResp.StatusCode() != 204 {
 		log.ErrorContext(ctx, "failed to resume VM", "id", id, "error", err)
 		// Cleanup network on failure
-		if stored.Network != "" {
+		if stored.NetworkEnabled {
 			m.networkManager.ReleaseNetwork(ctx, id)
 		}
 		return nil, fmt.Errorf("resume vm failed: %w", err)
