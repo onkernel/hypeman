@@ -132,11 +132,15 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.Error(t, err, "TAP device should be deleted during standby")
 	t.Log("TAP device cleaned up as expected")
 
-	// Verify network allocation is no longer active
-	t.Log("Verifying network allocation released during standby...")
-	_, err = manager.networkManager.GetAllocation(ctx, inst.Id)
-	require.Error(t, err, "Network allocation should not exist during standby")
-	t.Log("Network allocation released as expected")
+	// Verify network allocation metadata still exists (derived from snapshot)
+	// Note: Standby VMs derive allocation from snapshot's vm.json, even though TAP is deleted
+	t.Log("Verifying network allocation metadata preserved in snapshot...")
+	allocStandby, err := manager.networkManager.GetAllocation(ctx, inst.Id)
+	require.NoError(t, err, "Network allocation should still be derivable from snapshot")
+	assert.Equal(t, alloc.IP, allocStandby.IP, "IP should be preserved in snapshot")
+	assert.Equal(t, alloc.MAC, allocStandby.MAC, "MAC should be preserved in snapshot")
+	assert.Equal(t, alloc.TAPDevice, allocStandby.TAPDevice, "TAP name should be preserved in snapshot")
+	t.Log("Network allocation metadata preserved in snapshot")
 
 	// Restore instance
 	t.Log("Restoring instance from standby...")

@@ -129,9 +129,10 @@ func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error 
 // ReleaseNetwork cleans up network allocation (shutdown/delete)
 // Takes the allocation directly since it should be retrieved before the VMM is killed.
 // If alloc is nil, this is a no-op (network not allocated or already released).
-// Note: TAP devices are automatically cleaned up when the VMM process exits.
-// However, in case of unexpected scenarios like host power loss, straggler TAP devices
-// may remain until the host is rebooted or manually cleaned up.
+// Note: TAP devices created with explicit Owner/Group fields do NOT auto-delete when
+// the process closes the file descriptor. They persist in the kernel and must be
+// explicitly deleted via this function. In case of unexpected scenarios like host
+// power loss, straggler TAP devices may remain until the host is rebooted or manually cleaned up.
 func (m *manager) ReleaseNetwork(ctx context.Context, alloc *Allocation) error {
 	log := logger.FromContext(ctx)
 
