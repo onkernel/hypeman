@@ -63,7 +63,8 @@ func (m *manager) restoreInstance(
 		// and DNS entries are removed. In production, stale TAP devices from unexpected
 		// failures (e.g., power loss) would require manual cleanup or host reboot.
 		if stored.NetworkEnabled {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		return nil, err
 	}
@@ -74,7 +75,8 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to create VMM client", "id", id, "error", err)
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
@@ -86,7 +88,8 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "id", id, "error", err)
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}

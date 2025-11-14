@@ -28,7 +28,17 @@ func (m *manager) deleteInstance(
 	inst := m.toInstance(ctx, meta)
 	log.DebugContext(ctx, "loaded instance", "id", id, "state", inst.State)
 
-	// 2. If VMM might be running, force kill it
+	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
+	var networkAlloc *network.Allocation
+	if inst.NetworkEnabled {
+		log.DebugContext(ctx, "getting network allocation", "id", id)
+		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
+		if err != nil {
+			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "id", id, "error", err)
+		}
+	}
+
+	// 3. If VMM might be running, force kill it
 	if inst.State.RequiresVMM() {
 		log.DebugContext(ctx, "stopping VMM", "id", id, "state", inst.State)
 		if err := m.killVMM(ctx, &inst); err != nil {
@@ -38,16 +48,16 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 3. Release network allocation
+	// 4. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
-		if err := m.networkManager.ReleaseNetwork(ctx, id); err != nil {
+		if err := m.networkManager.ReleaseNetwork(ctx, networkAlloc); err != nil {
 			// Log error but continue with cleanup
 			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "id", id, "error", err)
 		}
 	}
 
-	// 4. Delete all instance data
+	// 5. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "id", id, "error", err)
@@ -76,7 +86,7 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			syscall.Kill(pid, syscall.SIGKILL)
 			
 			// Wait for process to die (SIGKILL is guaranteed, usually instant)
-			if !WaitForProcessExit(pid, 1*time.Second) {
+			if !WaitForProcessExit(pid, 2*time.Second) {
 				log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
 			} else {
 				log.DebugContext(ctx, "VMM process killed successfully", "id", inst.Id, "pid", pid)

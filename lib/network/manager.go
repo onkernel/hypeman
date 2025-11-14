@@ -19,7 +19,7 @@ type Manager interface {
 	// Instance network operations (called by instance manager)
 	AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
 	RecreateNetwork(ctx context.Context, instanceID string) error
-	ReleaseNetwork(ctx context.Context, instanceID string) error
+	ReleaseNetwork(ctx context.Context, alloc *Allocation) error
 
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)

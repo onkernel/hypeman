@@ -136,20 +136,20 @@ func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error 
 }
 
 // ReleaseNetwork cleans up network allocation (shutdown/delete)
+// Takes the allocation directly since it should be retrieved before the VMM is killed.
+// If alloc is nil, this is a no-op (network not allocated or already released).
 // Note: TAP devices are automatically cleaned up when the VMM process exits.
 // However, in case of unexpected scenarios like host power loss, straggler TAP devices
 // may remain until the host is rebooted or manually cleaned up.
-func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
+func (m *manager) ReleaseNetwork(ctx context.Context, alloc *Allocation) error {
 	log := logger.FromContext(ctx)
 
-	// 1. Derive current allocation
-	alloc, err := m.deriveAllocation(ctx, instanceID)
-	if err != nil || alloc == nil {
-		// No network or already released
+	// If no allocation provided, nothing to clean up
+	if alloc == nil {
 		return nil
 	}
 
-	// 2. Delete TAP device (best effort)
+	// 1. Delete TAP device (best effort)
 	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	}
@@ -158,14 +158,14 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 3. Reload DNS (removes entries)
+	// 2. Reload DNS (removes entries)
 	if err := m.reloadDNS(ctx); err != nil {
 		log.WarnContext(ctx, "failed to reload DNS", "error", err)
 	}
 
 	log.InfoContext(ctx, "released network",
-		"instance_id", instanceID,
-		"network", "default",
+		"instance_id", alloc.InstanceID,
+		"network", alloc.Network,
 		"ip", alloc.IP)
 
 	return nil

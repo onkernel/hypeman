@@ -148,7 +148,8 @@ func (m *manager) createInstance(
 		// Network cleanup: TAP devices and DNS entries are removed when ReleaseNetwork is called.
 		// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
 		if networkName != "" {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
@@ -161,7 +162,8 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
 		// Cleanup network allocation
 		if networkName != "" {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
@@ -173,7 +175,8 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
 		// Cleanup network allocation
 		if networkName != "" {
-			m.networkManager.ReleaseNetwork(ctx, id)
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
 		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
