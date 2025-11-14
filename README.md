@@ -45,14 +45,16 @@ sudo sysctl -p
 The hypeman binary needs network administration capabilities to create bridges and TAP devices:
 ```bash
 # After building, grant network capabilities
-sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
+sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 
 # For development builds
-sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' ./bin/hypeman
+sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' ./bin/hypeman
 
 # Verify capabilities
 getcap ./bin/hypeman
 ```
+
+**Note:** The `i` (inheritable) flag allows child processes spawned by hypeman (like `ip` and `iptables` commands) to inherit capabilities via the ambient capability set.
 
 **Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 

@@ -109,7 +109,7 @@ test: ensure-ch-binaries
 	@echo "Granting capabilities to test binaries..."
 	@for test in $(BIN_DIR)/tests/*.test; do \
 		if [ -f "$$test" ]; then \
-			sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' $$test 2>/dev/null || true; \
+			sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' $$test 2>/dev/null || true; \
 		fi; \
 	done
 	@echo "Running tests as current user with capabilities..."

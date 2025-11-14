@@ -22,6 +22,7 @@ require (
 	github.com/u-root/u-root v0.15.0
 	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/sync v0.17.0
+	golang.org/x/sys v0.37.0
 )
 
 require (
@@ -65,7 +66,6 @@ require (
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

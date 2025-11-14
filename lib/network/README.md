@@ -96,10 +96,17 @@ Network operations require `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE` capabiliti
 
 **Installation requirement:**
 ```bash
-sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
+sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 ```
 
-**Why:** Simplest approach, narrowly scoped permissions (not full root), standard practice for network services.
+**Capability flags explained:**
+- `e` = effective (capabilities are active)
+- `i` = inheritable (can be passed to child processes)
+- `p` = permitted (capabilities are available)
+
+**Why:** 
+- Narrowly scoped permissions (not full root), standard practice for network services
+- The `i` flag allows child processes (like `ip` and `iptables` commands) to inherit `CAP_NET_ADMIN` via ambient capabilities, avoiding the need to grant system-wide capabilities to `/usr/bin/ip` or `/usr/sbin/iptables`
 
 ## Filesystem Layout
 

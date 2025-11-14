@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // createBridge creates a bridge interface using netlink
@@ -90,10 +92,16 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 	// Add MASQUERADE rule if not exists
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
+	checkCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
 	if err := checkCmd.Run(); err != nil {
 		// Rule doesn't exist, add it
 		addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
+		addCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
 		if err := addCmd.Run(); err != nil {
 			return fmt.Errorf("add masquerade rule: %w", err)
 		}
@@ -104,11 +112,17 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		"-i", bridgeName, "-o", uplink,
 		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
 		"-j", "ACCEPT")
+	checkForwardOut.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
 	if err := checkForwardOut.Run(); err != nil {
 		addForwardOut := exec.Command("iptables", "-A", "FORWARD",
 			"-i", bridgeName, "-o", uplink,
 			"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
 			"-j", "ACCEPT")
+		addForwardOut.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
 		if err := addForwardOut.Run(); err != nil {
 			return fmt.Errorf("add forward outbound rule: %w", err)
 		}
@@ -119,11 +133,17 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		"-i", uplink, "-o", bridgeName,
 		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
 		"-j", "ACCEPT")
+	checkForwardIn.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
 	if err := checkForwardIn.Run(); err != nil {
 		addForwardIn := exec.Command("iptables", "-A", "FORWARD",
 			"-i", uplink, "-o", bridgeName,
 			"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
 			"-j", "ACCEPT")
+		addForwardIn.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
 		if err := addForwardIn.Run(); err != nil {
 			return fmt.Errorf("add forward inbound rule: %w", err)
 		}
@@ -180,16 +200,18 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) err
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
-	// 5. Set isolation mode (best effort - requires kernel support)
+	// 5. Set isolation mode (requires kernel support and capabilities)
 	if isolated {
 		// Use shell command for bridge_slave isolated flag
 		// netlink library doesn't expose this flag yet
 		cmd := exec.Command("ip", "link", "set", tapName, "type", "bridge_slave", "isolated", "on")
-		if err := cmd.Run(); err != nil {
-			// TODO @sjmiller609 review: why not fail here? seems like this is not actually from kernel support issue
-			// Isolation may fail if kernel doesn't support it or insufficient permissions
-			// This is a security feature but not critical for basic connectivity
-			// Continue without failing
+		// Enable ambient capabilities so child process inherits CAP_NET_ADMIN
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
 		}
 	}
 
