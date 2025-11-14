@@ -105,9 +105,8 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Logf("TAP device verified: %s", alloc.TAPDevice)
 
 	// Verify TAP attached to bridge
-	defaultNet, err := manager.networkManager.getDefaultNetwork(ctx)
-	require.NoError(t, err)
-	bridge, err := netlink.LinkByName(defaultNet.Bridge)
+	// Test setup uses "vmbr0" as the bridge name
+	bridge, err := netlink.LinkByName("vmbr0")
 	require.NoError(t, err)
 	assert.Equal(t, bridge.Attrs().Index, tap.Attrs().MasterIndex, "TAP should be attached to bridge")
 

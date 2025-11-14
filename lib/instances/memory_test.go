@@ -83,7 +83,6 @@ func TestMemoryReduction(t *testing.T) {
 
 		// Create instance with idle container
 		// Note: create.go automatically expands memory to Size + HotplugSize
-		noNetwork := ""
 		inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 			Name:        "test-memory-fast",
 			Image:       "docker.io/library/alpine:latest",
@@ -91,7 +90,7 @@ func TestMemoryReduction(t *testing.T) {
 			HotplugSize: 512 * 1024 * 1024,      // 512MB hotplug capacity (auto-expanded at boot)
 			OverlaySize: 5 * 1024 * 1024 * 1024, // 5GB overlay
 			Vcpus:       1,
-			Network:     &noNetwork, // No network for tests
+			NetworkEnabled: false, // No network for tests
 			Env: map[string]string{
 				// Idle container - minimal memory usage
 				"CMD": "sleep infinity",
@@ -146,7 +145,6 @@ func TestMemoryReduction(t *testing.T) {
 	t.Run("investigate_memory_metrics", func(t *testing.T) {
 		t.Log("Investigating what memory metrics actually report...")
 
-		noNetwork := ""
 		inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 			Name:        "test-memory-metrics",
 			Image:       "docker.io/library/php:cli-alpine",
@@ -154,7 +152,7 @@ func TestMemoryReduction(t *testing.T) {
 			HotplugSize: 512 * 1024 * 1024,       // 512MB hotplug
 			OverlaySize: 5 * 1024 * 1024 * 1024,
 			Vcpus:       1,
-			Network:     &noNetwork, // No network for tests
+			NetworkEnabled: false, // No network for tests
 			Env: map[string]string{
 				"CMD": `php -d memory_limit=-1 -r '$a = str_repeat("A", 300*1024*1024); for($i=0; $i<300; $i++) { $a[$i*1024*1024]="X"; } echo "Allocated 300MB\n"; for($i=0;$i<20;$i++) { sleep(1); echo "Still alive $i\n"; }'`,
 			},
@@ -255,7 +253,6 @@ func TestMemoryReduction(t *testing.T) {
 		// - 512MB hotplug
 		// - Request reduction to 128MB
 		// - Assert final > 128MB
-		noNetwork := ""
 		inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 			Name:        "test-memory-php",
 			Image:       "docker.io/library/php:cli-alpine",
@@ -263,7 +260,7 @@ func TestMemoryReduction(t *testing.T) {
 			HotplugSize: 512 * 1024 * 1024,       // 512MB hotplug (REQUIRED)
 			OverlaySize: 5 * 1024 * 1024 * 1024,
 			Vcpus:       1,
-			Network:     &noNetwork, // No network for tests
+			NetworkEnabled: false, // No network for tests
 			Env: map[string]string{
 				// PHP allocates 300MB, touches pages, and continuously reports it's alive
 				"CMD": `php -d memory_limit=-1 -r '$a = str_repeat("A", 300*1024*1024); for($i=0; $i<300; $i++) { $a[$i*1024*1024]="X"; } echo "Allocated 300MB\n"; for($i=0;$i<20;$i++) { sleep(1); echo "Still alive $i\n"; }'`,

@@ -19,6 +19,13 @@ func init() {
 
 // AllocateNetwork allocates IP/MAC/TAP for instance on the default network
 func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
+	// Acquire lock to prevent concurrent allocations from:
+	// 1. Picking the same IP address
+	// 2. Creating duplicate instance names
+	// 3. Conflicting DNS updates
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	log := logger.FromContext(ctx)
 
 	// 1. Get default network
@@ -33,8 +40,8 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 		return nil, fmt.Errorf("check name exists: %w", err)
 	}
 	if exists {
-		return nil, fmt.Errorf("%w: instance name '%s' already exists",
-			ErrNameExists, req.InstanceName)
+		return nil, fmt.Errorf("%w: instance name '%s' already exists, can't assign into same network: %s",
+			ErrNameExists, req.InstanceName, network.Name)
 	}
 
 	// 3. Allocate random available IP
@@ -91,6 +98,11 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 }
 
 // RecreateNetwork recreates TAP for restore from standby
+// Note: No lock needed - this operation:
+// 1. Doesn't allocate new IPs (reuses existing from snapshot)
+// 2. Doesn't modify DNS (entries remain from before standby)
+// 3. Is already protected by instance-level locking
+// 4. Uses deterministic TAP names that can't conflict
 func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error {
 	log := logger.FromContext(ctx)
 
@@ -141,6 +153,10 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	}
+
+	// Acquire lock to prevent concurrent DNS updates
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// 3. Reload DNS (removes entries)
 	if err := m.reloadDNS(ctx); err != nil {

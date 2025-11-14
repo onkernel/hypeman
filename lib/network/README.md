@@ -163,6 +163,24 @@ Note: In case of unexpected scenarios like power loss, straggler TAP devices may
 - Skip network address, gateway, and broadcast address
 - RNG seeded with timestamp for uniqueness across runs
 
+## Concurrency & Locking
+
+The network manager uses a single mutex to protect allocation operations:
+
+### Locked Operations
+- **AllocateNetwork**: Prevents concurrent IP allocation and DNS conflicts
+- **ReleaseNetwork**: Prevents concurrent DNS updates
+
+### Unlocked Operations  
+- **RecreateNetwork**: Safe without lock - protected by instance-level locking, doesn't allocate IPs or modify DNS
+- **Read operations** (GetAllocation, ListAllocations, NameExists): No lock needed - eventual consistency is acceptable
+
+### Why This Works
+- Write operations are serialized to prevent race conditions
+- Read operations can run concurrently for better performance
+- Internal calls (e.g., AllocateNetwork → ListAllocations) work because reads don't lock
+- Instance manager already provides per-instance locking for state transitions
+
 ## Security
 
 **Bridge_slave isolated mode:**

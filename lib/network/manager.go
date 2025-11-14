@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
@@ -30,6 +31,7 @@ type Manager interface {
 type manager struct {
 	paths  *paths.Paths
 	config *config.Config
+	mu     sync.Mutex // Protects network allocation operations (IP allocation, DNS updates)
 }
 
 // NewManager creates a new network manager
