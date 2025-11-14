@@ -20,7 +20,7 @@ Hypeman provides a single default network that all instances can optionally conn
 
 **Sources of truth:**
 - **Running VMs**: Query `GetVmInfo()` from Cloud Hypervisor - returns IP/MAC/TAP
-- **Standby VMs**: Read `guests/{id}/snapshots/snapshot-latest/vm.json` from snapshot
+- **Standby VMs**: Read `guests/{id}/snapshots/snapshot-latest/config.json` from snapshot
 - **Stopped VMs**: No network allocation
 
 **Metadata storage:**
@@ -29,14 +29,14 @@ Hypeman provides a single default network that all instances can optionally conn
   metadata.json        # Contains: network_enabled field (bool)
   snapshots/
     snapshot-latest/
-      vm.json          # Cloud Hypervisor's config with IP/MAC/TAP
+      config.json      # Cloud Hypervisor's config with IP/MAC/TAP
 ```
 
 ### Hybrid Network Model
 
 **Standby → Restore: Network Fixed**
 - TAP device deleted on standby (VMM shutdown)
-- Snapshot `vm.json` preserves IP/MAC/TAP names
+- Snapshot `config.json` preserves IP/MAC/TAP names
 - Restore recreates TAP with same name
 - DNS entries unchanged
 - Fast resume path
@@ -118,7 +118,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
       metadata.json   # Contains: network_enabled field (bool)
       snapshots/
         snapshot-latest/
-          vm.json     # Contains: IP/MAC/TAP (source of truth)
+          config.json # Contains: IP/MAC/TAP (source of truth)
 ```
 
 ## Network Operations
@@ -137,7 +137,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 6. Create TAP device and attach to bridge
 
 ### RecreateNetwork (for restore from standby)
-1. Derive allocation from snapshot vm.json
+1. Derive allocation from snapshot config.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
 

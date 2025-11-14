@@ -133,10 +133,11 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("TAP device cleaned up as expected")
 
 	// Verify network allocation metadata still exists (derived from snapshot)
-	// Note: Standby VMs derive allocation from snapshot's vm.json, even though TAP is deleted
+	// Note: Standby VMs derive allocation from snapshot's config.json, even though TAP is deleted
 	t.Log("Verifying network allocation metadata preserved in snapshot...")
 	allocStandby, err := manager.networkManager.GetAllocation(ctx, inst.Id)
 	require.NoError(t, err, "Network allocation should still be derivable from snapshot")
+	require.NotNil(t, allocStandby, "Allocation should not be nil")
 	assert.Equal(t, alloc.IP, allocStandby.IP, "IP should be preserved in snapshot")
 	assert.Equal(t, alloc.MAC, allocStandby.MAC, "MAC should be preserved in snapshot")
 	assert.Equal(t, alloc.TAPDevice, allocStandby.TAPDevice, "TAP name should be preserved in snapshot")

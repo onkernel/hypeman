@@ -142,6 +142,12 @@ func (p *Paths) InstanceSnapshotLatest(id string) string {
 	return filepath.Join(p.InstanceSnapshots(id), "snapshot-latest")
 }
 
+// InstanceSnapshotConfig returns the path to the snapshot config.json file.
+// Cloud Hypervisor creates config.json in the snapshot directory.
+func (p *Paths) InstanceSnapshotConfig(id string) string {
+	return filepath.Join(p.InstanceSnapshotLatest(id), "config.json")
+}
+
 // GuestsDir returns the root guests directory.
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")

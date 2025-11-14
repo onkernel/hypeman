@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/vmm"
@@ -76,9 +75,10 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 	}
 
 	// 5. Try to derive from snapshot
-	snapshotVmJson := filepath.Join(m.paths.InstanceSnapshotLatest(instanceID), "vm.json")
-	if fileExists(snapshotVmJson) {
-		vmConfig, err := m.parseVmJson(snapshotVmJson)
+	// Cloud Hypervisor creates config.json in the snapshot directory
+	snapshotConfigJson := m.paths.InstanceSnapshotConfig(instanceID)
+	if fileExists(snapshotConfigJson) {
+		vmConfig, err := m.parseVmJson(snapshotConfigJson)
 		if err == nil && vmConfig.Net != nil && len(*vmConfig.Net) > 0 {
 			nets := *vmConfig.Net
 			if nets[0].Ip != nil && nets[0].Mac != nil && nets[0].Tap != nil {
@@ -162,16 +162,17 @@ func (m *manager) loadInstanceMetadata(instanceID string) (*instanceMetadata, er
 	return &meta, nil
 }
 
-// parseVmJson parses Cloud Hypervisor's vm.json from snapshot
+// parseVmJson parses Cloud Hypervisor's config.json from snapshot
+// Note: Despite the function name, this parses config.json (what CH actually creates)
 func (m *manager) parseVmJson(path string) (*vmm.VmConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read vm.json: %w", err)
+		return nil, fmt.Errorf("read config.json: %w", err)
 	}
 
 	var vmConfig vmm.VmConfig
 	if err := json.Unmarshal(data, &vmConfig); err != nil {
-		return nil, fmt.Errorf("unmarshal vm.json: %w", err)
+		return nil, fmt.Errorf("unmarshal config.json: %w", err)
 	}
 
 	return &vmConfig, nil
