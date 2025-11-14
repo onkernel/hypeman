@@ -4,11 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mathrand "math/rand"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
 )
+
+func init() {
+	// Seed RNG with current timestamp for unique random IPs each run
+	mathrand.Seed(time.Now().UnixNano())
+}
 
 // AllocateNetwork allocates IP/MAC/TAP for instance on the default network
 func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
@@ -30,9 +37,10 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 			ErrNameExists, req.InstanceName)
 	}
 
-	// 3. Allocate next available IP
-	// Note: Random IP selection could help reduce conflicts when moving standby VMs across hosts,
-	// but sequential allocation is simpler and more predictable for debugging.
+	// 3. Allocate random available IP
+	// Random selection reduces predictability and helps distribute IPs across the subnet.
+	// This is especially useful for large /16 networks and reduces conflicts when
+	// moving standby VMs across hosts.
 	ip, err := m.allocateNextIP(ctx, network.Subnet)
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
@@ -147,7 +155,8 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// allocateNextIP finds the next available IP in the subnet
+// allocateNextIP picks a random available IP in the subnet
+// Retries up to 5 times if conflicts occur
 func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, error) {
 	// Parse subnet
 	_, ipNet, err := net.ParseCIDR(subnet)
@@ -161,37 +170,56 @@ func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, er
 		return "", fmt.Errorf("list allocations: %w", err)
 	}
 
+	// Build set of used IPs
 	usedIPs := make(map[string]bool)
 	for _, alloc := range allocations {
 		usedIPs[alloc.IP] = true
 	}
 
-	// Reserve network address and gateway (.0 and .1 relative to network)
-	usedIPs[ipNet.IP.String()] = true                    // Network address
-	usedIPs[incrementIP(ipNet.IP, 1).String()] = true    // Gateway (network + 1)
+	// Reserve network address and gateway
+	usedIPs[ipNet.IP.String()] = true                 // Network address
+	usedIPs[incrementIP(ipNet.IP, 1).String()] = true // Gateway (network + 1)
 
-	// Iterate through subnet to find free IP
-	// Start from network address + 2 (skip network and gateway)
+	// Calculate broadcast address
+	broadcast := make(net.IP, 4)
+	for i := 0; i < 4; i++ {
+		broadcast[i] = ipNet.IP[i] | ^ipNet.Mask[i]
+	}
+	usedIPs[broadcast.String()] = true // Broadcast address
+
+	// Calculate subnet size (number of possible IPs)
+	ones, bits := ipNet.Mask.Size()
+	subnetSize := 1 << (bits - ones) // 2^(32-prefix_length)
+
+	// Try up to 5 times to find a random available IP
+	maxRetries := 5
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Generate random offset from network address (skip network and gateway)
+		// Start from offset 2 to avoid network address (0) and gateway (1)
+		randomOffset := mathrand.Intn(subnetSize-3) + 2
+
+		// Calculate the random IP
+		randomIP := incrementIP(ipNet.IP, randomOffset)
+
+		// Check if IP is valid and available
+		if ipNet.Contains(randomIP) {
+			ipStr := randomIP.String()
+			if !usedIPs[ipStr] {
+				return ipStr, nil
+			}
+		}
+	}
+
+	// If random allocation failed after 5 attempts, fall back to sequential search
+	// This handles the case where the subnet is nearly full
 	for testIP := incrementIP(ipNet.IP, 2); ipNet.Contains(testIP); testIP = incrementIP(testIP, 1) {
 		ipStr := testIP.String()
-
-		// Calculate broadcast address (last IP in subnet)
-		broadcast := make(net.IP, 4)
-		for i := 0; i < 4; i++ {
-			broadcast[i] = ipNet.IP[i] | ^ipNet.Mask[i]
-		}
-		
-		// Skip broadcast address
-		if testIP.Equal(broadcast) {
-			continue
-		}
-
 		if !usedIPs[ipStr] {
 			return ipStr, nil
 		}
 	}
 
-	return "", fmt.Errorf("no available IPs in subnet %s", subnet)
+	return "", fmt.Errorf("no available IPs in subnet %s after %d random attempts and full scan", subnet, maxRetries)
 }
 
 // incrementIP increments IP address by n

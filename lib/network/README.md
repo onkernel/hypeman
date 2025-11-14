@@ -153,9 +153,15 @@ Note: In case of unexpected scenarios like power loss, straggler TAP devices may
 
 - Gateway at .1 (first IP in subnet)
 - Instance IPs start from .2
-- Sequential allocation through subnet
-- Scan existing allocations to find next free IP
-- Skip network address and broadcast address
+- **Random allocation** with up to 5 retry attempts
+  - Picks random IP in usable range
+  - Checks for conflicts
+  - Retries if conflict found
+  - Falls back to sequential scan if all random attempts fail
+- Helps distribute IPs across large subnets (especially /16)
+- Reduces conflicts when moving standby VMs across hosts
+- Skip network address, gateway, and broadcast address
+- RNG seeded with timestamp for uniqueness across runs
 
 ## Security
 
