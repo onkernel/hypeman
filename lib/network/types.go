@@ -5,8 +5,8 @@ import "time"
 // Network represents a virtual network for instances
 type Network struct {
 	Name      string    // "default", "internal"
-	Subnet    string    // "192.168.100.0/24"
-	Gateway   string    // "192.168.100.1"
+	Subnet    string    // "192.168.0.0/16"
+	Gateway   string    // "192.168.0.1"
 	Bridge    string    // "vmbr0" (derived from kernel)
 	Isolated  bool      // Bridge_slave isolation mode
 	DNSDomain string    // "hypeman"
@@ -22,6 +22,8 @@ type Allocation struct {
 	IP           string
 	MAC          string
 	TAPDevice    string
+	Gateway      string // Gateway IP for this network
+	Netmask      string // Netmask in dotted decimal notation
 	State        string // "running", "standby" (derived from CH or snapshot)
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,34 +92,16 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) 
 	// Build network configuration section
 	networkSection := ""
 	if inst.NetworkEnabled {
-		// Get allocation from network manager
+		// Get allocation from network manager (includes all network config)
 		alloc, err := m.networkManager.GetAllocation(context.Background(), inst.Id)
 		if err == nil && alloc != nil {
-			// Derive gateway and netmask from allocation IP
-			gateway := "192.168.100.1" // Fallback
-			netmask := "255.255.255.0"  // Fallback
-			
-			// Try to derive from allocation IP (more reliable than hardcoded)
-			if alloc.IP != "" {
-				ip := net.ParseIP(alloc.IP)
-				if ip != nil {
-					// Assume /24 network, gateway is .1 in same subnet
-					ipBytes := ip.To4()
-					if ipBytes != nil {
-						gateway = fmt.Sprintf("%d.%d.%d.1", ipBytes[0], ipBytes[1], ipBytes[2])
-						// Standard /24 netmask
-						netmask = "255.255.255.0"
-					}
-				}
-			}
-
 			networkSection = fmt.Sprintf(`
 # Network configuration
 GUEST_IP="%s"
 GUEST_MASK="%s"
 GUEST_GW="%s"
 GUEST_DNS="%s"
-`, alloc.IP, netmask, gateway, gateway)
+`, alloc.IP, alloc.Netmask, alloc.Gateway, alloc.Gateway)
 		}
 	}
 	

@@ -71,12 +71,12 @@ Instance names must be globally unique:
 
 **Examples:**
 ```
-my-app.default.hypeman          → 192.168.100.10
-tz4a98xxat96iws9zmbrgj3a.default.hypeman → 192.168.100.10
+my-app.default.hypeman          → 192.168.0.10
+tz4a98xxat96iws9zmbrgj3a.default.hypeman → 192.168.0.10
 ```
 
 **dnsmasq configuration:**
-- Listens on default bridge gateway IP (typically 192.168.100.1)
+- Listens on default bridge gateway IP (default: 192.168.0.1)
 - Forwards unknown queries to 1.1.1.1
 - Reloads with SIGHUP signal when allocations change
 - Hosts file regenerated from scanning guest directories

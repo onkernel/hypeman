@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 
@@ -33,7 +34,20 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 		return nil, nil
 	}
 
-	// 3. Try to derive from running VM first
+	// 3. Get default network configuration for Gateway and Netmask
+	defaultNet, err := m.getDefaultNetwork(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get default network: %w", err)
+	}
+
+	// Calculate netmask from subnet
+	_, ipNet, err := net.ParseCIDR(defaultNet.Subnet)
+	netmask := "255.255.255.0" // Fallback
+	if err == nil {
+		netmask = fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+	}
+
+	// 4. Try to derive from running VM first
 	socketPath := m.paths.InstanceSocket(instanceID)
 	if fileExists(socketPath) {
 		client, err := vmm.NewVMM(socketPath)
@@ -51,6 +65,8 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 						IP:           *net.Ip,
 						MAC:          *net.Mac,
 						TAPDevice:    *net.Tap,
+						Gateway:      defaultNet.Gateway,
+						Netmask:      netmask,
 						State:        "running",
 					}, nil
 				}
@@ -58,7 +74,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 		}
 	}
 
-	// 4. Try to derive from snapshot
+	// 5. Try to derive from snapshot
 	snapshotVmJson := filepath.Join(m.paths.InstanceSnapshotLatest(instanceID), "vm.json")
 	if fileExists(snapshotVmJson) {
 		vmConfig, err := m.parseVmJson(snapshotVmJson)
@@ -73,13 +89,15 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 					IP:           *nets[0].Ip,
 					MAC:          *nets[0].Mac,
 					TAPDevice:    *nets[0].Tap,
+					Gateway:      defaultNet.Gateway,
+					Netmask:      netmask,
 					State:        "standby",
 				}, nil
 			}
 		}
 	}
 
-	// 5. No allocation (stopped or network not yet configured)
+	// 6. No allocation (stopped or network not yet configured)
 	return nil, nil
 }
 
