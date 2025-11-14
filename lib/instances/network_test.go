@@ -124,15 +124,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	// Verify TAP deleted after instance cleanup
 	t.Log("Verifying TAP deleted after cleanup...")
 	_, err = netlink.LinkByName(alloc.TAPDevice)
-	// TAP device may or may not be deleted depending on whether VMM exited cleanly.
-	// Best-effort cleanup means straggler TAPs can remain (expected behavior for unclean shutdown).
-	// This is acceptable - TAPs will be cleaned up on host reboot or manual cleanup.
-	if err == nil {
-		t.Logf("TAP device still exists (acceptable for unclean VMM shutdown): %s", alloc.TAPDevice)
-	} else {
-		t.Logf("TAP device successfully deleted: %s", alloc.TAPDevice)
-	}
-
+	require.Error(t, err, "TAP device should be deleted")
 
 	t.Log("Network integration test complete!")
 }

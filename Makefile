@@ -97,6 +97,8 @@ dev: $(AIR)
 
 # Run tests
 # Compile test binaries and grant network capabilities (runs as user, not root)
+# Usage: make test                              - runs all tests
+#        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
 test: ensure-ch-binaries
 	@echo "Building test binaries..."
 	@mkdir -p $(BIN_DIR)/tests
@@ -111,13 +113,25 @@ test: ensure-ch-binaries
 		fi; \
 	done
 	@echo "Running tests as current user with capabilities..."
-	@for test in $(BIN_DIR)/tests/*.test; do \
-		if [ -f "$$test" ]; then \
-			echo ""; \
-			echo "Running $$(basename $$test)..."; \
-			$$test -test.v -test.parallel=10 -test.timeout=60s || exit 1; \
-		fi; \
-	done
+	@if [ -n "$(TEST)" ]; then \
+		echo "Running specific test: $(TEST)"; \
+		for test in $(BIN_DIR)/tests/*.test; do \
+			if [ -f "$$test" ]; then \
+				echo ""; \
+				echo "Checking $$(basename $$test) for $(TEST)..."; \
+				$$test -test.run=$(TEST) -test.v -test.timeout=60s 2>&1 | grep -q "PASS\|FAIL" && \
+				$$test -test.run=$(TEST) -test.v -test.timeout=60s || true; \
+			fi; \
+		done; \
+	else \
+		for test in $(BIN_DIR)/tests/*.test; do \
+			if [ -f "$$test" ]; then \
+				echo ""; \
+				echo "Running $$(basename $$test)..."; \
+				$$test -test.v -test.parallel=10 -test.timeout=60s || exit 1; \
+			fi; \
+		done; \
+	fi
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]
