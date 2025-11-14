@@ -61,12 +61,9 @@ func (m *manager) createBridge(name, gateway, subnet string) error {
 		return fmt.Errorf("add gateway IP to bridge: %w", err)
 	}
 
-	// 6. Setup iptables rules (best effort - may fail without full permissions)
+	// 6. Setup iptables rules
 	if err := m.setupIPTablesRules(subnet, name); err != nil {
-		// TODO @sjmiller609 review: why not fail here? seems like we should fail starting server.
-		// Log warning but don't fail - network will work for basic connectivity
-		// Full NAT/masquerade requires additional setup
-		// In production, these rules should be set up once manually or via setup script
+		return fmt.Errorf("setup iptables: %w", err)
 	}
 
 	return nil
@@ -74,34 +71,23 @@ func (m *manager) createBridge(name, gateway, subnet string) error {
 
 // setupIPTablesRules sets up NAT and forwarding rules
 func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
-	// Check if IP forwarding is already enabled
+	// Check if IP forwarding is enabled (prerequisite)
 	forwardData, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if err == nil && strings.TrimSpace(string(forwardData)) == "1" {
-		// Already enabled, skip
-	} else {
-		// Try to enable IP forwarding (requires CAP_SYS_ADMIN or root)
-		cmd := exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1")
-		if err := cmd.Run(); err != nil {
-			// If it fails, check if it's already enabled (might have been set between checks)
-			forwardData, readErr := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-			if readErr == nil && strings.TrimSpace(string(forwardData)) == "1" {
-				// It's enabled now, continue
-			} else {
-				return fmt.Errorf("enable ip forwarding: %w (hint: run 'sudo sysctl -w net.ipv4.ip_forward=1' manually)", err)
-			}
-		}
+	if err != nil {
+		return fmt.Errorf("check ip forwarding: %w", err)
+	}
+	if strings.TrimSpace(string(forwardData)) != "1" {
+		return fmt.Errorf("IPv4 forwarding is not enabled. Please enable it by running: sudo sysctl -w net.ipv4.ip_forward=1 (or add 'net.ipv4.ip_forward=1' to /etc/sysctl.conf for persistence)")
 	}
 
 	// Get uplink interface (usually eth0, but could be different)
 	// For now, we'll use a common default
-	// TODO @sjmiller609 review
 	uplink := "eth0"
 	if m.config.UplinkInterface != "" {
 		uplink = m.config.UplinkInterface
 	}
 
 	// Add MASQUERADE rule if not exists
-	// TODO @sjmiller609 review security here and down in this function
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
 	if err := checkCmd.Run(); err != nil {

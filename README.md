@@ -27,7 +27,22 @@ sudo usermod -aG kvm $USER
 # Log out and back in, or use: newgrp kvm
 ```
 
-**Network Capabilities:** The hypeman binary needs network administration capabilities to create bridges and TAP devices:
+**Network Capabilities:** 
+
+Before running or testing Hypeman, ensure IPv4 forwarding is enabled:
+
+```bash
+# Enable IPv4 forwarding (temporary - until reboot)
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# Enable IPv4 forwarding (persistent across reboots)
+echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**Why:** Required for routing traffic between VM network and external network.
+
+The hypeman binary needs network administration capabilities to create bridges and TAP devices:
 ```bash
 # After building, grant network capabilities
 sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
@@ -39,7 +54,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' ./bin/hypeman
 getcap ./bin/hypeman
 ```
 
-**Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary.
+**Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 
 ### Configuration
 

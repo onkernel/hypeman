@@ -75,6 +75,21 @@ Guests are configured to use external DNS servers directly (no internal DNS serv
 - `iptables` - Complex rule manipulation not well-supported in netlink
 - `ip link set X type bridge_slave isolated on` - Netlink library doesn't expose this flag
 
+### Prerequisites
+
+Before running Hypeman, ensure IPv4 forwarding is enabled:
+
+```bash
+# Enable IPv4 forwarding (temporary - until reboot)
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# Enable IPv4 forwarding (persistent across reboots)
+echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**Why:** Required for routing traffic between VM network and external network. Hypeman will check this at startup and fail with an informative error if not enabled.
+
 ### Permissions
 
 Network operations require `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE` capabilities.
