@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,17 +25,25 @@ func TestExecInstanceNonTTY(t *testing.T) {
 
 	svc := newTestService(t)
 
+	// Ensure system files (kernel and initrd) are available
+	t.Log("Ensuring system files...")
+	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
+	err := systemMgr.EnsureSystemFiles(ctx())
+	require.NoError(t, err)
+	t.Log("System files ready")
+
 	// First, create and wait for the image to be ready
-	t.Log("Creating alpine image...")
+	// Use nginx which has a proper long-running process
+	t.Log("Creating nginx:alpine image...")
 	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
 		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/alpine:latest",
+			Name: "docker.io/library/nginx:alpine",
 		},
 	})
 	require.NoError(t, err)
 	imgCreated, ok := imgResp.(oapi.CreateImage202JSONResponse)
 	require.True(t, ok, "expected 202 response")
-	assert.Equal(t, "docker.io/library/alpine:latest", imgCreated.Name)
+	assert.Equal(t, "docker.io/library/nginx:alpine", imgCreated.Name)
 
 	// Wait for image to be ready (poll with timeout)
 	t.Log("Waiting for image to be ready...")
@@ -49,7 +58,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			t.Fatal("Timeout waiting for image to be ready")
 		case <-ticker.C:
 			imgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-				Name: "docker.io/library/alpine:latest",
+				Name: "docker.io/library/nginx:alpine",
 			})
 			require.NoError(t, err)
 			
@@ -68,7 +77,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "exec-test",
-			Image: "docker.io/library/alpine:latest",
+			Image: "docker.io/library/nginx:alpine",
 		},
 	})
 	require.NoError(t, err)
@@ -91,6 +100,25 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, actualInst.VsockSocket, "vsock socket path should be set")
 	t.Logf("vsock CID: %d, socket: %s", actualInst.VsockCID, actualInst.VsockSocket)
 
+	// Capture console log on failure
+	t.Cleanup(func() {
+		if t.Failed() {
+			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
+			if consoleData, err := os.ReadFile(consolePath); err == nil {
+				t.Logf("=== Console Log (Failure) ===")
+				t.Logf("%s", string(consoleData))
+				t.Logf("=== End Console Log ===")
+			}
+		}
+	})
+	
+	// Check if vsock socket exists
+	if _, err := os.Stat(actualInst.VsockSocket); err != nil {
+		t.Logf("vsock socket does not exist: %v", err)
+	} else {
+		t.Logf("vsock socket exists: %s", actualInst.VsockSocket)
+	}
+
 	// Wait for exec agent to be ready (retry a few times)
 	var exit *system.ExitStatus
 	var stdout, stderr outputBuffer
@@ -102,7 +130,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 		
-		exit, execErr = system.ExecIntoInstance(ctx(), uint32(actualInst.VsockCID), system.ExecOptions{
+		exit, execErr = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "whoami"},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -128,13 +156,14 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	t.Logf("Command output: %q", outStr)
 	require.Contains(t, outStr, "root", "whoami should return root user")
 	
-	// Test another command to verify filesystem access
-	t.Log("Testing exec command: ls /usr/local/bin/exec-agent")
+	// Test another command to verify filesystem access and container context
+	// We should see /docker-entrypoint.sh which is standard in nginx:alpine image
+	t.Log("Testing exec command: ls /docker-entrypoint.sh")
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
 	
-	exit, err = system.ExecIntoInstance(ctx(), uint32(actualInst.VsockCID), system.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "ls -la /usr/local/bin/exec-agent"},
+	exit, err = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "ls -la /docker-entrypoint.sh"},
 		Stdin:   nil,
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -146,7 +175,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	
 	outStr = stdout.String()
 	t.Logf("ls output: %q", outStr)
-	require.Contains(t, outStr, "exec-agent", "should see exec-agent binary in /usr/local/bin")
+	require.Contains(t, outStr, "docker-entrypoint.sh", "should see docker-entrypoint.sh file")
 
 	// Cleanup
 	t.Log("Cleaning up instance...")

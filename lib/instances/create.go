@@ -100,8 +100,8 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Get default system versions
-	kernelVer, initrdVer := m.systemManager.GetDefaultVersions()
+	// 6. Get default kernel version
+	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
 	// 7. Create instance metadata
 	stored := &StoredMetadata{
@@ -117,7 +117,6 @@ func (m *manager) createInstance(
 		StartedAt:     nil,
 		StoppedAt:     nil,
 		KernelVersion: string(kernelVer),
-		InitrdVersion: string(initrdVer),
 		CHVersion:     vmm.V49_0, // Use latest
 		SocketPath:    m.paths.InstanceSocket(id),
 		DataDir:       m.paths.InstanceDir(id),
@@ -293,9 +292,9 @@ func (m *manager) startAndBootVM(
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
 func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.VmConfig, error) {
-	// Get versioned system file paths
+	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
-	initrdPath, _ := m.systemManager.GetInitrdPath(system.InitrdVersion(inst.InitrdVersion))
+	initrdPath, _ := m.systemManager.GetInitrdPath()
 
 	// Payload configuration (kernel + initramfs)
 	payload := vmm.PayloadConfig{

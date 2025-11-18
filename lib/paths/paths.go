@@ -5,7 +5,8 @@
 //	{dataDir}/
 //	  system/
 //	    kernel/{version}/{arch}/vmlinux
-//	    initrd/{version}/{arch}/initrd
+//	    initrd/{arch}/{timestamp}/initrd
+//	    initrd/{arch}/latest -> {timestamp}
 //	    binaries/{version}/{arch}/cloud-hypervisor
 //	    oci-cache/
 //	    builds/{ref}/
@@ -43,9 +44,24 @@ func (p *Paths) SystemKernel(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "kernel", version, arch, "vmlinux")
 }
 
-// SystemInitrd returns the path to an initrd file.
-func (p *Paths) SystemInitrd(version, arch string) string {
-	return filepath.Join(p.dataDir, "system", "initrd", version, arch, "initrd")
+// SystemInitrd returns the path to the latest initrd symlink.
+func (p *Paths) SystemInitrd(arch string) string {
+	return filepath.Join(p.dataDir, "system", "initrd", arch, "latest")
+}
+
+// SystemInitrdTimestamp returns the path to a specific timestamped initrd build.
+func (p *Paths) SystemInitrdTimestamp(timestamp, arch string) string {
+	return filepath.Join(p.dataDir, "system", "initrd", arch, timestamp, "initrd")
+}
+
+// SystemInitrdLatest returns the path to the latest symlink (same as SystemInitrd).
+func (p *Paths) SystemInitrdLatest(arch string) string {
+	return filepath.Join(p.dataDir, "system", "initrd", arch, "latest")
+}
+
+// SystemInitrdDir returns the directory for initrd builds for an architecture.
+func (p *Paths) SystemInitrdDir(arch string) string {
+	return filepath.Join(p.dataDir, "system", "initrd", arch)
 }
 
 // SystemOCICache returns the path to the OCI cache directory.

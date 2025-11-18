@@ -4,6 +4,7 @@ go 1.25.4
 
 require (
 	github.com/c2h5oh/datasize v0.0.0-20231215233829-aa82cc1e6500
+	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/ghodss/yaml v1.0.0
@@ -11,6 +12,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-containerregistry v0.20.6
 	github.com/google/wire v0.7.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/mdlayher/vsock v1.2.1
 	github.com/nrednav/cuid2 v1.1.0
@@ -22,6 +24,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/u-root/u-root v0.15.0
 	golang.org/x/sync v0.17.0
+	golang.org/x/term v0.37.0
 )
 
 require (
@@ -41,7 +44,6 @@ require (
 	github.com/go-test/deep v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
@@ -67,7 +69,7 @@ require (
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

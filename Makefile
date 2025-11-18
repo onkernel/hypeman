@@ -87,8 +87,13 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
+# Build exec-agent (guest binary) into its own directory for embedding
+lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
+	@echo "Building exec-agent..."
+	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
+
 # Build the binary
-build: ensure-ch-binaries | $(BIN_DIR)
+build: ensure-ch-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Run in development mode with hot reload
@@ -96,7 +101,7 @@ dev: $(AIR)
 	$(AIR) -c .air.toml
 
 # Run tests
-test: ensure-ch-binaries
+test: ensure-ch-binaries lib/system/exec_agent/exec-agent
 	go test -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Generate JWT token for testing
