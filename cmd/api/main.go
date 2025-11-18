@@ -55,10 +55,9 @@ func run() error {
 		logger.Error("failed to ensure system files", "error", err)
 		os.Exit(1)
 	}
-	kernelVer, initrdVer := app.SystemManager.GetDefaultVersions()
+	kernelVer := app.SystemManager.GetDefaultKernelVersion()
 	logger.Info("System files ready",
-		"kernel", kernelVer,
-		"initrd", initrdVer)
+		"kernel", kernelVer)
 
 	// Create router
 	r := chi.NewRouter()

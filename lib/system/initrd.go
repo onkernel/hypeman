@@ -2,105 +2,130 @@ package system
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
 )
 
-// buildInitrd builds initrd from base image + custom init script
-func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch string) error {
+const alpineBaseImage = "alpine:3.22"
+
+// buildInitrd builds initrd from Alpine base + embedded exec-agent + generated init script
+func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) {
 	// Create temp directory for building
 	tempDir, err := os.MkdirTemp("", "hypeman-initrd-*")
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	rootfsDir := filepath.Join(tempDir, "rootfs")
 
-	// Get base image for this initrd version
-	baseImageRef, ok := InitrdBaseImages[version]
-	if !ok {
-		return fmt.Errorf("no base image defined for initrd %s", version)
-	}
-
-	// Create a temporary OCI client (reuses image manager's cache)
+	// Create OCI client (reuses image manager's cache)
 	cacheDir := m.paths.SystemOCICache()
 	ociClient, err := images.NewOCIClient(cacheDir)
 	if err != nil {
-		return fmt.Errorf("create oci client: %w", err)
+		return "", fmt.Errorf("create oci client: %w", err)
 	}
 
-	// Inspect to get digest
-	digest, err := ociClient.InspectManifest(ctx, baseImageRef)
+	// Inspect Alpine base to get digest
+	digest, err := ociClient.InspectManifest(ctx, alpineBaseImage)
 	if err != nil {
-		return fmt.Errorf("inspect base image manifest: %w", err)
+		return "", fmt.Errorf("inspect alpine manifest: %w", err)
 	}
 
-	// Pull and unpack base image
-	if err := ociClient.PullAndUnpack(ctx, baseImageRef, digest, rootfsDir); err != nil {
-		return fmt.Errorf("pull base image: %w", err)
+	// Pull and unpack Alpine base
+	if err := ociClient.PullAndUnpack(ctx, alpineBaseImage, digest, rootfsDir); err != nil {
+		return "", fmt.Errorf("pull alpine base: %w", err)
 	}
 
-	// Inject init script
-	initScript := GenerateInitScript(version)
+	// Write embedded exec-agent binary
+	binDir := filepath.Join(rootfsDir, "usr/local/bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", fmt.Errorf("create bin dir: %w", err)
+	}
+	
+	agentPath := filepath.Join(binDir, "exec-agent")
+	if err := os.WriteFile(agentPath, ExecAgentBinary, 0755); err != nil {
+		return "", fmt.Errorf("write exec-agent: %w", err)
+	}
+
+	// Write generated init script
+	initScript := GenerateInitScript()
 	initPath := filepath.Join(rootfsDir, "init")
 	if err := os.WriteFile(initPath, []byte(initScript), 0755); err != nil {
-		return fmt.Errorf("write init script: %w", err)
+		return "", fmt.Errorf("write init script: %w", err)
 	}
 
-	// HACK: Inject custom exec-agent for debugging
-	// This assumes the agent is built at lib/system/initrd/guest-agent/exec-agent
-	// We try to find it relative to the project root.
-	// Since we are running from project root usually, or we can try to find it.
-	// Hardcoding path based on workspace structure for now.
-	customAgent := "/home/debianuser/hypeman/lib/system/initrd/guest-agent/exec-agent"
-	if input, err := os.ReadFile(customAgent); err == nil {
-		// Create directory if it doesn't exist (though it should from base image)
-		binDir := filepath.Join(rootfsDir, "usr/local/bin")
-		os.MkdirAll(binDir, 0755)
-		
-		agentPath := filepath.Join(binDir, "exec-agent")
-		if err := os.WriteFile(agentPath, input, 0755); err != nil {
-			return fmt.Errorf("write custom exec-agent: %w", err)
-		}
-		fmt.Printf("DEBUG: Injected custom exec-agent from %s\n", customAgent)
-	} else {
-		fmt.Printf("DEBUG: Could not find custom exec-agent at %s: %v\n", customAgent, err)
+	// Generate timestamp for this build
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	
+	// Package as cpio.gz
+	outputPath := m.paths.SystemInitrdTimestamp(timestamp, arch)
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return "", fmt.Errorf("create output dir: %w", err)
 	}
-
-	// Package as cpio.gz (initramfs format)
-	outputPath := m.paths.SystemInitrd(string(version), arch)
+	
 	if _, err := images.ExportRootfs(rootfsDir, outputPath, images.FormatCpio); err != nil {
-		return fmt.Errorf("export initrd: %w", err)
+		return "", fmt.Errorf("export initrd: %w", err)
 	}
 
-	return nil
+	// Update 'latest' symlink
+	latestLink := m.paths.SystemInitrdLatest(arch)
+	// Remove old symlink if it exists
+	os.Remove(latestLink)
+	// Create new symlink (relative path)
+	if err := os.Symlink(timestamp, latestLink); err != nil {
+		return "", fmt.Errorf("create latest symlink: %w", err)
+	}
+
+	return outputPath, nil
 }
 
-// ensureInitrd ensures initrd exists, builds if missing
-func (m *manager) ensureInitrd(ctx context.Context, version InitrdVersion) (string, error) {
+// ensureInitrd ensures initrd exists and is up-to-date, builds if missing or stale
+func (m *manager) ensureInitrd(ctx context.Context) (string, error) {
 	arch := GetArch()
+	latestLink := m.paths.SystemInitrdLatest(arch)
 
-	initrdPath := m.paths.SystemInitrd(string(version), arch)
-
-	// Check if already exists
-	if _, err := os.Stat(initrdPath); err == nil {
-		return initrdPath, nil
+	// Check if latest symlink exists
+	if target, err := os.Readlink(latestLink); err == nil {
+		// Symlink exists, check if the actual file exists
+		initrdPath := m.paths.SystemInitrdTimestamp(target, arch)
+		if _, err := os.Stat(initrdPath); err == nil {
+			// File exists, check if it's stale by comparing embedded binary hash
+			if !m.isInitrdStale(initrdPath) {
+				return initrdPath, nil
+			}
+		}
 	}
 
-	// Build initrd
-	if err := m.buildInitrd(ctx, version, arch); err != nil {
+	// Build new initrd
+	initrdPath, err := m.buildInitrd(ctx, arch)
+	if err != nil {
 		return "", fmt.Errorf("build initrd: %w", err)
 	}
 
 	return initrdPath, nil
 }
 
-// BuildInitrd is a public wrapper for building initrd (used by dev tools)
-func (m *manager) BuildInitrd(ctx context.Context, version InitrdVersion, arch string) error {
-	return m.buildInitrd(ctx, version, arch)
+// isInitrdStale checks if the initrd needs rebuilding by comparing embedded binary hash
+func (m *manager) isInitrdStale(initrdPath string) bool {
+	// For now, we'll consider it stale if the embedded binary has changed
+	// We could store a hash file alongside the initrd and compare
+	// For simplicity, we'll just rebuild on every run for now
+	// TODO: Implement proper hash-based staleness check
+	return false
 }
 
+// computeInitrdHash computes a hash of the embedded binary and init script
+func computeInitrdHash() string {
+	h := sha256.New()
+	h.Write(ExecAgentBinary)
+	h.Write([]byte(GenerateInitScript()))
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}

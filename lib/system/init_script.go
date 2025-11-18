@@ -9,11 +9,11 @@ package system
 // 3. Mounts and sources config disk (/dev/vdc)
 // 4. Configures networking (if enabled)
 // 5. Executes container entrypoint
-func GenerateInitScript(version InitrdVersion) string {
+func GenerateInitScript() string {
 	return `#!/bin/sh
 set -xe
 
-echo "overlay-init: START (` + string(version) + `)" > /dev/kmsg
+echo "overlay-init: START" > /dev/kmsg
 
 # Create mount points
 mkdir -p /proc /sys /dev
