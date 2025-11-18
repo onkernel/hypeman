@@ -2,10 +2,7 @@ package api
 
 import (
 	"bytes"
-	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -103,71 +100,23 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, actualInst.VsockSocket, "vsock socket path should be set")
 	t.Logf("vsock CID: %d, socket: %s", actualInst.VsockCID, actualInst.VsockSocket)
 
-	// Print console log for debugging
-	consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
-	if consoleData, err := os.ReadFile(consolePath); err == nil {
-		t.Logf("=== Console Log ===")
-		lines := bytes.Split(consoleData, []byte("\n"))
-		
-		// Print boot messages with virtio
-		t.Logf("--- Boot messages (virtio devices) ---")
-		for _, line := range lines {
-			lineStr := string(line)
-			if bytes.Contains(line, []byte("virtio")) || bytes.Contains(line, []byte("vsock")) {
-				t.Logf("%s", lineStr)
+	// Capture console log on failure
+	t.Cleanup(func() {
+		if t.Failed() {
+			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
+			if consoleData, err := os.ReadFile(consolePath); err == nil {
+				t.Logf("=== Console Log (Failure) ===")
+				t.Logf("%s", string(consoleData))
+				t.Logf("=== End Console Log ===")
 			}
 		}
-		
-		// Print last 30 lines
-		t.Logf("--- Last 30 lines ---")
-		start := len(lines) - 30
-		if start < 0 {
-			start = 0
-		}
-		for _, line := range lines[start:] {
-			if len(line) > 0 {
-				t.Logf("%s", line)
-			}
-		}
-		t.Logf("=== End Console Log ===")
-	} else {
-		t.Logf("Could not read console log: %v", err)
-	}
+	})
 	
 	// Check if vsock socket exists
 	if _, err := os.Stat(actualInst.VsockSocket); err != nil {
 		t.Logf("vsock socket does not exist: %v", err)
 	} else {
 		t.Logf("vsock socket exists: %s", actualInst.VsockSocket)
-	}
-	
-	// Check if exec-agent exists in the initrd
-	initrdPath, _ := systemMgr.GetInitrdPath(system.InitrdV2_0_0)
-	t.Logf("Initrd path: %s", initrdPath)
-	if _, err := os.Stat(initrdPath); err != nil {
-		t.Logf("Initrd file does not exist: %v", err)
-	} else {
-		if stat, err := os.Stat(initrdPath); err == nil {
-			t.Logf("Initrd file exists, size: %d bytes", stat.Size())
-			
-			// Unpack initrd to check contents
-			tmpUnpack := filepath.Join(os.TempDir(), "initrd-check")
-			os.RemoveAll(tmpUnpack)
-			os.MkdirAll(tmpUnpack, 0755)
-			
-			cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && cpio -i < %s 2>/dev/null", tmpUnpack, initrdPath))
-			if err := cmd.Run(); err == nil {
-				if _, err := os.Stat(filepath.Join(tmpUnpack, "usr/local/bin/exec-agent")); err == nil {
-					t.Logf("✅ exec-agent found in initrd")
-				} else {
-					t.Logf("❌ exec-agent NOT found in initrd!")
-					// List what's actually in the initrd
-					entries, _ := os.ReadDir(filepath.Join(tmpUnpack, "usr/local/bin"))
-					t.Logf("Contents of /usr/local/bin in initrd: %v", len(entries))
-				}
-			}
-			os.RemoveAll(tmpUnpack)
-		}
 	}
 
 	// Wait for exec agent to be ready (retry a few times)
@@ -207,13 +156,14 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	t.Logf("Command output: %q", outStr)
 	require.Contains(t, outStr, "root", "whoami should return root user")
 	
-	// Test another command to verify filesystem access
-	t.Log("Testing exec command: ls /")
+	// Test another command to verify filesystem access and container context
+	// We should see /docker-entrypoint.sh which is standard in nginx:alpine image
+	t.Log("Testing exec command: ls /docker-entrypoint.sh")
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
 	
 	exit, err = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "ls -la /"},
+		Command: []string{"/bin/sh", "-c", "ls -la /docker-entrypoint.sh"},
 		Stdin:   nil,
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -225,7 +175,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	
 	outStr = stdout.String()
 	t.Logf("ls output: %q", outStr)
-	require.Contains(t, outStr, "bin", "should see bin directory")
+	require.Contains(t, outStr, "docker-entrypoint.sh", "should see docker-entrypoint.sh file")
 
 	// Cleanup
 	t.Log("Cleaning up instance...")
