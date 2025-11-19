@@ -81,3 +81,26 @@ gRPC streaming RPC with protobuf messages:
 - **Secure**: No exposed ports, isolated to host-guest boundary
 - **Simple**: No SSH keys, passwords, or network configuration
 
+## CLI Usage
+
+The `hypeman-exec` CLI provides kubectl-like exec functionality:
+
+```bash
+# Build the CLI
+make build-exec
+
+# Set your JWT token
+export HYPEMAN_TOKEN="your-jwt-token"
+
+# Run a one-off command
+./bin/hypeman-exec <instance-id> whoami
+
+# Interactive shell (like kubectl exec -it)
+./bin/hypeman-exec -it <instance-id> /bin/sh
+
+# With custom API URL and token
+./bin/hypeman-exec --api-url http://localhost:8080 --token $TOKEN -it <instance-id>
+```
+
+The `-it` flag enables interactive mode with TTY, allowing full terminal control for shells, vim, etc.
+

@@ -72,6 +72,15 @@ func run() error {
 	// See: https://github.com/oapi-codegen/nethttp-middleware#usage
 	spec.Servers = nil
 
+	// Custom exec endpoint (outside OpenAPI spec, uses WebSocket)
+	r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Logger,
+		middleware.Recoverer,
+		mw.JwtAuth(app.Config.JwtSecret),
+	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
+
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {
 		// Common middleware
@@ -89,9 +98,6 @@ func run() error {
 			ErrorHandler: mw.OapiErrorHandler,
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
-
-	// Custom exec endpoint (uses WebSocket for bidirectional streaming)
-	r.Post("/instances/{id}/exec", app.ApiService.ExecHandler)
 
 		// Setup strict handler
 		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
