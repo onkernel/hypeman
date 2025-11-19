@@ -187,6 +187,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
 	
+	t.Log("Calling ExecIntoInstance for ls command...")
 	exit, err = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ls -la /docker-entrypoint.sh"},
 		Stdin:   nil,
@@ -194,6 +195,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		Stderr:  &stderr,
 		TTY:     false,
 	})
+	t.Logf("ExecIntoInstance returned: err=%v, exit=%v", err, exit)
 	
 	require.NoError(t, err, "ls command should succeed")
 	require.Equal(t, 0, exit.Code, "ls should exit with code 0")

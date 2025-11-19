@@ -264,7 +264,9 @@ func executeNoTTY(conn net.Conn, command []string) {
 	logInfo("command finished: err=%v", err)
 
 	// Wait for stdout/stderr goroutines to finish reading all data
+	logInfo("waiting for stdout to close...")
 	<-stdoutDone
+	logInfo("waiting for stderr to close...")
 	<-stderrDone
 	logInfo("stdout/stderr streams closed")
 
@@ -273,7 +275,7 @@ func executeNoTTY(conn net.Conn, command []string) {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	
-	logInfo("sending exit code: %d", exitCode)
+	logInfo("computed exit code: %d, sending...", exitCode)
 	if err := sendExit(conn, exitCode); err != nil {
 		logError("error sending exit: %v", err)
 		return
