@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,8 +48,8 @@ func TestExecInstanceNonTTY(t *testing.T) {
 
 	// Wait for image to be ready (poll with timeout)
 	t.Log("Waiting for image to be ready...")
-	timeout := time.After(120 * time.Second)
-	ticker := time.NewTicker(2 * time.Second)
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	imageReady := false
@@ -87,8 +88,25 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, inst.Id)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Wait a bit for instance to fully boot
-	time.Sleep(5 * time.Second)
+	// Wait for nginx to be fully started (poll console logs)
+	t.Log("Waiting for nginx to start...")
+	nginxReady := false
+	nginxTimeout := time.After(15 * time.Second)
+	nginxTicker := time.NewTicker(500 * time.Millisecond)
+	defer nginxTicker.Stop()
+
+	for !nginxReady {
+		select {
+		case <-nginxTimeout:
+			t.Fatal("Timeout waiting for nginx to start")
+		case <-nginxTicker.C:
+			logs, err := svc.InstanceManager.GetInstanceLogs(ctx(), inst.Id, false, 100)
+			if err == nil && strings.Contains(logs, "start worker processes") {
+				nginxReady = true
+				t.Log("Nginx is ready")
+			}
+		}
+	}
 
 	// Get actual instance to access vsock fields
 	actualInst, err := svc.InstanceManager.GetInstance(ctx(), inst.Id)
