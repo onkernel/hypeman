@@ -22,9 +22,24 @@ Container (chroot /overlay/newroot)
 
 ### 1. API Layer (`cmd/api/api/exec.go`)
 
-- WebSocket endpoint: `GET /instances/{id}/exec?command=...&tty=true/false`
+- WebSocket endpoint: `POST /instances/{id}/exec`
 - Upgrades HTTP to WebSocket for bidirectional streaming
+- First WebSocket message must be JSON with exec parameters:
+  ```json
+  {
+    "command": ["bash", "-c", "whoami"],
+    "tty": true,
+    "user": "www-data",     // optional: username to run as
+    "uid": 1000,            // optional: UID to run as (overrides user)
+    "env": {                // optional: environment variables
+      "FOO": "bar"
+    },
+    "cwd": "/app",          // optional: working directory
+    "timeout": 30           // optional: timeout in seconds
+  }
+  ```
 - Calls `exec.ExecIntoInstance()` with the instance's vsock socket path
+- Logs audit trail: JWT subject, instance ID, command, start/end time, exit code
 
 ### 2. Client (`lib/exec/client.go`)
 
@@ -40,9 +55,10 @@ Container (chroot /overlay/newroot)
 gRPC streaming RPC with protobuf messages:
 
 **Request (client → server):**
-- `ExecStart`: Command to run, TTY flag
+- `ExecStart`: Command, TTY flag, user/UID, environment variables, working directory, timeout
 - `stdin`: Input data bytes
 - `WindowSize`: Terminal resize events (TTY mode)
+- `Signal`: Send Unix signal to process (SIGINT, SIGTERM, SIGKILL, etc.)
 
 **Response (server → client):**
 - `stdout`: Output data bytes
@@ -95,12 +111,104 @@ export HYPEMAN_TOKEN="your-jwt-token"
 # Run a one-off command
 ./bin/hypeman-exec <instance-id> whoami
 
-# Interactive shell (like kubectl exec -it)
+# Interactive shell (auto-detects TTY, or use -it explicitly)
+./bin/hypeman-exec <instance-id> /bin/sh
 ./bin/hypeman-exec -it <instance-id> /bin/sh
 
-# With custom API URL and token
-./bin/hypeman-exec --api-url http://localhost:8080 --token $TOKEN -it <instance-id>
+# Run as specific user
+./bin/hypeman-exec --user www-data <instance-id> whoami
+./bin/hypeman-exec --uid 1000 <instance-id> whoami
+
+# With environment variables
+./bin/hypeman-exec --env FOO=bar --env BAZ=qux <instance-id> env
+./bin/hypeman-exec -e FOO=bar -e BAZ=qux <instance-id> env
+
+# With working directory
+./bin/hypeman-exec --cwd /app <instance-id> pwd
+
+# With timeout (in seconds)
+./bin/hypeman-exec --timeout 30 <instance-id> /long-running-script.sh
+
+# Combined options
+./bin/hypeman-exec --user www-data --cwd /app --env ENV=prod \
+  <instance-id> php artisan migrate
 ```
 
-The `-it` flag enables interactive mode with TTY, allowing full terminal control for shells, vim, etc.
+### Options
+
+- `-it`: Interactive mode with TTY (auto-detected if stdin/stdout are terminals)
+- `--token`: JWT token (or use `HYPEMAN_TOKEN` env var)
+- `--api-url`: API server URL (default: `http://localhost:8080`)
+- `--user`: Username to run command as
+- `--uid`: UID to run command as (overrides `--user`)
+- `--env` / `-e`: Environment variable (KEY=VALUE, can be repeated)
+- `--cwd`: Working directory
+- `--timeout`: Execution timeout in seconds (0 = no timeout)
+
+### Exit Codes
+
+The CLI exits with the remote command's exit code, or:
+- `255`: Transport/connection error
+- `130`: Interrupted by Ctrl-C (SIGINT)
+- `124`: Command timed out (GNU timeout convention)
+
+## Security & Authorization
+
+- All authentication and authorization is handled at the API layer via JWT
+- The guest agent trusts that the host has properly authorized the request
+- User/UID switching is performed in the guest to enforce privilege boundaries
+- Commands run in the container context (`chroot /overlay/newroot`), not the VM context
+
+## Observability
+
+### API Layer Logging
+
+The API logs comprehensive audit trails for all exec sessions:
+
+```
+# Session start
+{"level":"info","msg":"exec session started","instance_id":"abc123","subject":"user@example.com",
+ "command":["bash","-c","whoami"],"tty":true,"user":"www-data","uid":0,"cwd":"/app","timeout":30}
+
+# Session end
+{"level":"info","msg":"exec session ended","instance_id":"abc123","subject":"user@example.com",
+ "exit_code":0,"duration_ms":1234}
+
+# Errors
+{"level":"error","msg":"exec failed","instance_id":"abc123","subject":"user@example.com",
+ "error":"connection refused","duration_ms":500}
+```
+
+### Guest Agent Logging
+
+The guest agent logs are written to the VM console log (accessible via `/var/lib/hypeman/guests/{id}/console.log`):
+
+```
+[exec-agent] listening on vsock port 2222
+[exec-agent] new exec stream
+[exec-agent] exec: command=[bash -c whoami] tty=true user=www-data uid=0 cwd=/app timeout=30
+[exec-agent] command finished with exit code: 0
+```
+
+## Signal Support
+
+The protocol supports sending Unix signals to running processes:
+
+- `SIGHUP` (1): Hangup
+- `SIGINT` (2): Interrupt (Ctrl-C)
+- `SIGQUIT` (3): Quit
+- `SIGKILL` (9): Kill (cannot be caught)
+- `SIGTERM` (15): Terminate
+- `SIGSTOP` (19): Stop process
+- `SIGCONT` (18): Continue process
+
+Signals can be sent via the WebSocket stream (implementation detail for advanced clients).
+
+## Timeout Behavior
+
+When a timeout is specified:
+- The guest agent creates a context with the specified deadline
+- If the command doesn't complete in time, it receives SIGKILL
+- The exit code will be `124` (GNU timeout convention)
+- Timeout is enforced in the guest, so network issues won't cause false timeouts
 

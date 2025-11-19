@@ -79,7 +79,7 @@ func run() error {
 		middleware.Logger,
 		middleware.Recoverer,
 		mw.JwtAuth(app.Config.JwtSecret),
-	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
+	).Post("/instances/{id}/exec", app.ApiService.ExecHandler)
 
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {

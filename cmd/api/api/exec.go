@@ -3,10 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -24,10 +26,22 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// ExecRequest represents the JSON body for exec requests
+type ExecRequest struct {
+	Command []string          `json:"command"`
+	TTY     bool              `json:"tty"`
+	User    string            `json:"user,omitempty"`
+	UID     int32             `json:"uid,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	Timeout int32             `json:"timeout,omitempty"` // seconds
+}
+
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
 func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.FromContext(ctx)
+	startTime := time.Now()
 
 	instanceID := chi.URLParam(r, "id")
 
@@ -48,17 +62,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse request from query parameters (before WebSocket upgrade)
-	command := r.URL.Query()["command"]
-	if len(command) == 0 {
-		command = []string{"/bin/sh"}
-	}
-
-	tty := r.URL.Query().Get("tty") != "false"
-
-	log.InfoContext(ctx, "exec session started", "id", instanceID, "command", command, "tty", tty)
-
-	// Upgrade to WebSocket
+	// Upgrade to WebSocket first
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.ErrorContext(ctx, "websocket upgrade failed", "error", err)
@@ -66,26 +70,95 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
+	// Read JSON request from first WebSocket message
+	msgType, message, err := ws.ReadMessage()
+	if err != nil {
+		log.ErrorContext(ctx, "failed to read exec request", "error", err)
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"error":"failed to read request: %v"}`, err)))
+		return
+	}
+
+	if msgType != websocket.TextMessage {
+		log.ErrorContext(ctx, "expected text message with JSON request", "type", msgType)
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"error":"first message must be JSON text"}`))
+		return
+	}
+
+	// Parse JSON request
+	var execReq ExecRequest
+	if err := json.Unmarshal(message, &execReq); err != nil {
+		log.ErrorContext(ctx, "invalid JSON request", "error", err)
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"error":"invalid JSON: %v"}`, err)))
+		return
+	}
+
+	// Default command if not specified
+	if len(execReq.Command) == 0 {
+		execReq.Command = []string{"/bin/sh"}
+	}
+
+	// Get JWT subject for audit logging (if available)
+	subject := "unknown"
+	if claims, ok := r.Context().Value("claims").(map[string]interface{}); ok {
+		if sub, ok := claims["sub"].(string); ok {
+			subject = sub
+		}
+	}
+
+	// Audit log: exec session started
+	log.InfoContext(ctx, "exec session started",
+		"instance_id", instanceID,
+		"subject", subject,
+		"command", execReq.Command,
+		"tty", execReq.TTY,
+		"user", execReq.User,
+		"uid", execReq.UID,
+		"cwd", execReq.Cwd,
+		"timeout", execReq.Timeout,
+	)
+
 	// Create WebSocket read/writer wrapper
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
 	// Execute via vsock
 	exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
-		Command: command,
+		Command: execReq.Command,
 		Stdin:   wsConn,
 		Stdout:  wsConn,
 		Stderr:  wsConn,
-		TTY:     tty,
+		TTY:     execReq.TTY,
+		User:    execReq.User,
+		UID:     execReq.UID,
+		Env:     execReq.Env,
+		Cwd:     execReq.Cwd,
+		Timeout: execReq.Timeout,
 	})
 
+	duration := time.Since(startTime)
+
 	if err != nil {
-		log.ErrorContext(ctx, "exec failed", "error", err, "id", instanceID)
+		log.ErrorContext(ctx, "exec failed",
+			"error", err,
+			"instance_id", instanceID,
+			"subject", subject,
+			"duration_ms", duration.Milliseconds(),
+		)
 		// Send error message over WebSocket before closing
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 
-	log.InfoContext(ctx, "exec session ended", "id", instanceID, "exit_code", exit.Code)
+	// Audit log: exec session ended
+	log.InfoContext(ctx, "exec session ended",
+		"instance_id", instanceID,
+		"subject", subject,
+		"exit_code", exit.Code,
+		"duration_ms", duration.Milliseconds(),
+	)
+
+	// Send close frame with exit code in JSON
+	closeMsg := fmt.Sprintf(`{"exitCode":%d}`, exit.Code)
+	ws.WriteMessage(websocket.TextMessage, []byte(closeMsg))
 }
 
 // wsReadWriter wraps a WebSocket connection to implement io.ReadWriter

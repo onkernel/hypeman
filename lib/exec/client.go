@@ -24,6 +24,11 @@ type ExecOptions struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 	TTY     bool
+	User    string            // Username to run as (optional)
+	UID     int32             // UID to run as (optional, overrides User)
+	Env     map[string]string // Environment variables
+	Cwd     string            // Working directory (optional)
+	Timeout int32             // Execution timeout in seconds (0 = no timeout)
 }
 
 // ExecIntoInstance executes command in instance via vsock using gRPC
@@ -80,8 +85,13 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	if err := stream.Send(&ExecRequest{
 		Request: &ExecRequest_Start{
 			Start: &ExecStart{
-				Command: opts.Command,
-				Tty:     opts.TTY,
+				Command:        opts.Command,
+				Tty:            opts.TTY,
+				User:           opts.User,
+				Uid:            opts.UID,
+				Env:            opts.Env,
+				Cwd:            opts.Cwd,
+				TimeoutSeconds: opts.Timeout,
 			},
 		},
 	}); err != nil {

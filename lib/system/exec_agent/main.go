@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -69,19 +73,44 @@ func (s *execServer) Exec(stream pb.ExecService_ExecServer) error {
 		command = []string{"/bin/sh"}
 	}
 
-	log.Printf("[exec-agent] exec: command=%v tty=%v", command, start.Tty)
+	log.Printf("[exec-agent] exec: command=%v tty=%v user=%s uid=%d cwd=%s timeout=%d",
+		command, start.Tty, start.User, start.Uid, start.Cwd, start.TimeoutSeconds)
+
+	// Create context with timeout if specified
+	ctx := context.Background()
+	if start.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(start.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
 
 	if start.Tty {
-		return s.executeTTY(stream, command)
+		return s.executeTTY(ctx, stream, start)
 	}
-	return s.executeNoTTY(stream, command)
+	return s.executeNoTTY(ctx, stream, start)
 }
 
 // executeNoTTY executes command without TTY
-func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []string) error {
+func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_ExecServer, start *pb.ExecStart) error {
 	// Chroot into container
-	cmd := exec.Command("chroot", append([]string{"/overlay/newroot"}, command...)...)
-	cmd.Env = os.Environ()
+	cmd := exec.CommandContext(ctx, "chroot", append([]string{"/overlay/newroot"}, start.Command...)...)
+	
+	// Set up environment
+	cmd.Env = s.buildEnv(start.Env)
+	
+	// Set up working directory (relative to chroot)
+	if start.Cwd != "" {
+		cmd.Dir = start.Cwd
+	}
+	
+	// Set up user/uid credentials
+	if cred, err := s.buildCredentials(start); err == nil && cred != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Credential: cred,
+		}
+	} else if err != nil {
+		log.Printf("[exec-agent] warning: failed to set credentials: %v", err)
+	}
 
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
@@ -91,7 +120,7 @@ func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []st
 		return fmt.Errorf("start command: %w", err)
 	}
 
-	// Handle stdin in background
+	// Handle stdin and signals in background
 	go func() {
 		defer stdin.Close()
 		for {
@@ -101,6 +130,8 @@ func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []st
 			}
 			if data := req.GetStdin(); data != nil {
 				stdin.Write(data)
+			} else if sig := req.GetSignal(); sig != nil {
+				s.sendSignal(cmd, sig.Signal)
 			}
 		}
 	}()
@@ -137,12 +168,15 @@ func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []st
 		}
 	}()
 
-	// Wait for command to finish
-	cmd.Wait()
+	// Wait for command to finish or context cancellation
+	waitErr := cmd.Wait()
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {
 		exitCode = int32(cmd.ProcessState.ExitCode())
+	} else if waitErr != nil {
+		// If killed by timeout, exit with 124 (GNU timeout convention)
+		exitCode = 124
 	}
 
 	log.Printf("[exec-agent] command finished with exit code: %d", exitCode)
@@ -154,10 +188,26 @@ func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []st
 }
 
 // executeTTY executes command with TTY
-func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []string) error {
+func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecServer, start *pb.ExecStart) error {
 	// Chroot into container
-	cmd := exec.Command("chroot", append([]string{"/overlay/newroot"}, command...)...)
-	cmd.Env = os.Environ()
+	cmd := exec.CommandContext(ctx, "chroot", append([]string{"/overlay/newroot"}, start.Command...)...)
+	
+	// Set up environment
+	cmd.Env = s.buildEnv(start.Env)
+	
+	// Set up working directory (relative to chroot)
+	if start.Cwd != "" {
+		cmd.Dir = start.Cwd
+	}
+	
+	// Set up user/uid credentials
+	if cred, err := s.buildCredentials(start); err == nil && cred != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Credential: cred,
+		}
+	} else if err != nil {
+		log.Printf("[exec-agent] warning: failed to set credentials: %v", err)
+	}
 
 	// Start with PTY
 	ptmx, err := pty.Start(cmd)
@@ -166,7 +216,7 @@ func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []stri
 	}
 	defer ptmx.Close()
 
-	// Handle input (stdin + resize)
+	// Handle input (stdin + resize + signals)
 	go func() {
 		for {
 			req, err := stream.Recv()
@@ -181,6 +231,8 @@ func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []stri
 					Rows: uint16(resize.Rows),
 					Cols: uint16(resize.Cols),
 				})
+			} else if sig := req.GetSignal(); sig != nil {
+				s.sendSignal(cmd, sig.Signal)
 			}
 		}
 	}()
@@ -201,12 +253,15 @@ func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []stri
 		}
 	}()
 
-	// Wait for command
-	cmd.Wait()
+	// Wait for command or context cancellation
+	waitErr := cmd.Wait()
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {
 		exitCode = int32(cmd.ProcessState.ExitCode())
+	} else if waitErr != nil {
+		// If killed by timeout, exit with 124 (GNU timeout convention)
+		exitCode = 124
 	}
 
 	log.Printf("[exec-agent] TTY command finished with exit code: %d", exitCode)
@@ -215,4 +270,99 @@ func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []stri
 	return stream.Send(&pb.ExecResponse{
 		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
 	})
+}
+
+// buildEnv constructs environment variables by merging provided env with defaults
+func (s *execServer) buildEnv(envMap map[string]string) []string {
+	// Start with current environment as base
+	env := os.Environ()
+	
+	// Merge in provided environment variables
+	for k, v := range envMap {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	
+	return env
+}
+
+// buildCredentials creates syscall.Credential from user/uid fields
+func (s *execServer) buildCredentials(start *pb.ExecStart) (*syscall.Credential, error) {
+	// If neither user nor uid is specified, return nil (run as current user)
+	if start.User == "" && start.Uid == 0 {
+		return nil, nil
+	}
+	
+	var uid, gid uint32
+	
+	// UID takes precedence over username
+	if start.Uid > 0 {
+		uid = uint32(start.Uid)
+		// Try to get GID from passwd, fallback to same as UID
+		if u, err := user.LookupId(strconv.Itoa(int(start.Uid))); err == nil {
+			if g, err := strconv.Atoi(u.Gid); err == nil {
+				gid = uint32(g)
+			} else {
+				gid = uid
+			}
+		} else {
+			gid = uid
+		}
+	} else if start.User != "" {
+		// Look up user by name
+		u, err := user.Lookup(start.User)
+		if err != nil {
+			return nil, fmt.Errorf("lookup user %s: %w", start.User, err)
+		}
+		
+		uidInt, err := strconv.Atoi(u.Uid)
+		if err != nil {
+			return nil, fmt.Errorf("parse uid: %w", err)
+		}
+		uid = uint32(uidInt)
+		
+		gidInt, err := strconv.Atoi(u.Gid)
+		if err != nil {
+			return nil, fmt.Errorf("parse gid: %w", err)
+		}
+		gid = uint32(gidInt)
+	}
+	
+	return &syscall.Credential{
+		Uid: uid,
+		Gid: gid,
+	}, nil
+}
+
+// sendSignal sends a Unix signal to the process
+func (s *execServer) sendSignal(cmd *exec.Cmd, sig pb.SignalType) {
+	if cmd == nil || cmd.Process == nil {
+		log.Printf("[exec-agent] cannot send signal: process not started")
+		return
+	}
+	
+	var unixSig syscall.Signal
+	switch sig {
+	case pb.SignalType_SIGHUP:
+		unixSig = syscall.SIGHUP
+	case pb.SignalType_SIGINT:
+		unixSig = syscall.SIGINT
+	case pb.SignalType_SIGQUIT:
+		unixSig = syscall.SIGQUIT
+	case pb.SignalType_SIGKILL:
+		unixSig = syscall.SIGKILL
+	case pb.SignalType_SIGTERM:
+		unixSig = syscall.SIGTERM
+	case pb.SignalType_SIGSTOP:
+		unixSig = syscall.SIGSTOP
+	case pb.SignalType_SIGCONT:
+		unixSig = syscall.SIGCONT
+	default:
+		log.Printf("[exec-agent] unknown signal type: %v", sig)
+		return
+	}
+	
+	log.Printf("[exec-agent] sending signal %v to process %d", sig, cmd.Process.Pid)
+	if err := cmd.Process.Signal(unixSig); err != nil {
+		log.Printf("[exec-agent] failed to send signal: %v", err)
+	}
 }
