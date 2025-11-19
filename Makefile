@@ -76,8 +76,15 @@ generate-wire: $(WIRE)
 	@echo "Generating wire code..."
 	cd ./cmd/api && $(WIRE)
 
+# Generate gRPC code from proto
+generate-grpc:
+	@echo "Generating gRPC code from proto..."
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		lib/system/exec.proto
+
 # Generate all code
-generate-all: oapi-generate generate-vmm-client generate-wire
+generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 
 # Check if binaries exist, download if missing
 .PHONY: ensure-ch-binaries

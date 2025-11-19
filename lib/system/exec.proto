@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package exec;
+
+option go_package = "github.com/onkernel/hypeman/lib/system";
+
+// ExecService provides remote command execution in guest VMs
+service ExecService {
+  // Exec executes a command with bidirectional streaming
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+}
+
+// ExecRequest represents messages from client to server
+message ExecRequest {
+  oneof request {
+    ExecStart start = 1;      // Initial exec request
+    bytes stdin = 2;          // Stdin data
+    WindowSize resize = 3;    // TTY resize event
+  }
+}
+
+// ExecStart initiates command execution
+message ExecStart {
+  repeated string command = 1;  // Command and arguments
+  bool tty = 2;                 // Allocate pseudo-TTY
+}
+
+// WindowSize represents TTY dimensions
+message WindowSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+// ExecResponse represents messages from server to client
+message ExecResponse {
+  oneof response {
+    bytes stdout = 1;     // Stdout data
+    bytes stderr = 2;     // Stderr data
+    int32 exit_code = 3;  // Command exit code (final message)
+  }
+}
+

@@ -1,57 +1,26 @@
 package main
 
 import (
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"time"
 
 	"github.com/creack/pty"
 	"github.com/mdlayher/vsock"
+	pb "github.com/onkernel/hypeman/lib/system"
+	"google.golang.org/grpc"
 )
 
-// Logging helpers with [exec-agent] prefix
-func logInfo(format string, v ...interface{}) {
-	log.Printf("[exec-agent] "+format, v...)
-}
-
-func logError(format string, v ...interface{}) {
-	log.Printf("[exec-agent] ERROR: "+format, v...)
-}
-
-const (
-	StreamStdin  byte = 0
-	StreamStdout byte = 1
-	StreamStderr byte = 2
-	StreamError  byte = 3
-	StreamResize byte = 4
-)
-
-type ExecRequest struct {
-	Command []string `json:"command"`
-	TTY     bool     `json:"tty"`
-}
-
-type ResizeMessage struct {
-	Width  uint16 `json:"width"`
-	Height uint16 `json:"height"`
-}
-
-type ExitMessage struct {
-	Status struct {
-		Code int `json:"code"`
-	} `json:"status"`
+// execServer implements the gRPC ExecService
+type execServer struct {
+	pb.UnimplementedExecServiceServer
 }
 
 func main() {
-	// Listen on vsock port 2222 using socket API
-	// Retry a few times as virtio-vsock device may take a moment to initialize
-	var l net.Listener
+	// Listen on vsock port 2222 with retries
+	var l *vsock.Listener
 	var err error
 	
 	for i := 0; i < 10; i++ {
@@ -59,145 +28,58 @@ func main() {
 		if err == nil {
 			break
 		}
-		logInfo("vsock listen attempt %d/10 failed: %v (retrying in 1s)", i+1, err)
+		log.Printf("[exec-agent] vsock listen attempt %d/10 failed: %v (retrying in 1s)", i+1, err)
 		time.Sleep(1 * time.Second)
 	}
 	
 	if err != nil {
-		logError("failed to listen on vsock port 2222 after retries: %v", err)
-		os.Exit(1)
+		log.Fatalf("[exec-agent] failed to listen on vsock port 2222 after retries: %v", err)
 	}
 	defer l.Close()
 
-	logInfo("listening on vsock port 2222")
+	log.Println("[exec-agent] listening on vsock port 2222")
 
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			logError("accept error: %v", err)
-			continue
-		}
+	// Create gRPC server
+	grpcServer := grpc.NewServer()
+	pb.RegisterExecServiceServer(grpcServer, &execServer{})
 
-		logInfo("accepted connection from %s", conn.RemoteAddr())
-		go handleConnection(conn)
+	// Serve gRPC over vsock
+	if err := grpcServer.Serve(l); err != nil {
+		log.Fatalf("[exec-agent] gRPC server failed: %v", err)
 	}
 }
 
-func handleConnection(conn net.Conn) {
-	defer func() {
-		if r := recover(); r != nil {
-			logError("handleConnection panicked: %v", r)
-		}
-		conn.Close()
-	}()
-	
-	logInfo("handling connection from %s", conn.RemoteAddr())
+// Exec handles command execution with bidirectional streaming
+func (s *execServer) Exec(stream pb.ExecService_ExecServer) error {
+	log.Printf("[exec-agent] new exec stream")
 
-	// Read first frame (should be exec request on stdin stream)
-	streamType, data, err := readFrame(conn)
+	// Receive start request
+	req, err := stream.Recv()
 	if err != nil {
-		logError("read request: %v", err)
-		return
+		return fmt.Errorf("receive start request: %w", err)
 	}
 
-	if streamType != StreamStdin {
-		sendError(conn, "first message must be stdin with exec request")
-		return
+	start := req.GetStart()
+	if start == nil {
+		return fmt.Errorf("first message must be ExecStart")
 	}
 
-	var req ExecRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		sendError(conn, fmt.Sprintf("invalid request: %v", err))
-		return
+	command := start.Command
+	if len(command) == 0 {
+		command = []string{"/bin/sh"}
 	}
 
-	if len(req.Command) == 0 {
-		req.Command = []string{"/bin/sh"}
-	}
+	log.Printf("[exec-agent] exec: command=%v tty=%v", command, start.Tty)
 
-	logInfo("exec: command=%v tty=%v", req.Command, req.TTY)
-
-	if req.TTY {
-		executeTTY(conn, req.Command)
-	} else {
-		executeNoTTY(conn, req.Command)
+	if start.Tty {
+		return s.executeTTY(stream, command)
 	}
+	return s.executeNoTTY(stream, command)
 }
 
-func executeTTY(conn net.Conn, command []string) {
-	// Chroot into container before executing
-	cmd := exec.Command("chroot", append([]string{"/overlay/newroot"}, command...)...)
-	cmd.Env = os.Environ()
-
-	// Start with PTY
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		sendError(conn, fmt.Sprintf("start pty: %v", err))
-		return
-	}
-	defer ptmx.Close()
-
-	done := make(chan struct{})
-
-	// Handle input (stdin + resize)
-	go func() {
-		defer close(done)
-		for {
-			streamType, data, err := readFrame(conn)
-			if err != nil {
-				return
-			}
-
-			switch streamType {
-			case StreamStdin:
-				ptmx.Write(data)
-			case StreamResize:
-				var resize ResizeMessage
-				if err := json.Unmarshal(data, &resize); err == nil {
-					pty.Setsize(ptmx, &pty.Winsize{
-						Rows: resize.Height,
-						Cols: resize.Width,
-					})
-				}
-			}
-		}
-	}()
-
-	// Stream output
-	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				sendFrame(conn, StreamStdout, buf[:n])
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	<-done
-	cmd.Wait()
-
-	// Send exit code
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
-	sendExit(conn, exitCode) // Ignore error in TTY mode
-
-	// Graceful shutdown
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.CloseWrite()
-	} else if unixConn, ok := conn.(*net.UnixConn); ok {
-		unixConn.CloseWrite()
-	}
-	io.Copy(io.Discard, conn)
-}
-
-func executeNoTTY(conn net.Conn, command []string) {
-	// Chroot into container before executing
+// executeNoTTY executes command without TTY
+func (s *execServer) executeNoTTY(stream pb.ExecService_ExecServer, command []string) error {
+	// Chroot into container
 	cmd := exec.Command("chroot", append([]string{"/overlay/newroot"}, command...)...)
 	cmd.Env = os.Environ()
 
@@ -206,36 +88,32 @@ func executeNoTTY(conn net.Conn, command []string) {
 	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		sendError(conn, fmt.Sprintf("start: %v", err))
-		return
+		return fmt.Errorf("start command: %w", err)
 	}
 
-	// Handle stdin in background (don't block on it)
+	// Handle stdin in background
 	go func() {
 		defer stdin.Close()
 		for {
-			streamType, data, err := readFrame(conn)
+			req, err := stream.Recv()
 			if err != nil {
 				return
 			}
-			if streamType == StreamStdin {
+			if data := req.GetStdin(); data != nil {
 				stdin.Write(data)
 			}
 		}
 	}()
 
-	// Use channels to wait for stdout/stderr to finish
-	stdoutDone := make(chan struct{})
-	stderrDone := make(chan struct{})
-
 	// Stream stdout
 	go func() {
-		defer close(stdoutDone)
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 32 * 1024)
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
-				sendFrame(conn, StreamStdout, buf[:n])
+				stream.Send(&pb.ExecResponse{
+					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
+				})
 			}
 			if err != nil {
 				return
@@ -245,12 +123,13 @@ func executeNoTTY(conn net.Conn, command []string) {
 
 	// Stream stderr
 	go func() {
-		defer close(stderrDone)
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 32 * 1024)
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
-				sendFrame(conn, StreamStderr, buf[:n])
+				stream.Send(&pb.ExecResponse{
+					Response: &pb.ExecResponse_Stderr{Stderr: buf[:n]},
+				})
 			}
 			if err != nil {
 				return
@@ -258,88 +137,82 @@ func executeNoTTY(conn net.Conn, command []string) {
 		}
 	}()
 
-	// Wait for command to finish (don't wait for stdin)
-	err := cmd.Wait()
-	
-	logInfo("command finished: err=%v", err)
+	// Wait for command to finish
+	cmd.Wait()
 
-	// Wait for stdout/stderr goroutines to finish reading all data
-	logInfo("waiting for stdout to close...")
-	<-stdoutDone
-	logInfo("waiting for stderr to close...")
-	<-stderrDone
-	logInfo("stdout/stderr streams closed")
-
-	exitCode := 0
+	exitCode := int32(0)
 	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+		exitCode = int32(cmd.ProcessState.ExitCode())
 	}
-	
-	logInfo("computed exit code: %d, sending...", exitCode)
-	if err := sendExit(conn, exitCode); err != nil {
-		logError("error sending exit: %v", err)
-		return
-	}
-	logInfo("exit sent successfully")
-	
-	// Close the write side to signal we're done
-	// This sends a FIN packet but keeps the connection open for reading
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.CloseWrite()
-	} else if unixConn, ok := conn.(*net.UnixConn); ok {
-		unixConn.CloseWrite()
-	}
-	
-	// Wait for client to close the connection by reading until EOF
-	// This ensures the client has received all data including the exit code
-	// properly before we fully close the socket.
-	io.Copy(io.Discard, conn)
-	
-	logInfo("connection closed by client")
+
+	log.Printf("[exec-agent] command finished with exit code: %d", exitCode)
+
+	// Send exit code
+	return stream.Send(&pb.ExecResponse{
+		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
+	})
 }
 
-func readFrame(conn net.Conn) (byte, []byte, error) {
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return 0, nil, err
-	}
+// executeTTY executes command with TTY
+func (s *execServer) executeTTY(stream pb.ExecService_ExecServer, command []string) error {
+	// Chroot into container
+	cmd := exec.Command("chroot", append([]string{"/overlay/newroot"}, command...)...)
+	cmd.Env = os.Environ()
 
-	streamType := header[0]
-	length := binary.BigEndian.Uint32(header[1:5])
-
-	data := make([]byte, length)
-	if _, err := io.ReadFull(conn, data); err != nil {
-		return 0, nil, err
-	}
-
-	return streamType, data, nil
-}
-
-func sendFrame(conn net.Conn, streamType byte, data []byte) error {
-	header := make([]byte, 5)
-	header[0] = streamType
-	binary.BigEndian.PutUint32(header[1:5], uint32(len(data)))
-
-	if _, err := conn.Write(header); err != nil {
-		return err
-	}
-	if _, err := conn.Write(data); err != nil {
-		return err
-	}
-	return nil
-}
-
-func sendError(conn net.Conn, msg string) {
-	sendFrame(conn, StreamError, []byte(msg))
-}
-
-func sendExit(conn net.Conn, code int) error {
-	exit := ExitMessage{}
-	exit.Status.Code = code
-	data, err := json.Marshal(exit)
+	// Start with PTY
+	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("start pty: %w", err)
 	}
-	return sendFrame(conn, StreamError, data)
-}
+	defer ptmx.Close()
 
+	// Handle input (stdin + resize)
+	go func() {
+		for {
+			req, err := stream.Recv()
+			if err != nil {
+				return
+			}
+
+			if data := req.GetStdin(); data != nil {
+				ptmx.Write(data)
+			} else if resize := req.GetResize(); resize != nil {
+				pty.Setsize(ptmx, &pty.Winsize{
+					Rows: uint16(resize.Rows),
+					Cols: uint16(resize.Cols),
+				})
+			}
+		}
+	}()
+
+	// Stream output
+	go func() {
+		buf := make([]byte, 32 * 1024)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				stream.Send(&pb.ExecResponse{
+					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
+				})
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for command
+	cmd.Wait()
+
+	exitCode := int32(0)
+	if cmd.ProcessState != nil {
+		exitCode = int32(cmd.ProcessState.ExitCode())
+	}
+
+	log.Printf("[exec-agent] TTY command finished with exit code: %d", exitCode)
+
+	// Send exit code
+	return stream.Send(&pb.ExecResponse{
+		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
+	})
+}
