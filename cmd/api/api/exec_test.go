@@ -118,18 +118,24 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, actualInst.VsockSocket, "vsock socket path should be set")
 	t.Logf("vsock CID: %d, socket: %s", actualInst.VsockCID, actualInst.VsockSocket)
 
-	// Capture console log on failure
+	// Capture console log on failure with exec-agent filtering
 	t.Cleanup(func() {
 		if t.Failed() {
 			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
 			if consoleData, err := os.ReadFile(consolePath); err == nil {
-				t.Logf("=== Console Log (Failure) ===")
-				t.Logf("%s", string(consoleData))
-				t.Logf("=== End Console Log ===")
+				lines := strings.Split(string(consoleData), "\n")
+				
+				// Print exec-agent specific logs
+				t.Logf("=== Exec Agent Logs ===")
+				for _, line := range lines {
+					if strings.Contains(line, "[exec-agent]") {
+						t.Logf("%s", line)
+					}
+				}
 			}
 		}
 	})
-	
+
 	// Check if vsock socket exists
 	if _, err := os.Stat(actualInst.VsockSocket); err != nil {
 		t.Logf("vsock socket does not exist: %v", err)
@@ -169,6 +175,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotNil(t, exit, "exit status should be returned")
 	require.Equal(t, 0, exit.Code, "whoami should exit with code 0")
 	
+
 	// Verify output
 	outStr := stdout.String()
 	t.Logf("Command output: %q", outStr)
@@ -217,47 +224,3 @@ func (b *outputBuffer) Write(p []byte) (n int, err error) {
 func (b *outputBuffer) String() string {
 	return b.buf.String()
 }
-
-// TestVsockCIDGeneration tests the vsock CID generation logic
-func TestVsockCIDGeneration(t *testing.T) {
-	testCases := []struct {
-		id          string
-		expectedMin int64
-		expectedMax int64
-	}{
-		{"abc123", 3, 4294967294},
-		{"xyz789", 3, 4294967294},
-		{"test-id-here", 3, 4294967294},
-		{"a", 3, 4294967294},
-		{"verylonginstanceid12345", 3, 4294967294},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.id, func(t *testing.T) {
-			cid := generateVsockCID(tc.id)
-			require.GreaterOrEqual(t, cid, tc.expectedMin, "CID must be >= 3")
-			require.LessOrEqual(t, cid, tc.expectedMax, "CID must be < 2^32-1")
-		})
-	}
-
-	// Test consistency - same ID should always produce same CID
-	cid1 := generateVsockCID("consistent-test")
-	cid2 := generateVsockCID("consistent-test")
-	require.Equal(t, cid1, cid2, "Same instance ID should produce same CID")
-}
-
-// generateVsockCID is re-declared here for testing
-func generateVsockCID(instanceID string) int64 {
-	idPrefix := instanceID
-	if len(idPrefix) > 8 {
-		idPrefix = idPrefix[:8]
-	}
-
-	var sum int64
-	for _, c := range idPrefix {
-		sum = sum*37 + int64(c)
-	}
-
-	return (sum % 4294967292) + 3
-}
-

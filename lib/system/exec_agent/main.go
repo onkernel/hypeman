@@ -15,6 +15,15 @@ import (
 	"github.com/mdlayher/vsock"
 )
 
+// Logging helpers with [exec-agent] prefix
+func logInfo(format string, v ...interface{}) {
+	log.Printf("[exec-agent] "+format, v...)
+}
+
+func logError(format string, v ...interface{}) {
+	log.Printf("[exec-agent] ERROR: "+format, v...)
+}
+
 const (
 	StreamStdin  byte = 0
 	StreamStdout byte = 1
@@ -50,25 +59,26 @@ func main() {
 		if err == nil {
 			break
 		}
-		log.Printf("vsock listen attempt %d/10 failed: %v (retrying in 1s)", i+1, err)
+		logInfo("vsock listen attempt %d/10 failed: %v (retrying in 1s)", i+1, err)
 		time.Sleep(1 * time.Second)
 	}
 	
 	if err != nil {
-		log.Fatalf("failed to listen on vsock port 2222 after retries: %v", err)
+		logError("failed to listen on vsock port 2222 after retries: %v", err)
+		os.Exit(1)
 	}
 	defer l.Close()
 
-	log.Println("exec-agent: listening on vsock port 2222")
+	logInfo("listening on vsock port 2222")
 
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			log.Printf("accept error: %v", err)
+			logError("accept error: %v", err)
 			continue
 		}
 
-		log.Printf("accepted connection from %s", conn.RemoteAddr())
+		logInfo("accepted connection from %s", conn.RemoteAddr())
 		go handleConnection(conn)
 	}
 }
@@ -76,17 +86,17 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("handleConnection panicked: %v", r)
+			logError("handleConnection panicked: %v", r)
 		}
 		conn.Close()
 	}()
 	
-	log.Printf("handling connection from %s", conn.RemoteAddr())
+	logInfo("handling connection from %s", conn.RemoteAddr())
 
 	// Read first frame (should be exec request on stdin stream)
 	streamType, data, err := readFrame(conn)
 	if err != nil {
-		log.Printf("read request: %v", err)
+		logError("read request: %v", err)
 		return
 	}
 
@@ -105,7 +115,7 @@ func handleConnection(conn net.Conn) {
 		req.Command = []string{"/bin/sh"}
 	}
 
-	log.Printf("exec: command=%v tty=%v", req.Command, req.TTY)
+	logInfo("exec: command=%v tty=%v", req.Command, req.TTY)
 
 	if req.TTY {
 		executeTTY(conn, req.Command)
@@ -251,24 +261,24 @@ func executeNoTTY(conn net.Conn, command []string) {
 	// Wait for command to finish (don't wait for stdin)
 	err := cmd.Wait()
 	
-	log.Printf("command finished: err=%v", err)
+	logInfo("command finished: err=%v", err)
 
 	// Wait for stdout/stderr goroutines to finish reading all data
 	<-stdoutDone
 	<-stderrDone
-	log.Printf("stdout/stderr streams closed")
+	logInfo("stdout/stderr streams closed")
 
 	exitCode := 0
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	
-	log.Printf("sending exit code: %d", exitCode)
+	logInfo("sending exit code: %d", exitCode)
 	if err := sendExit(conn, exitCode); err != nil {
-		log.Printf("error sending exit: %v", err)
+		logError("error sending exit: %v", err)
 		return
 	}
-	log.Printf("exit sent successfully")
+	logInfo("exit sent successfully")
 	
 	// Close the write side to signal we're done
 	// This sends a FIN packet but keeps the connection open for reading
@@ -283,7 +293,7 @@ func executeNoTTY(conn net.Conn, command []string) {
 	// properly before we fully close the socket.
 	io.Copy(io.Discard, conn)
 	
-	log.Printf("connection closed by client")
+	logInfo("connection closed by client")
 }
 
 func readFrame(conn net.Conn) (byte, []byte, error) {
