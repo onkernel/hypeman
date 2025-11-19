@@ -21,71 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SignalType represents Unix signals
-type SignalType int32
-
-const (
-	SignalType_SIGNAL_UNSPECIFIED SignalType = 0
-	SignalType_SIGHUP             SignalType = 1
-	SignalType_SIGINT             SignalType = 2
-	SignalType_SIGQUIT            SignalType = 3
-	SignalType_SIGKILL            SignalType = 9
-	SignalType_SIGTERM            SignalType = 15
-	SignalType_SIGSTOP            SignalType = 19
-	SignalType_SIGCONT            SignalType = 18
-)
-
-// Enum value maps for SignalType.
-var (
-	SignalType_name = map[int32]string{
-		0:  "SIGNAL_UNSPECIFIED",
-		1:  "SIGHUP",
-		2:  "SIGINT",
-		3:  "SIGQUIT",
-		9:  "SIGKILL",
-		15: "SIGTERM",
-		19: "SIGSTOP",
-		18: "SIGCONT",
-	}
-	SignalType_value = map[string]int32{
-		"SIGNAL_UNSPECIFIED": 0,
-		"SIGHUP":             1,
-		"SIGINT":             2,
-		"SIGQUIT":            3,
-		"SIGKILL":            9,
-		"SIGTERM":            15,
-		"SIGSTOP":            19,
-		"SIGCONT":            18,
-	}
-)
-
-func (x SignalType) Enum() *SignalType {
-	p := new(SignalType)
-	*p = x
-	return p
-}
-
-func (x SignalType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (SignalType) Descriptor() protoreflect.EnumDescriptor {
-	return file_lib_exec_exec_proto_enumTypes[0].Descriptor()
-}
-
-func (SignalType) Type() protoreflect.EnumType {
-	return &file_lib_exec_exec_proto_enumTypes[0]
-}
-
-func (x SignalType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use SignalType.Descriptor instead.
-func (SignalType) EnumDescriptor() ([]byte, []int) {
-	return file_lib_exec_exec_proto_rawDescGZIP(), []int{0}
-}
-
 // ExecRequest represents messages from client to server
 type ExecRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -93,8 +28,6 @@ type ExecRequest struct {
 	//
 	//	*ExecRequest_Start
 	//	*ExecRequest_Stdin
-	//	*ExecRequest_Resize
-	//	*ExecRequest_Signal
 	Request       isExecRequest_Request `protobuf_oneof:"request"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -155,24 +88,6 @@ func (x *ExecRequest) GetStdin() []byte {
 	return nil
 }
 
-func (x *ExecRequest) GetResize() *WindowSize {
-	if x != nil {
-		if x, ok := x.Request.(*ExecRequest_Resize); ok {
-			return x.Resize
-		}
-	}
-	return nil
-}
-
-func (x *ExecRequest) GetSignal() *Signal {
-	if x != nil {
-		if x, ok := x.Request.(*ExecRequest_Signal); ok {
-			return x.Signal
-		}
-	}
-	return nil
-}
-
 type isExecRequest_Request interface {
 	isExecRequest_Request()
 }
@@ -185,32 +100,18 @@ type ExecRequest_Stdin struct {
 	Stdin []byte `protobuf:"bytes,2,opt,name=stdin,proto3,oneof"` // Stdin data
 }
 
-type ExecRequest_Resize struct {
-	Resize *WindowSize `protobuf:"bytes,3,opt,name=resize,proto3,oneof"` // TTY resize event
-}
-
-type ExecRequest_Signal struct {
-	Signal *Signal `protobuf:"bytes,4,opt,name=signal,proto3,oneof"` // Signal to send to process
-}
-
 func (*ExecRequest_Start) isExecRequest_Request() {}
 
 func (*ExecRequest_Stdin) isExecRequest_Request() {}
-
-func (*ExecRequest_Resize) isExecRequest_Request() {}
-
-func (*ExecRequest_Signal) isExecRequest_Request() {}
 
 // ExecStart initiates command execution
 type ExecStart struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Command        []string               `protobuf:"bytes,1,rep,name=command,proto3" json:"command,omitempty"`                                                                   // Command and arguments
 	Tty            bool                   `protobuf:"varint,2,opt,name=tty,proto3" json:"tty,omitempty"`                                                                          // Allocate pseudo-TTY
-	User           string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`                                                                         // Username to run as (optional)
-	Uid            int32                  `protobuf:"varint,4,opt,name=uid,proto3" json:"uid,omitempty"`                                                                          // UID to run as (optional, overrides user)
-	Env            map[string]string      `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Environment variables
-	Cwd            string                 `protobuf:"bytes,6,opt,name=cwd,proto3" json:"cwd,omitempty"`                                                                           // Working directory (optional)
-	TimeoutSeconds int32                  `protobuf:"varint,7,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`                              // Execution timeout in seconds (0 = no timeout)
+	Env            map[string]string      `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Environment variables
+	Cwd            string                 `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`                                                                           // Working directory (optional)
+	TimeoutSeconds int32                  `protobuf:"varint,5,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`                              // Execution timeout in seconds (0 = no timeout)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -259,20 +160,6 @@ func (x *ExecStart) GetTty() bool {
 	return false
 }
 
-func (x *ExecStart) GetUser() string {
-	if x != nil {
-		return x.User
-	}
-	return ""
-}
-
-func (x *ExecStart) GetUid() int32 {
-	if x != nil {
-		return x.Uid
-	}
-	return 0
-}
-
 func (x *ExecStart) GetEnv() map[string]string {
 	if x != nil {
 		return x.Env
@@ -294,104 +181,6 @@ func (x *ExecStart) GetTimeoutSeconds() int32 {
 	return 0
 }
 
-// WindowSize represents TTY dimensions
-type WindowSize struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
-	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WindowSize) Reset() {
-	*x = WindowSize{}
-	mi := &file_lib_exec_exec_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WindowSize) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WindowSize) ProtoMessage() {}
-
-func (x *WindowSize) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_exec_exec_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WindowSize.ProtoReflect.Descriptor instead.
-func (*WindowSize) Descriptor() ([]byte, []int) {
-	return file_lib_exec_exec_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *WindowSize) GetRows() uint32 {
-	if x != nil {
-		return x.Rows
-	}
-	return 0
-}
-
-func (x *WindowSize) GetCols() uint32 {
-	if x != nil {
-		return x.Cols
-	}
-	return 0
-}
-
-// Signal represents a signal to send to the process
-type Signal struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Signal        SignalType             `protobuf:"varint,1,opt,name=signal,proto3,enum=exec.SignalType" json:"signal,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Signal) Reset() {
-	*x = Signal{}
-	mi := &file_lib_exec_exec_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Signal) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Signal) ProtoMessage() {}
-
-func (x *Signal) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_exec_exec_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Signal.ProtoReflect.Descriptor instead.
-func (*Signal) Descriptor() ([]byte, []int) {
-	return file_lib_exec_exec_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *Signal) GetSignal() SignalType {
-	if x != nil {
-		return x.Signal
-	}
-	return SignalType_SIGNAL_UNSPECIFIED
-}
-
 // ExecResponse represents messages from server to client
 type ExecResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -407,7 +196,7 @@ type ExecResponse struct {
 
 func (x *ExecResponse) Reset() {
 	*x = ExecResponse{}
-	mi := &file_lib_exec_exec_proto_msgTypes[4]
+	mi := &file_lib_exec_exec_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +208,7 @@ func (x *ExecResponse) String() string {
 func (*ExecResponse) ProtoMessage() {}
 
 func (x *ExecResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_exec_exec_proto_msgTypes[4]
+	mi := &file_lib_exec_exec_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +221,7 @@ func (x *ExecResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecResponse.ProtoReflect.Descriptor instead.
 func (*ExecResponse) Descriptor() ([]byte, []int) {
-	return file_lib_exec_exec_proto_rawDescGZIP(), []int{4}
+	return file_lib_exec_exec_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ExecResponse) GetResponse() isExecResponse_Response {
@@ -495,48 +284,26 @@ var File_lib_exec_exec_proto protoreflect.FileDescriptor
 
 const file_lib_exec_exec_proto_rawDesc = "" +
 	"\n" +
-	"\x13lib/exec/exec.proto\x12\x04exec\"\xad\x01\n" +
+	"\x13lib/exec/exec.proto\x12\x04exec\"Y\n" +
 	"\vExecRequest\x12'\n" +
 	"\x05start\x18\x01 \x01(\v2\x0f.exec.ExecStartH\x00R\x05start\x12\x16\n" +
-	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x12*\n" +
-	"\x06resize\x18\x03 \x01(\v2\x10.exec.WindowSizeH\x00R\x06resize\x12&\n" +
-	"\x06signal\x18\x04 \x01(\v2\f.exec.SignalH\x00R\x06signalB\t\n" +
-	"\arequest\"\xfc\x01\n" +
+	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdinB\t\n" +
+	"\arequest\"\xd6\x01\n" +
 	"\tExecStart\x12\x18\n" +
 	"\acommand\x18\x01 \x03(\tR\acommand\x12\x10\n" +
-	"\x03tty\x18\x02 \x01(\bR\x03tty\x12\x12\n" +
-	"\x04user\x18\x03 \x01(\tR\x04user\x12\x10\n" +
-	"\x03uid\x18\x04 \x01(\x05R\x03uid\x12*\n" +
-	"\x03env\x18\x05 \x03(\v2\x18.exec.ExecStart.EnvEntryR\x03env\x12\x10\n" +
-	"\x03cwd\x18\x06 \x01(\tR\x03cwd\x12'\n" +
-	"\x0ftimeout_seconds\x18\a \x01(\x05R\x0etimeoutSeconds\x1a6\n" +
+	"\x03tty\x18\x02 \x01(\bR\x03tty\x12*\n" +
+	"\x03env\x18\x03 \x03(\v2\x18.exec.ExecStart.EnvEntryR\x03env\x12\x10\n" +
+	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12'\n" +
+	"\x0ftimeout_seconds\x18\x05 \x01(\x05R\x0etimeoutSeconds\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"4\n" +
-	"\n" +
-	"WindowSize\x12\x12\n" +
-	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
-	"\x04cols\x18\x02 \x01(\rR\x04cols\"2\n" +
-	"\x06Signal\x12(\n" +
-	"\x06signal\x18\x01 \x01(\x0e2\x10.exec.SignalTypeR\x06signal\"m\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"m\n" +
 	"\fExecResponse\x12\x18\n" +
 	"\x06stdout\x18\x01 \x01(\fH\x00R\x06stdout\x12\x18\n" +
 	"\x06stderr\x18\x02 \x01(\fH\x00R\x06stderr\x12\x1d\n" +
 	"\texit_code\x18\x03 \x01(\x05H\x00R\bexitCodeB\n" +
 	"\n" +
-	"\bresponse*}\n" +
-	"\n" +
-	"SignalType\x12\x16\n" +
-	"\x12SIGNAL_UNSPECIFIED\x10\x00\x12\n" +
-	"\n" +
-	"\x06SIGHUP\x10\x01\x12\n" +
-	"\n" +
-	"\x06SIGINT\x10\x02\x12\v\n" +
-	"\aSIGQUIT\x10\x03\x12\v\n" +
-	"\aSIGKILL\x10\t\x12\v\n" +
-	"\aSIGTERM\x10\x0f\x12\v\n" +
-	"\aSIGSTOP\x10\x13\x12\v\n" +
-	"\aSIGCONT\x10\x122@\n" +
+	"\bresponse2@\n" +
 	"\vExecService\x121\n" +
 	"\x04Exec\x12\x11.exec.ExecRequest\x1a\x12.exec.ExecResponse(\x010\x01B&Z$github.com/onkernel/hypeman/lib/execb\x06proto3"
 
@@ -552,30 +319,23 @@ func file_lib_exec_exec_proto_rawDescGZIP() []byte {
 	return file_lib_exec_exec_proto_rawDescData
 }
 
-var file_lib_exec_exec_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lib_exec_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_lib_exec_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_lib_exec_exec_proto_goTypes = []any{
-	(SignalType)(0),      // 0: exec.SignalType
-	(*ExecRequest)(nil),  // 1: exec.ExecRequest
-	(*ExecStart)(nil),    // 2: exec.ExecStart
-	(*WindowSize)(nil),   // 3: exec.WindowSize
-	(*Signal)(nil),       // 4: exec.Signal
-	(*ExecResponse)(nil), // 5: exec.ExecResponse
-	nil,                  // 6: exec.ExecStart.EnvEntry
+	(*ExecRequest)(nil),  // 0: exec.ExecRequest
+	(*ExecStart)(nil),    // 1: exec.ExecStart
+	(*ExecResponse)(nil), // 2: exec.ExecResponse
+	nil,                  // 3: exec.ExecStart.EnvEntry
 }
 var file_lib_exec_exec_proto_depIdxs = []int32{
-	2, // 0: exec.ExecRequest.start:type_name -> exec.ExecStart
-	3, // 1: exec.ExecRequest.resize:type_name -> exec.WindowSize
-	4, // 2: exec.ExecRequest.signal:type_name -> exec.Signal
-	6, // 3: exec.ExecStart.env:type_name -> exec.ExecStart.EnvEntry
-	0, // 4: exec.Signal.signal:type_name -> exec.SignalType
-	1, // 5: exec.ExecService.Exec:input_type -> exec.ExecRequest
-	5, // 6: exec.ExecService.Exec:output_type -> exec.ExecResponse
-	6, // [6:7] is the sub-list for method output_type
-	5, // [5:6] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	1, // 0: exec.ExecRequest.start:type_name -> exec.ExecStart
+	3, // 1: exec.ExecStart.env:type_name -> exec.ExecStart.EnvEntry
+	0, // 2: exec.ExecService.Exec:input_type -> exec.ExecRequest
+	2, // 3: exec.ExecService.Exec:output_type -> exec.ExecResponse
+	3, // [3:4] is the sub-list for method output_type
+	2, // [2:3] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_lib_exec_exec_proto_init() }
@@ -586,10 +346,8 @@ func file_lib_exec_exec_proto_init() {
 	file_lib_exec_exec_proto_msgTypes[0].OneofWrappers = []any{
 		(*ExecRequest_Start)(nil),
 		(*ExecRequest_Stdin)(nil),
-		(*ExecRequest_Resize)(nil),
-		(*ExecRequest_Signal)(nil),
 	}
-	file_lib_exec_exec_proto_msgTypes[4].OneofWrappers = []any{
+	file_lib_exec_exec_proto_msgTypes[2].OneofWrappers = []any{
 		(*ExecResponse_Stdout)(nil),
 		(*ExecResponse_Stderr)(nil),
 		(*ExecResponse_ExitCode)(nil),
@@ -599,14 +357,13 @@ func file_lib_exec_exec_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_exec_exec_proto_rawDesc), len(file_lib_exec_exec_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   6,
+			NumEnums:      0,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_lib_exec_exec_proto_goTypes,
 		DependencyIndexes: file_lib_exec_exec_proto_depIdxs,
-		EnumInfos:         file_lib_exec_exec_proto_enumTypes,
 		MessageInfos:      file_lib_exec_exec_proto_msgTypes,
 	}.Build()
 	File_lib_exec_exec_proto = out.File

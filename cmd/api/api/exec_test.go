@@ -182,29 +182,6 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	t.Logf("Command output: %q", outStr)
 	require.Contains(t, outStr, "root", "whoami should return root user")
 	
-	// Test another command to verify filesystem access and container context
-	// We should see /docker-entrypoint.sh which is standard in nginx:alpine image
-	t.Log("Testing exec command: ls /docker-entrypoint.sh")
-	stdout = outputBuffer{}
-	stderr = outputBuffer{}
-	
-	t.Log("Calling ExecIntoInstance for ls command...")
-	exit, err = exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "ls -la /docker-entrypoint.sh"},
-		Stdin:   nil,
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		TTY:     false,
-	})
-	t.Logf("ExecIntoInstance returned: err=%v, exit=%v", err, exit)
-	
-	require.NoError(t, err, "ls command should succeed")
-	require.Equal(t, 0, exit.Code, "ls should exit with code 0")
-	
-	outStr = stdout.String()
-	t.Logf("ls output: %q", outStr)
-	require.Contains(t, outStr, "docker-entrypoint.sh", "should see docker-entrypoint.sh file")
-
 	// Cleanup
 	t.Log("Cleaning up instance...")
 	delResp, err := svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{

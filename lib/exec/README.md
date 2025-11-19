@@ -30,8 +30,6 @@ Container (chroot /overlay/newroot)
   {
     "command": ["bash", "-c", "whoami"],
     "tty": true,
-    "user": "www-data",     // optional: username to run as
-    "uid": 1000,            // optional: UID to run as (overrides user)
     "env": {                // optional: environment variables
       "FOO": "bar"
     },
@@ -56,10 +54,8 @@ Container (chroot /overlay/newroot)
 gRPC streaming RPC with protobuf messages:
 
 **Request (client → server):**
-- `ExecStart`: Command, TTY flag, user/UID, environment variables, working directory, timeout
+- `ExecStart`: Command, TTY flag, environment variables, working directory, timeout
 - `stdin`: Input data bytes
-- `WindowSize`: Terminal resize events (TTY mode)
-- `Signal`: Send Unix signal to process (SIGINT, SIGTERM, SIGKILL, etc.)
 
 **Response (server → client):**
 - `stdout`: Output data bytes
@@ -117,10 +113,6 @@ export HYPEMAN_TOKEN="your-jwt-token"
 ./bin/hypeman-exec <instance-id> /bin/sh
 ./bin/hypeman-exec -it <instance-id> /bin/sh
 
-# Run as specific user
-./bin/hypeman-exec --user www-data <instance-id> whoami
-./bin/hypeman-exec --uid 1000 <instance-id> whoami
-
 # With environment variables
 ./bin/hypeman-exec --env FOO=bar --env BAZ=qux <instance-id> env
 ./bin/hypeman-exec -e FOO=bar -e BAZ=qux <instance-id> env
@@ -132,8 +124,7 @@ export HYPEMAN_TOKEN="your-jwt-token"
 ./bin/hypeman-exec --timeout 30 <instance-id> /long-running-script.sh
 
 # Combined options
-./bin/hypeman-exec --user www-data --cwd /app --env ENV=prod \
-  <instance-id> php artisan migrate
+./bin/hypeman-exec --cwd /app --env ENV=prod <instance-id> php artisan migrate
 ```
 
 ### Options
@@ -141,8 +132,6 @@ export HYPEMAN_TOKEN="your-jwt-token"
 - `-it`: Interactive mode with TTY (auto-detected if stdin/stdout are terminals)
 - `--token`: JWT token (or use `HYPEMAN_TOKEN` env var)
 - `--api-url`: API server URL (default: `http://localhost:8080`)
-- `--user`: Username to run command as
-- `--uid`: UID to run command as (overrides `--user`)
 - `--env` / `-e`: Environment variable (KEY=VALUE, can be repeated)
 - `--cwd`: Working directory
 - `--timeout`: Execution timeout in seconds (0 = no timeout)
@@ -188,23 +177,9 @@ The guest agent logs are written to the VM console log (accessible via `/var/lib
 ```
 [exec-agent] listening on vsock port 2222
 [exec-agent] new exec stream
-[exec-agent] exec: command=[bash -c whoami] tty=true user=www-data uid=0 cwd=/app timeout=30
+[exec-agent] exec: command=[bash -c whoami] tty=true cwd=/app timeout=30
 [exec-agent] command finished with exit code: 0
 ```
-
-## Signal Support
-
-The protocol supports sending Unix signals to running processes:
-
-- `SIGHUP` (1): Hangup
-- `SIGINT` (2): Interrupt (Ctrl-C)
-- `SIGQUIT` (3): Quit
-- `SIGKILL` (9): Kill (cannot be caught)
-- `SIGTERM` (15): Terminate
-- `SIGSTOP` (19): Stop process
-- `SIGCONT` (18): Continue process
-
-Signals can be sent via the WebSocket stream (implementation detail for advanced clients).
 
 ## Timeout Behavior
 
@@ -214,21 +189,11 @@ When a timeout is specified:
 - The exit code will be `124` (GNU timeout convention)
 - Timeout is enforced in the guest, so network issues won't cause false timeouts
 
-## PTY Signal Handling & Architecture
+## Architecture
 
-For TTY mode (interactive shells), **the exec-agent runs inside the container namespace** - this is critical for proper signal handling:
-
-### Why This Matters
-When the PTY and shell are in the same namespace, Ctrl+C (byte `0x03`) is correctly interpreted as SIGINT and delivered to the process. Running exec-agent in initrd namespace and using chroot for commands creates a namespace boundary that breaks signal handling.
-
-### Implementation
-The init script (`lib/system/init_script.go`):
-1. Copies exec-agent into `/overlay/newroot/usr/local/bin/`
-2. Bind-mounts `/dev/pts` so PTY devices are accessible in container
-3. Runs exec-agent with `chroot /overlay/newroot`
-
-This ensures:
-- Ctrl+C, Ctrl+Z, and other terminal control sequences work correctly
-- PTY and process share the same namespace
-- No chroot wrapper needed when executing commands (agent is already in container)
+**exec-agent runs inside the container namespace**:
+- Init script copies agent binary into `/overlay/newroot/usr/local/bin/`
+- Bind-mounts `/dev/pts` so PTY devices are accessible
+- Runs agent with `chroot /overlay/newroot`
+- Commands execute directly (no chroot wrapper needed)
 

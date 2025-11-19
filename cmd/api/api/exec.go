@@ -30,8 +30,6 @@ var upgrader = websocket.Upgrader{
 type ExecRequest struct {
 	Command []string          `json:"command"`
 	TTY     bool              `json:"tty"`
-	User    string            `json:"user,omitempty"`
-	UID     int32             `json:"uid,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Cwd     string            `json:"cwd,omitempty"`
 	Timeout int32             `json:"timeout,omitempty"` // seconds
@@ -111,8 +109,6 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		"subject", subject,
 		"command", execReq.Command,
 		"tty", execReq.TTY,
-		"user", execReq.User,
-		"uid", execReq.UID,
 		"cwd", execReq.Cwd,
 		"timeout", execReq.Timeout,
 	)
@@ -127,8 +123,6 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		Stdout:  wsConn,
 		Stderr:  wsConn,
 		TTY:     execReq.TTY,
-		User:    execReq.User,
-		UID:     execReq.UID,
 		Env:     execReq.Env,
 		Cwd:     execReq.Cwd,
 		Timeout: execReq.Timeout,
