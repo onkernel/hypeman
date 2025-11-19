@@ -22,7 +22,8 @@ Container (chroot /overlay/newroot)
 
 ### 1. API Layer (`cmd/api/api/exec.go`)
 
-- WebSocket endpoint: `POST /instances/{id}/exec`
+- WebSocket endpoint: `GET /instances/{id}/exec`
+- **Note**: Uses GET method because WebSocket connections MUST be initiated with GET per RFC 6455 (the WebSocket specification). Even though this is semantically a command execution (which would normally be POST), the WebSocket upgrade handshake requires GET.
 - Upgrades HTTP to WebSocket for bidirectional streaming
 - First WebSocket message must be JSON with exec parameters:
   ```json
