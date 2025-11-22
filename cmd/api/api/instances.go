@@ -86,14 +86,21 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		env = *request.Body.Env
 	}
 
+	// Parse network enabled (default: true)
+	networkEnabled := true
+	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
+		networkEnabled = *request.Body.Network.Enabled
+	}
+
 	domainReq := instances.CreateInstanceRequest{
-		Name:        request.Body.Name,
-		Image:       request.Body.Image,
-		Size:        size,
-		HotplugSize: hotplugSize,
-		OverlaySize: overlaySize,
-		Vcpus:       vcpus,
-		Env:         env,
+		Name:           request.Body.Name,
+		Image:          request.Body.Image,
+		Size:           size,
+		HotplugSize:    hotplugSize,
+		OverlaySize:    overlaySize,
+		Vcpus:          vcpus,
+		Env:            env,
+		NetworkEnabled: networkEnabled,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -293,6 +300,30 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
+	// Build network object
+	var network *struct {
+		Enabled *bool   `json:"enabled,omitempty"`
+		Name    *string `json:"name,omitempty"`
+	}
+	if inst.NetworkEnabled {
+		networkName := "default"
+		network = &struct {
+			Enabled *bool   `json:"enabled,omitempty"`
+			Name    *string `json:"name,omitempty"`
+		}{
+			Enabled: &inst.NetworkEnabled,
+			Name:    &networkName,
+		}
+	} else {
+		networkDisabled := false
+		network = &struct {
+			Enabled *bool   `json:"enabled,omitempty"`
+			Name    *string `json:"name,omitempty"`
+		}{
+			Enabled: &networkDisabled,
+		}
+	}
+
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
 		Name:        inst.Name,
@@ -302,6 +333,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HotplugSize: &hotplugSizeStr,
 		OverlaySize: &overlaySizeStr,
 		Vcpus:       &inst.Vcpus,
+		Network:     network,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,

@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
@@ -22,12 +24,21 @@ import (
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 	
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
+	cfg := &config.Config{
+		DataDir:       tmpDir,
+		BridgeName:    "vmbr0",
+		SubnetCIDR:    "192.168.100.0/24",
+		SubnetGateway: "192.168.100.1",
+	}
+	
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1)
 	require.NoError(t, err)
 	
-	systemManager := system.NewManager(paths.New(tmpDir))
+	systemManager := system.NewManager(p)
+	networkManager := network.NewManager(p, cfg)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -159,6 +170,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 		HotplugSize: 512 * 1024 * 1024,      // 512MB
 		OverlaySize: 10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:       1,
+		NetworkEnabled: false, // No network for tests
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
 		},
@@ -239,10 +251,19 @@ func TestStorageOperations(t *testing.T) {
 	// Test storage layer without starting VMs
 	tmpDir := t.TempDir()
 
-	imageManager, _ := images.NewManager(paths.New(tmpDir), 1)
-	systemManager := system.NewManager(paths.New(tmpDir))
+	cfg := &config.Config{
+		DataDir:       tmpDir,
+		BridgeName:    "vmbr0",
+		SubnetCIDR:    "192.168.100.0/24",
+		SubnetGateway: "192.168.100.1",
+	}
+
+	p := paths.New(tmpDir)
+	imageManager, _ := images.NewManager(p, 1)
+	systemManager := system.NewManager(p)
+	networkManager := network.NewManager(p, cfg)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -343,6 +364,7 @@ func TestStandbyAndRestore(t *testing.T) {
 		HotplugSize: 512 * 1024 * 1024,
 		OverlaySize: 10 * 1024 * 1024 * 1024,
 		Vcpus:       1,
+		NetworkEnabled: false, // No network for tests
 		Env:         map[string]string{},
 	}
 
@@ -369,6 +391,22 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.DirExists(t, snapshotDir)
 	assert.FileExists(t, filepath.Join(snapshotDir, "memory-ranges"))
 	// Cloud Hypervisor creates various snapshot files, just verify directory exists
+	
+	// DEBUG: Check snapshot files (for comparison with networking test)
+	t.Log("DEBUG: Snapshot files for non-network instance:")
+	entries, _ := os.ReadDir(snapshotDir)
+	for _, entry := range entries {
+		info, _ := entry.Info()
+		t.Logf("  - %s (size: %d bytes)", entry.Name(), info.Size())
+	}
+	
+	// DEBUG: Check console.log file size before restore
+	consoleLogPath := filepath.Join(tmpDir, "guests", inst.Id, "logs", "console.log")
+	var consoleLogSizeBefore int64
+	if info, err := os.Stat(consoleLogPath); err == nil {
+		consoleLogSizeBefore = info.Size()
+		t.Logf("DEBUG: console.log size before restore: %d bytes", consoleLogSizeBefore)
+	}
 
 	// Restore instance
 	t.Log("Restoring instance...")
@@ -376,6 +414,16 @@ func TestStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
+	
+	// DEBUG: Check console.log file size after restore
+	if info, err := os.Stat(consoleLogPath); err == nil {
+		consoleLogSizeAfter := info.Size()
+		t.Logf("DEBUG: console.log size after restore: %d bytes", consoleLogSizeAfter)
+		t.Logf("DEBUG: File size diff: %d bytes", consoleLogSizeAfter-consoleLogSizeBefore)
+		if consoleLogSizeAfter < consoleLogSizeBefore {
+			t.Logf("DEBUG: WARNING! console.log was TRUNCATED (lost %d bytes)", consoleLogSizeBefore-consoleLogSizeAfter)
+		}
+	}
 
 	// Cleanup (no sleep needed - DeleteInstance handles process cleanup)
 	t.Log("Cleaning up...")

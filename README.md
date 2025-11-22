@@ -8,10 +8,17 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Go 1.25.4+**, **KVM**, **erofs-utils**
+**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
 
 ```bash
+# Verify prerequisites
 mkfs.erofs --version
+dnsmasq --version
+```
+
+**Install on Debian/Ubuntu:**
+```bash
+sudo apt-get install erofs-utils dnsmasq
 ```
 
 **KVM Access:** User must be in `kvm` group for VM access:
@@ -19,6 +26,37 @@ mkfs.erofs --version
 sudo usermod -aG kvm $USER
 # Log out and back in, or use: newgrp kvm
 ```
+
+**Network Capabilities:** 
+
+Before running or testing Hypeman, ensure IPv4 forwarding is enabled:
+
+```bash
+# Enable IPv4 forwarding (temporary - until reboot)
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# Enable IPv4 forwarding (persistent across reboots)
+echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**Why:** Required for routing traffic between VM network and external network.
+
+The hypeman binary needs network administration capabilities to create bridges and TAP devices:
+```bash
+# After building, grant network capabilities
+sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
+
+# For development builds
+sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' ./bin/hypeman
+
+# Verify capabilities
+getcap ./bin/hypeman
+```
+
+**Note:** The `i` (inheritable) flag allows child processes spawned by hypeman (like `ip` and `iptables` commands) to inherit capabilities via the ambient capability set.
+
+**Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 
 ### Configuration
 
@@ -73,8 +111,17 @@ The server will start on port 8080 (configurable via `PORT` environment variable
 
 ### Testing
 
+Network tests require elevated permissions to create bridges and TAP devices.
+
 ```bash
 make test
+```
+
+The test command compiles test binaries, grants capabilities via `sudo setcap`, then runs tests as the current user (not root). You may be prompted for your sudo password during the capability grant step.
+
+**Cleanup stale resources** (if tests were killed with Ctrl+C):
+```bash
+./scripts/cleanup-test-networks.sh
 ```
 
 ### Code Generation

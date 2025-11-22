@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -88,6 +89,22 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) 
 		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
 	
+	// Build network configuration section
+	networkSection := ""
+	if inst.NetworkEnabled {
+		// Get allocation from network manager (includes all network config)
+		alloc, err := m.networkManager.GetAllocation(context.Background(), inst.Id)
+		if err == nil && alloc != nil {
+			networkSection = fmt.Sprintf(`
+# Network configuration
+GUEST_IP="%s"
+GUEST_MASK="%s"
+GUEST_GW="%s"
+GUEST_DNS="%s"
+`, alloc.IP, alloc.Netmask, alloc.Gateway, alloc.Gateway)
+		}
+	}
+	
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
@@ -99,12 +116,13 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s`, 
+%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
 		workdir,
 		envLines.String(),
+		networkSection,
 	)
 	
 	return script

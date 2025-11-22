@@ -9,6 +9,7 @@ import (
 	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
@@ -100,28 +101,35 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Get default kernel version
+	// 6. Determine network based on NetworkEnabled flag
+	networkName := ""
+	if req.NetworkEnabled {
+		networkName = "default"
+	}
+
+	// 7. Get default kernel version
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
-	// 7. Create instance metadata
+	// 8. Create instance metadata
 	stored := &StoredMetadata{
-		Id:            id,
-		Name:          req.Name,
-		Image:         req.Image,
-		Size:          size,
-		HotplugSize:   hotplugSize,
-		OverlaySize:   overlaySize,
-		Vcpus:         vcpus,
-		Env:           req.Env,
-		CreatedAt:     time.Now(),
-		StartedAt:     nil,
-		StoppedAt:     nil,
-		KernelVersion: string(kernelVer),
-		CHVersion:     vmm.V49_0, // Use latest
-		SocketPath:    m.paths.InstanceSocket(id),
-		DataDir:       m.paths.InstanceDir(id),
-		VsockCID:      vsockCID,
-		VsockSocket:   vsockSocket,
+		Id:             id,
+		Name:           req.Name,
+		Image:          req.Image,
+		Size:           size,
+		HotplugSize:    hotplugSize,
+		OverlaySize:    overlaySize,
+		Vcpus:          vcpus,
+		Env:            req.Env,
+		NetworkEnabled: req.NetworkEnabled,
+		CreatedAt:      time.Now(),
+		StartedAt:      nil,
+		StoppedAt:      nil,
+		KernelVersion:  string(kernelVer),
+		CHVersion:      vmm.V49_0, // Use latest
+		SocketPath:     m.paths.InstanceSocket(id),
+		DataDir:        m.paths.InstanceDir(id),
+		VsockCID:       vsockCID,
+		VsockSocket:    vsockSocket,
 	}
 
 	// 8. Ensure directories
@@ -139,33 +147,65 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 10. Create config disk (needs Instance for buildVMConfig)
+	// 10. Allocate network (if network enabled)
+	var netConfig *network.NetworkConfig
+	if networkName != "" {
+		log.DebugContext(ctx, "allocating network", "id", id, "network", networkName)
+		netConfig, err = m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
+			InstanceID:   id,
+			InstanceName: req.Name,
+		})
+		if err != nil {
+			log.ErrorContext(ctx, "failed to allocate network", "id", id, "network", networkName, "error", err)
+			m.deleteInstanceData(id) // Cleanup
+			return nil, fmt.Errorf("allocate network: %w", err)
+		}
+	}
+
+	// 11. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "id", id)
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "id", id, "error", err)
+		// Cleanup network allocation
+		// Network cleanup: TAP devices are removed when ReleaseNetwork is called.
+		// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
+		if networkName != "" {
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 11. Save metadata
+	// 12. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
+		// Cleanup network allocation
+		if networkName != "" {
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 12. Start VMM and boot VM
+	// 13. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
-	if err := m.startAndBootVM(ctx, stored, imageInfo); err != nil {
+	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
+		// Cleanup network allocation
+		if networkName != "" {
+			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
 
-	// 13. Update timestamp after VM is running
+	// 14. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 
@@ -219,6 +259,7 @@ func (m *manager) startAndBootVM(
 	ctx context.Context,
 	stored *StoredMetadata,
 	imageInfo *images.Image,
+	netConfig *network.NetworkConfig,
 ) error {
 	log := logger.FromContext(ctx)
 	
@@ -241,7 +282,7 @@ func (m *manager) startAndBootVM(
 
 	// Build VM configuration matching Cloud Hypervisor VmConfig
 	inst := &Instance{StoredMetadata: *stored}
-	vmConfig, err := m.buildVMConfig(inst, imageInfo)
+	vmConfig, err := m.buildVMConfig(inst, imageInfo, netConfig)
 	if err != nil {
 		return fmt.Errorf("build vm config: %w", err)
 	}
@@ -291,7 +332,7 @@ func (m *manager) startAndBootVM(
 }
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
-func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.VmConfig, error) {
+func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (vmm.VmConfig, error) {
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()
@@ -358,6 +399,17 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Mode: vmm.ConsoleConfigMode("Off"),
 	}
 
+	// Network configuration (optional, use passed config)
+	var nets *[]vmm.NetConfig
+	if netConfig != nil {
+		nets = &[]vmm.NetConfig{{
+			Tap:  &netConfig.TAPDevice,
+			Ip:   &netConfig.IP,
+			Mac:  &netConfig.MAC,
+			Mask: &netConfig.Netmask,
+		}}
+	}
+
 	// vsock configuration for remote exec
 	vsock := vmm.VsockConfig{
 		Cid:    inst.VsockCID,
@@ -371,6 +423,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Disks:   &disks,
 		Serial:  &serial,
 		Console: &console,
+		Net:     nets,
 		Vsock:   &vsock,
 	}, nil
 }
