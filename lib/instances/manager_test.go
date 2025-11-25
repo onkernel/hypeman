@@ -29,6 +29,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		BridgeName:    "vmbr0",
 		SubnetCIDR:    "192.168.0.0/16",
 		SubnetGateway: "192.168.0.1",
+		DNSServer:     "1.1.1.1",
 	}
 	
 	p := paths.New(tmpDir)
@@ -277,6 +278,7 @@ func TestStorageOperations(t *testing.T) {
 		BridgeName:    "vmbr0",
 		SubnetCIDR:    "192.168.0.0/16",
 		SubnetGateway: "192.168.0.1",
+		DNSServer:     "1.1.1.1",
 	}
 
 	p := paths.New(tmpDir)
