@@ -80,6 +80,9 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "exec-test",
 			Image: "docker.io/library/nginx:alpine",
+			Network: &oapi.CreateInstanceRequestNetwork{
+				Enabled: ptr.Bool(false),
+			},
 		},
 	})
 	require.NoError(t, err)

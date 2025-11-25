@@ -37,17 +37,17 @@ func TestGenerateTAPName(t *testing.T) {
 		{
 			name:       "8 char ID",
 			instanceID: "abcd1234",
-			want:       "tap-abcd1234",
+			want:       "hype-abcd1234",
 		},
 		{
 			name:       "longer ID truncates",
 			instanceID: "abcd1234efgh5678",
-			want:       "tap-abcd1234",
+			want:       "hype-abcd1234",
 		},
 		{
 			name:       "uppercase converted to lowercase",
 			instanceID: "ABCD1234",
-			want:       "tap-abcd1234",
+			want:       "hype-abcd1234",
 		},
 	}
 	
