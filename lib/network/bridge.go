@@ -27,11 +27,37 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	// 2. Check if bridge already exists
 	existing, err := netlink.LinkByName(name)
 	if err == nil {
-		// Bridge exists, verify it's up
+		// Bridge exists - verify it has the expected gateway IP
+		addrs, err := netlink.AddrList(existing, netlink.FAMILY_V4)
+		if err != nil {
+			return fmt.Errorf("list bridge addresses: %w", err)
+		}
+
+		expectedGW := net.ParseIP(gateway)
+		hasExpectedIP := false
+		var actualIPs []string
+		for _, addr := range addrs {
+			actualIPs = append(actualIPs, addr.IPNet.String())
+			if addr.IP.Equal(expectedGW) {
+				hasExpectedIP = true
+			}
+		}
+
+		if !hasExpectedIP {
+			ones, _ := ipNet.Mask.Size()
+			return fmt.Errorf("bridge %s exists with IPs %v but expected gateway %s/%d. "+
+				"Options: (1) update SUBNET_CIDR and SUBNET_GATEWAY to match the existing bridge, "+
+				"(2) use a different BRIDGE_NAME, "+
+				"or (3) delete the bridge with: sudo ip link delete %s",
+				name, actualIPs, gateway, ones, name)
+		}
+
+		// Bridge exists with correct IP, verify it's up
 		if err := netlink.LinkSetUp(existing); err != nil {
 			return fmt.Errorf("set bridge up: %w", err)
 		}
-		log.InfoContext(ctx, "bridge ready", "bridge", name, "status", "existing")
+		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
+
 		// Still need to ensure iptables rules are configured
 		if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 			return fmt.Errorf("setup iptables: %w", err)
