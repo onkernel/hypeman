@@ -107,7 +107,7 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		}
 	}
 
-	// Add FORWARD rules for outbound connections
+	// Allow bridge-initiated flows to traverse the host uplink while conntrack tracks new and ongoing sessions
 	checkForwardOut := exec.Command("iptables", "-C", "FORWARD",
 		"-i", bridgeName, "-o", uplink,
 		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
@@ -128,7 +128,7 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		}
 	}
 
-	// Add FORWARD rules for inbound responses
+	// Permit return traffic from the uplink back to the bridge only when conntrack marks it established or related
 	checkForwardIn := exec.Command("iptables", "-C", "FORWARD",
 		"-i", uplink, "-o", bridgeName,
 		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
@@ -200,7 +200,7 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) err
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
-	// 5. Set isolation mode (requires kernel support and capabilities)
+	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
 		// Use shell command for bridge_slave isolated flag
 		// netlink library doesn't expose this flag yet

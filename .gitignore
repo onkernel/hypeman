@@ -20,3 +20,4 @@ lib/vmm/binaries/cloud-hypervisor/*/*/cloud-hypervisor
 cloud-hypervisor
 cloud-hypervisor/**
 lib/system/exec_agent/exec-agent
+.cursor/**

@@ -62,9 +62,80 @@ getcap ./bin/hypeman
 
 #### Environment variables
 
+Hypeman can be configured using the following environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | HTTP server port | `8080` |
+| `DATA_DIR` | Directory for storing VM images, volumes, and other data | `/var/lib/hypeman` |
+| `BRIDGE_NAME` | Name of the network bridge for VM networking | `vmbr0` |
+| `SUBNET_CIDR` | CIDR notation for the VM network subnet | `192.168.0.0/16` |
+| `SUBNET_GATEWAY` | Gateway IP address for the VM network | `192.168.0.1` |
+| `UPLINK_INTERFACE` | Host network interface to use for VM internet access | `eth0` |
+| `JWT_SECRET` | Secret key for JWT authentication (required for production) | _(empty)_ |
+| `DNS_SERVER` | DNS server IP address for VMs | `1.1.1.1` |
+| `MAX_CONCURRENT_BUILDS` | Maximum number of concurrent image builds | `1` |
+| `MAX_OVERLAY_SIZE` | Maximum size for overlay filesystem | `100GB` |
+
+**Important: Subnet Configuration**
+
+The default subnet `192.168.0.0/16` covers all addresses from `192.168.0.0` to `192.168.255.255`. This may conflict with your existing network if:
+- Your local router uses `192.168.x.x` addresses (common for home networks)
+- You're running Docker (often uses `172.17.0.0/16`)
+- You have VPNs or other virtual networks configured
+
+**Check for conflicts:**
+```bash
+# View your current network routes
+ip route show
+
+# Check what IP your machine has
+ip addr show
+```
+
+**Recommended alternative subnets to avoid conflicts:**
+- `10.100.0.0/16` - Private range, less commonly used
+- `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and AWS (172.31.x.x) ranges
+- `192.168.250.0/24` - Smaller range in the high end of 192.168.x.x space
+
+**Example configuration for a conflict-free setup:**
+```bash
+# In your .env file
+SUBNET_CIDR=10.100.0.0/16
+SUBNET_GATEWAY=10.100.0.1
+```
+
+**Note:** The gateway IP must be within the subnet range you specify. For example, if you use `10.100.0.0/16`, your gateway should be something like `10.100.0.1`.
+
+**Finding the uplink interface (`UPLINK_INTERFACE`)**
+
+`UPLINK_INTERFACE` tells Hypeman which host interface to use for routing VM traffic to the outside world (for iptables MASQUERADE rules). On many hosts this is `eth0`, but laptops and more complex setups often use Wi‑Fi or other names.
+
+**Quick way to discover it:**
+```bash
+# Ask the kernel which interface is used to reach the internet
+ip route get 1.1.1.1
+```
+Look for the `dev` field in the output, for example:
+```text
+1.1.1.1 via 192.168.12.1 dev wlp2s0 src 192.168.12.98
+```
+In this case, `wlp2s0` is the uplink interface, so you would set:
+```bash
+UPLINK_INTERFACE=wlp2s0
+```
+
+You can also inspect all routes:
+```bash
+ip route show
+```
+Pick the interface used by the default route (usually the line starting with `default`). Avoid using local bridges like `docker0`, `br-...`, `virbr0`, or `vmbr0` as the uplink; those are typically internal virtual networks, not your actual internet-facing interface.
+
+**Setup:**
+
 ```bash
 cp .env.example .env
-# Edit .env and set JWT_SECRET
+# Edit .env and set JWT_SECRET and other configuration values
 ```
 
 #### Data directory
@@ -92,18 +163,12 @@ make build
 ```
 ### Running the Server
 
-1. Copy the example environment file and modify the values:
-```bash
-cp .env.example .env
-# Edit .env and set JWT_SECRET and other configuration values
-```
-
-2. Generate a JWT token for testing (optional):
+1. Generate a JWT token for testing (optional):
 ```bash
 make gen-jwt
 ```
 
-3. Start the server with hot-reload for development:
+2. Start the server with hot-reload for development:
 ```bash
 make dev
 ```

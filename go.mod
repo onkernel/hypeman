@@ -79,4 +79,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
+	gvisor.dev/gvisor v0.0.0-20251125014920-fc40e232ff54 // indirect
 )

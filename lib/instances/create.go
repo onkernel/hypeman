@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
@@ -132,6 +133,13 @@ func (m *manager) createInstance(
 		VsockSocket:    vsockSocket,
 	}
 
+	// Setup cleanup stack for automatic rollback on errors
+	cu := cleanup.Make(func() {
+		log.DebugContext(ctx, "cleaning up instance on error", "id", id)
+		m.deleteInstanceData(id)
+	})
+	defer cu.Clean()
+
 	// 8. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "id", id)
 	if err := m.ensureDirectories(id); err != nil {
@@ -143,7 +151,6 @@ func (m *manager) createInstance(
 	log.DebugContext(ctx, "creating overlay disk", "id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "id", id, "error", err)
-		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
@@ -157,9 +164,16 @@ func (m *manager) createInstance(
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "id", id, "network", networkName, "error", err)
-			m.deleteInstanceData(id) // Cleanup
 			return nil, fmt.Errorf("allocate network: %w", err)
 		}
+		// Add network cleanup to stack
+		cu.Add(func() {
+			// Network cleanup: TAP devices are removed when ReleaseNetwork is called.
+			// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
+			if netAlloc, err := m.networkManager.GetAllocation(ctx, id); err == nil {
+				m.networkManager.ReleaseNetwork(ctx, netAlloc)
+			}
+		})
 	}
 
 	// 11. Create config disk (needs Instance for buildVMConfig)
@@ -167,14 +181,6 @@ func (m *manager) createInstance(
 	log.DebugContext(ctx, "creating config disk", "id", id)
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "id", id, "error", err)
-		// Cleanup network allocation
-		// Network cleanup: TAP devices are removed when ReleaseNetwork is called.
-		// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
-		if networkName != "" {
-			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
-		}
-		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
@@ -183,12 +189,6 @@ func (m *manager) createInstance(
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
-		// Cleanup network allocation
-		if networkName != "" {
-			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
-		}
-		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
@@ -196,12 +196,6 @@ func (m *manager) createInstance(
 	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
-		// Cleanup network allocation
-		if networkName != "" {
-			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
-		}
-		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
 
@@ -215,6 +209,9 @@ func (m *manager) createInstance(
 		// Instance is recoverable, state will be derived
 		log.WarnContext(ctx, "failed to update metadata after VM start", "id", id, "error", err)
 	}
+
+	// Success - release cleanup stack (prevent cleanup)
+	cu.Release()
 
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)

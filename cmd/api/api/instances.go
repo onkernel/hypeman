@@ -301,27 +301,16 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
 	// Build network object
-	var network *struct {
+	networkEnabled := inst.NetworkEnabled
+	network := &struct {
 		Enabled *bool   `json:"enabled,omitempty"`
 		Name    *string `json:"name,omitempty"`
+	}{
+		Enabled: &networkEnabled,
 	}
 	if inst.NetworkEnabled {
 		networkName := "default"
-		network = &struct {
-			Enabled *bool   `json:"enabled,omitempty"`
-			Name    *string `json:"name,omitempty"`
-		}{
-			Enabled: &inst.NetworkEnabled,
-			Name:    &networkName,
-		}
-	} else {
-		networkDisabled := false
-		network = &struct {
-			Enabled *bool   `json:"enabled,omitempty"`
-			Name    *string `json:"name,omitempty"`
-		}{
-			Enabled: &networkDisabled,
-		}
+		network.Name = &networkName
 	}
 
 	oapiInst := oapi.Instance{

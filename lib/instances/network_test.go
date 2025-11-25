@@ -23,13 +23,9 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	manager, tmpDir := setupTestManager(t)
 	ctx := context.Background()
 
-	// Setup image manager for pulling alpine
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
-	require.NoError(t, err)
-
 	// Pull alpine image (lightweight, fast)
 	t.Log("Pulling alpine:latest image...")
-	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+	alpineImage, err := manager.imageManager.CreateImage(ctx, images.CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	})
 	require.NoError(t, err)
@@ -38,7 +34,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Waiting for image build to complete...")
 	imageName := alpineImage.Name
 	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, imageName)
+		img, err := manager.imageManager.GetImage(ctx, imageName)
 		if err == nil && img.Status == images.StatusReady {
 			alpineImage = img
 			break
