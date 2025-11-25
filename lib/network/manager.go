@@ -14,7 +14,7 @@ import (
 // Manager defines the interface for network management
 type Manager interface {
 	// Lifecycle
-	Initialize(ctx context.Context) error
+	Initialize(ctx context.Context, runningInstanceIDs []string) error
 
 	// Instance network operations (called by instance manager)
 	AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
@@ -42,8 +42,9 @@ func NewManager(p *paths.Paths, cfg *config.Config) Manager {
 	}
 }
 
-// Initialize initializes the network manager and creates default network
-func (m *manager) Initialize(ctx context.Context) error {
+// Initialize initializes the network manager and creates default network.
+// runningInstanceIDs should contain IDs of instances currently running (have active VMM).
+func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) error {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "initializing network manager",
 		"bridge", m.config.BridgeName,
@@ -54,6 +55,11 @@ func (m *manager) Initialize(ctx context.Context) error {
 	// createBridge is idempotent - handles both new and existing bridges
 	if err := m.createBridge(ctx, m.config.BridgeName, m.config.SubnetGateway, m.config.SubnetCIDR); err != nil {
 		return fmt.Errorf("setup default network: %w", err)
+	}
+
+	// Cleanup orphaned TAP devices from previous runs (crashes, power loss, etc.)
+	if deleted := m.CleanupOrphanedTAPs(ctx, runningInstanceIDs); deleted > 0 {
+		log.InfoContext(ctx, "cleaned up orphaned TAP devices", "count", deleted)
 	}
 
 	log.InfoContext(ctx, "network manager initialized")

@@ -317,3 +317,49 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	}, nil
 }
 
+// CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
+// runningInstanceIDs is a list of instance IDs that currently have a running VMM.
+// Returns the number of TAPs deleted.
+func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []string) int {
+	log := logger.FromContext(ctx)
+
+	// Build set of expected TAP names for running instances
+	expectedTAPs := make(map[string]bool)
+	for _, id := range runningInstanceIDs {
+		tapName := generateTAPName(id)
+		expectedTAPs[tapName] = true
+	}
+
+	// List all network interfaces
+	links, err := netlink.LinkList()
+	if err != nil {
+		log.WarnContext(ctx, "failed to list network links for TAP cleanup", "error", err)
+		return 0
+	}
+
+	deleted := 0
+	for _, link := range links {
+		name := link.Attrs().Name
+
+		// Only consider TAP devices with our naming prefix
+		if !strings.HasPrefix(name, TAPPrefix) {
+			continue
+		}
+
+		// Check if this TAP is expected (belongs to a running instance)
+		if expectedTAPs[name] {
+			continue
+		}
+
+		// Orphaned TAP - delete it
+		if err := m.deleteTAPDevice(name); err != nil {
+			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
+			continue
+		}
+		log.InfoContext(ctx, "deleted orphaned TAP device", "tap", name)
+		deleted++
+	}
+
+	return deleted
+}
+

@@ -56,7 +56,7 @@ func TestRestoreInstance(t *testing.T) {
 
 	// Initialize network (creates bridge if needed)
 	t.Log("Initializing network...")
-	err = manager.networkManager.Initialize(ctx)
+	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
 	t.Log("Network initialized")
 

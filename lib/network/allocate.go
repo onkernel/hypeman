@@ -263,14 +263,17 @@ func generateMAC() (string, error) {
 		buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]), nil
 }
 
+// TAPPrefix is the prefix used for hypeman TAP devices
+const TAPPrefix = "hype-"
+
 // generateTAPName generates TAP device name from instance ID
 func generateTAPName(instanceID string) string {
 	// Use first 8 chars of instance ID
-	// tap-{8chars} fits within 15-char Linux interface name limit
+	// hype-{8chars} fits within 15-char Linux interface name limit
 	shortID := instanceID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	return "tap-" + strings.ToLower(shortID)
+	return TAPPrefix + strings.ToLower(shortID)
 }
 
