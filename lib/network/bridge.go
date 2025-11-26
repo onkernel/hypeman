@@ -14,6 +14,63 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
+// Returns an error if a conflict is detected, with guidance on how to resolve it.
+func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {
+	log := logger.FromContext(ctx)
+
+	_, configuredNet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return fmt.Errorf("parse subnet: %w", err)
+	}
+
+	routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("list routes: %w", err)
+	}
+
+	for _, route := range routes {
+		if route.Dst == nil {
+			continue // Skip default route (nil Dst)
+		}
+
+		// Skip default route (0.0.0.0/0) - it matches everything but isn't a real conflict
+		if route.Dst.IP.IsUnspecified() {
+			continue
+		}
+
+		// Check if our subnet overlaps with this route's destination
+		// Overlap occurs if either network contains the other's start address
+		if configuredNet.Contains(route.Dst.IP) || route.Dst.Contains(configuredNet.IP) {
+			// Get interface name for better error message
+			ifaceName := "unknown"
+			if link, err := netlink.LinkByIndex(route.LinkIndex); err == nil {
+				ifaceName = link.Attrs().Name
+			}
+
+			// Skip if this is our own bridge (already configured from previous run)
+			if ifaceName == m.config.BridgeName {
+				continue
+			}
+
+			log.ErrorContext(ctx, "subnet conflict detected",
+				"configured_subnet", subnet,
+				"conflicting_route", route.Dst.String(),
+				"interface", ifaceName)
+
+			return fmt.Errorf("SUBNET CONFLICT: configured subnet %s overlaps with existing route %s (interface: %s)\n\n"+
+				"This will cause network connectivity issues. Please update your configuration:\n"+
+				"  - Set SUBNET_CIDR to a non-conflicting range (e.g., 10.200.0.0/16, 172.30.0.0/16)\n"+
+				"  - Set SUBNET_GATEWAY to match (e.g., 10.200.0.1, 172.30.0.1)\n\n"+
+				"To see existing routes: ip route show",
+				subnet, route.Dst.String(), ifaceName)
+		}
+	}
+
+	log.DebugContext(ctx, "no subnet conflicts detected", "subnet", subnet)
+	return nil
+}
+
 // createBridge creates or verifies a bridge interface using netlink
 func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string) error {
 	log := logger.FromContext(ctx)

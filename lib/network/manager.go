@@ -51,6 +51,11 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 		"subnet", m.config.SubnetCIDR,
 		"gateway", m.config.SubnetGateway)
 
+	// Check for subnet conflicts with existing host routes before creating bridge
+	if err := m.checkSubnetConflicts(ctx, m.config.SubnetCIDR); err != nil {
+		return err
+	}
+
 	// Ensure default network bridge exists and iptables rules are configured
 	// createBridge is idempotent - handles both new and existing bridges
 	if err := m.createBridge(ctx, m.config.BridgeName, m.config.SubnetGateway, m.config.SubnetCIDR); err != nil {
