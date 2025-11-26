@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -254,7 +255,8 @@ func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) 
 	}
 
 	for line := range r.logChan {
-		fmt.Fprintf(w, "data: %s\n\n", line)
+		jsonLine, _ := json.Marshal(line)
+		fmt.Fprintf(w, "data: %s\n\n", jsonLine)
 		flusher.Flush()
 	}
 	return nil
