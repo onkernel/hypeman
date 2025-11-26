@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"strconv"
+	"io"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/go-chi/chi/v5"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
@@ -238,80 +236,47 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// LogsHandler streams instance logs via SSE (Server-Sent Events)
-// This handler is registered outside the timeout middleware for long-running connections
+// GetInstanceLogs streams instance logs via SSE
 // With follow=false (default), streams last N lines then closes
 // With follow=true, streams last N lines then continues following new output
-func (s *ApiService) LogsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log := logger.FromContext(ctx)
-
-	instanceID := chi.URLParam(r, "id")
-
-	// Parse tail parameter
+func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
 	tail := 100
-	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
-		if parsed, err := strconv.Atoi(tailStr); err == nil && parsed > 0 {
-			tail = parsed
-		}
+	if request.Params.Tail != nil {
+		tail = *request.Params.Tail
 	}
 
-	// Parse follow parameter
-	follow := r.URL.Query().Get("follow") == "true"
+	follow := false
+	if request.Params.Follow != nil {
+		follow = *request.Params.Follow
+	}
 
-	// Start streaming logs
-	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, instanceID, tail, follow)
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, request.Id, tail, follow)
 	if err != nil {
 		if errors.Is(err, instances.ErrNotFound) {
-			http.Error(w, `{"code":"not_found","message":"instance not found"}`, http.StatusNotFound)
-			return
+			return oapi.GetInstanceLogs404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
 		}
-		log.ErrorContext(ctx, "failed to start log stream", "error", err, "id", instanceID)
-		http.Error(w, `{"code":"internal_error","message":"failed to stream logs"}`, http.StatusInternalServerError)
-		return
+		return oapi.GetInstanceLogs500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to stream logs",
+		}, nil
 	}
 
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	// Create a pipe to convert channel to io.Reader
+	pr, pw := io.Pipe()
 
-	// Get flusher for streaming
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		log.ErrorContext(ctx, "streaming not supported")
-		http.Error(w, `{"code":"internal_error","message":"streaming not supported"}`, http.StatusInternalServerError)
-		return
-	}
-
-	// Stream logs as SSE events
-	for {
-		select {
-		case <-ctx.Done():
-			log.DebugContext(ctx, "client disconnected", "id", instanceID)
-			return
-		case line, ok := <-logChan:
-			if !ok {
-				// Channel closed, stream ended (tail finished without follow)
-				log.DebugContext(ctx, "log stream ended", "id", instanceID)
-				return
-			}
+	go func() {
+		defer pw.Close()
+		for line := range logChan {
 			// Write SSE formatted event
-			fmt.Fprintf(w, "data: %s\n\n", line)
-			flusher.Flush()
+			fmt.Fprintf(pw, "data: %s\n\n", line)
 		}
-	}
-}
+	}()
 
-// GetInstanceLogs implements the strict server interface method
-// This is a stub - the actual handler is LogsHandler which is registered
-// outside the timeout middleware
-func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
-	// This should never be called as LogsHandler takes precedence in routing
-	return oapi.GetInstanceLogs500JSONResponse{
-		Code:    "internal_error",
-		Message: "logs endpoint handled by LogsHandler",
+	return oapi.GetInstanceLogs200TexteventStreamResponse{
+		Body: pr,
 	}, nil
 }
 
