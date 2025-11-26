@@ -193,6 +193,7 @@ func run() error {
 		ticker := time.NewTicker(logRotateInterval)
 		defer ticker.Stop()
 
+		logger.Info("log rotation scheduler started", "interval", app.Config.logRotateInterval, "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
 		for {
 			select {
 			case <-gctx.Done():
@@ -200,6 +201,8 @@ func run() error {
 			case <-ticker.C:
 				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.LogMaxFiles); err != nil {
 					logger.Error("log rotation failed", "error", err)
+				} else {
+					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
 				}
 			}
 		}
