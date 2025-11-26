@@ -253,6 +253,48 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
 
+	// Test streaming logs with live updates
+	t.Log("Testing log streaming with live updates...")
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+
+	logChan, err := manager.StreamInstanceLogs(streamCtx, inst.Id, 10)
+	require.NoError(t, err)
+
+	// Create unique marker
+	marker := fmt.Sprintf("STREAM_TEST_MARKER_%d", time.Now().UnixNano())
+
+	// Start collecting lines and looking for marker
+	markerFound := make(chan struct{})
+	var streamedLines []string
+	go func() {
+		for line := range logChan {
+			streamedLines = append(streamedLines, line)
+			if strings.Contains(line, marker) {
+				close(markerFound)
+				return
+			}
+		}
+	}()
+
+	// Append marker to console log file
+	consoleLogPath := p.InstanceConsoleLog(inst.Id)
+	f, err := os.OpenFile(consoleLogPath, os.O_APPEND|os.O_WRONLY, 0644)
+	require.NoError(t, err)
+	_, err = fmt.Fprintln(f, marker)
+	require.NoError(t, err)
+	f.Close()
+
+	// Wait for marker to appear in stream
+	select {
+	case <-markerFound:
+		t.Logf("Successfully received live update through stream (collected %d lines)", len(streamedLines))
+	case <-time.After(3 * time.Second):
+		streamCancel()
+		t.Fatalf("Timeout waiting for marker in stream (collected %d lines)", len(streamedLines))
+	}
+	streamCancel()
+
 	// Delete instance
 	t.Log("Deleting instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)
