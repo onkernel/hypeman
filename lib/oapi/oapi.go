@@ -270,13 +270,26 @@ type Volume struct {
 	SizeGb int `json:"size_gb"`
 }
 
-// ExecInstanceParams defines parameters for ExecInstance.
-type ExecInstanceParams struct {
-	// Command Command to execute (defaults to /bin/sh)
-	Command *[]string `form:"command,omitempty" json:"command,omitempty"`
+// ExecRequest defines the JSON message sent over WebSocket for exec requests.
+type ExecRequest struct {
+	// Command Command and arguments to execute (defaults to ["/bin/sh"])
+	Command []string `json:"command,omitempty"`
+
+	// Cwd Working directory for the command
+	Cwd *string `json:"cwd,omitempty"`
+
+	// Env Additional environment variables
+	Env *map[string]string `json:"env,omitempty"`
+
+	// Timeout Timeout in seconds (0 means no timeout)
+	Timeout *int32 `json:"timeout,omitempty"`
 
 	// Tty Allocate a pseudo-TTY
-	Tty *bool `form:"tty,omitempty" json:"tty,omitempty"`
+	Tty *bool `json:"tty,omitempty"`
+}
+
+// ExecInstanceParams defines parameters for ExecInstance.
+type ExecInstanceParams struct {
 }
 
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
@@ -1036,44 +1049,6 @@ func NewExecInstanceRequest(server string, id string, params *ExecInstanceParams
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
-	}
-
-	if params != nil {
-		queryValues := queryURL.Query()
-
-		if params.Command != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "command", runtime.ParamLocationQuery, *params.Command); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		if params.Tty != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "tty", runtime.ParamLocationQuery, *params.Tty); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("POST", queryURL.String(), nil)
@@ -3426,22 +3401,6 @@ func (siw *ServerInterfaceWrapper) ExecInstance(w http.ResponseWriter, r *http.R
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ExecInstanceParams
-
-	// ------------- Optional query parameter "command" -------------
-
-	err = runtime.BindQueryParameter("form", true, false, "command", r.URL.Query(), &params.Command)
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "command", Err: err})
-		return
-	}
-
-	// ------------- Optional query parameter "tty" -------------
-
-	err = runtime.BindQueryParameter("form", true, false, "tty", r.URL.Query(), &params.Tty)
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tty", Err: err})
-		return
-	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ExecInstance(w, r, id, params)

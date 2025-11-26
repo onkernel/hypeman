@@ -363,18 +363,33 @@ components:
     
     ExecRequest:
       type: object
-      required: [command]
       properties:
         command:
           type: array
           items:
             type: string
-          description: Command and arguments to execute
+          description: Command and arguments to execute (defaults to ["/bin/sh"])
           example: ["/bin/sh"]
         tty:
           type: boolean
           description: Allocate a pseudo-TTY
-          default: true
+          default: false
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional environment variables
+          example:
+            DEBUG: "true"
+        cwd:
+          type: string
+          description: Working directory for the command
+          example: /app
+        timeout:
+          type: integer
+          format: int32
+          description: Timeout in seconds (0 means no timeout)
+          example: 30
 
     Health:
       type: object
@@ -779,6 +794,11 @@ paths:
   /instances/{id}/exec:
     post:
       summary: Execute command in instance via vsock (WebSocket)
+      description: |
+        Upgrades the connection to WebSocket protocol for bidirectional streaming.
+        After the WebSocket connection is established, the client must send an ExecRequest
+        JSON message as the first message. Subsequent messages are binary data for stdin/stdout/stderr.
+        The server sends a final JSON message with the exit code before closing the connection.
       operationId: execInstance
       security:
         - bearerAuth: []
@@ -788,21 +808,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: command
-          in: query
-          required: false
-          schema:
-            type: array
-            items:
-              type: string
-          description: Command to execute (defaults to /bin/sh)
-        - name: tty
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: true
-          description: Allocate a pseudo-TTY
+          description: Instance identifier
       responses:
         101:
           description: Switching to WebSocket protocol
