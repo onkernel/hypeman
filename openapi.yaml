@@ -714,7 +714,7 @@ paths:
   
   /instances/{id}/logs:
     get:
-      summary: Stream instance logs (SSE)
+      summary: Get instance logs (tail)
       operationId: getInstanceLogs
       security:
         - bearerAuth: []
@@ -724,13 +724,6 @@ paths:
           required: true
           schema:
             type: string
-        - name: follow
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: false
-          description: Follow logs (stream with SSE)
         - name: tail
           in: query
           required: false
@@ -740,12 +733,48 @@ paths:
           description: Number of lines to return from end
       responses:
         200:
-          description: Log stream
+          description: Log output
           content:
-            text/event-stream:
+            text/plain:
               schema:
                 type: string
-            text/plain:
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/logs/stream:
+    get:
+      summary: Stream instance logs (SSE)
+      operationId: streamInstanceLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Number of lines to return from end before streaming
+      responses:
+        200:
+          description: Log stream (SSE)
+          content:
+            text/event-stream:
               schema:
                 type: string
         404:

@@ -89,7 +89,7 @@ func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message st
 	deadline := time.Now().Add(timeout)
 	
 	for time.Now().Before(deadline) {
-		logs, err := mgr.GetInstanceLogs(ctx, instanceID, false, 200)
+		logs, err := mgr.GetInstanceLogs(ctx, instanceID, 200)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -238,7 +238,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	var logs string
 	foundNginxStartup := false
 	for i := 0; i < 50; i++ { // Poll for up to 5 seconds (50 * 100ms)
-		logs, err = manager.GetInstanceLogs(ctx, inst.Id, false, 100)
+		logs, err = manager.GetInstanceLogs(ctx, inst.Id, 100)
 		require.NoError(t, err)
 		
 		if strings.Contains(logs, "start worker processes") {
