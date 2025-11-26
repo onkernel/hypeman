@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -200,7 +202,23 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("System files ready")
 
-	// Create instance with real nginx image (stays running)
+	// Create a volume to attach
+	p := paths.New(tmpDir)
+	volumeManager := volumes.NewManager(p)
+	t.Log("Creating volume...")
+	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+		Name:   "test-data",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vol)
+	t.Logf("Volume created: %s", vol.Id)
+
+	// Verify volume file exists and is not attached
+	assert.FileExists(t, p.VolumeData(vol.Id))
+	assert.Nil(t, vol.AttachedTo, "Volume should not be attached yet")
+
+	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
 		Name:        "test-nginx",
 		Image:       "docker.io/library/nginx:alpine",
@@ -211,6 +229,13 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 		NetworkEnabled: false, // No network for tests
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
+		},
+		Volumes: []VolumeAttachment{
+			{
+				VolumeID:  vol.Id,
+				MountPath: "/mnt/data",
+				Readonly:  false,
+			},
 		},
 	}
 
@@ -228,8 +253,19 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
 
+	// Verify volume is attached to instance
+	assert.Len(t, inst.Volumes, 1, "Instance should have 1 volume attached")
+	assert.Equal(t, vol.Id, inst.Volumes[0].VolumeID)
+	assert.Equal(t, "/mnt/data", inst.Volumes[0].MountPath)
+
+	// Verify volume shows as attached
+	vol, err = volumeManager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	require.NotNil(t, vol.AttachedTo, "Volume should be attached")
+	assert.Equal(t, inst.Id, *vol.AttachedTo)
+	assert.Equal(t, "/mnt/data", *vol.MountPath)
+
 	// Verify directories exist
-	p := paths.New(tmpDir)
 	assert.DirExists(t, p.InstanceDir(inst.Id))
 	assert.FileExists(t, p.InstanceMetadata(inst.Id))
 	assert.FileExists(t, p.InstanceOverlay(inst.Id))
@@ -269,6 +305,50 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+
+	// Test volume is accessible from inside the guest via exec
+	t.Log("Testing volume from inside guest via exec...")
+	
+	// Helper to run command in guest
+	runCmd := func(command ...string) (string, int, error) {
+		var stdout, stderr bytes.Buffer
+		exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+			Command: command,
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+			TTY:     false,
+		})
+		if err != nil {
+			return stderr.String(), -1, err
+		}
+		return strings.TrimSpace(stdout.String()), exit.Code, nil
+	}
+
+	// Verify volume mount point exists
+	output, exitCode, err := runCmd("ls", "-la", "/mnt/data")
+	require.NoError(t, err, "Should be able to ls /mnt/data")
+	assert.Equal(t, 0, exitCode, "ls /mnt/data should succeed")
+	t.Logf("Volume mount contents: %s", output)
+
+	// Write a test file to the volume
+	testContent := "hello-from-volume-test"
+	output, exitCode, err = runCmd("sh", "-c", fmt.Sprintf("echo '%s' > /mnt/data/test.txt", testContent))
+	require.NoError(t, err, "Should be able to write to volume")
+	assert.Equal(t, 0, exitCode, "Write to volume should succeed")
+
+	// Read the test file back
+	output, exitCode, err = runCmd("cat", "/mnt/data/test.txt")
+	require.NoError(t, err, "Should be able to read from volume")
+	assert.Equal(t, 0, exitCode, "Read from volume should succeed")
+	assert.Equal(t, testContent, output, "Volume content should match what was written")
+	t.Log("Volume read/write test passed!")
+
+	// Verify it's a real mount (not just a directory)
+	output, exitCode, err = runCmd("df", "/mnt/data")
+	require.NoError(t, err, "Should be able to df /mnt/data")
+	assert.Equal(t, 0, exitCode, "df /mnt/data should succeed")
+	assert.Contains(t, output, "/dev/vd", "Volume should be mounted from a block device")
+	t.Logf("Volume mount info: %s", output)
 
 	// Test streaming logs with live updates
 	t.Log("Testing log streaming with live updates...")
@@ -323,8 +403,23 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Verify instance no longer exists
 	_, err = manager.GetInstance(ctx, inst.Id)
 	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Verify volume is detached but still exists
+	vol, err = volumeManager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Nil(t, vol.AttachedTo, "Volume should be detached after instance deletion")
+	assert.FileExists(t, p.VolumeData(vol.Id), "Volume file should still exist")
+
+	// Delete volume
+	t.Log("Deleting volume...")
+	err = volumeManager.DeleteVolume(ctx, vol.Id)
+	require.NoError(t, err)
+
+	// Verify volume is gone
+	_, err = volumeManager.GetVolume(ctx, vol.Id)
+	assert.ErrorIs(t, err, volumes.ErrNotFound)
 	
-	t.Log("Instance lifecycle test complete!")
+	t.Log("Instance and volume lifecycle test complete!")
 }
 
 func TestStorageOperations(t *testing.T) {
