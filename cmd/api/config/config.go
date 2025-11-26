@@ -18,6 +18,8 @@ type Config struct {
 	DNSServer           string
 	MaxConcurrentBuilds int
 	MaxOverlaySize      string
+	LogMaxSize          string
+	LogMaxFiles         int
 }
 
 // Load loads configuration from environment variables
@@ -37,6 +39,8 @@ func Load() *Config {
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
 		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),
 		MaxOverlaySize:      getEnv("MAX_OVERLAY_SIZE", "100GB"),
+		LogMaxSize:          getEnv("LOG_MAX_SIZE", "50MB"),
+		LogMaxFiles:         getEnvInt("LOG_MAX_FILES", 1),
 	}
 
 	return cfg

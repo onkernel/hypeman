@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strconv"
 
@@ -73,4 +75,60 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 	}()
 
 	return out, nil
+}
+
+// rotateLogIfNeeded performs copytruncate rotation if file exceeds maxBytes
+// Keeps up to maxFiles old backups (.1, .2, etc.)
+func rotateLogIfNeeded(path string, maxBytes int64, maxFiles int) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Nothing to rotate
+		}
+		return fmt.Errorf("stat log file: %w", err)
+	}
+
+	if info.Size() < maxBytes {
+		return nil // Under limit, nothing to do
+	}
+
+	// Shift old backups (.1 -> .2, .2 -> .3, etc.)
+	for i := maxFiles; i >= 1; i-- {
+		oldPath := fmt.Sprintf("%s.%d", path, i)
+		newPath := fmt.Sprintf("%s.%d", path, i+1)
+
+		if i == maxFiles {
+			// Delete the oldest backup
+			os.Remove(oldPath)
+		} else {
+			// Shift to next number
+			os.Rename(oldPath, newPath)
+		}
+	}
+
+	// Copy current log to .1
+	src, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open log for rotation: %w", err)
+	}
+
+	dst, err := os.Create(path + ".1")
+	if err != nil {
+		src.Close()
+		return fmt.Errorf("create backup: %w", err)
+	}
+
+	_, err = io.Copy(dst, src)
+	src.Close()
+	dst.Close()
+	if err != nil {
+		return fmt.Errorf("copy to backup: %w", err)
+	}
+
+	// Truncate original (keeps file descriptor valid for writers)
+	if err := os.Truncate(path, 0); err != nil {
+		return fmt.Errorf("truncate log: %w", err)
+	}
+
+	return nil
 }

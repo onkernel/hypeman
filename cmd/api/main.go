@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
@@ -175,6 +176,29 @@ func run() error {
 
 		logger.Info("http server shutdown complete")
 		return nil
+	})
+
+	// Log rotation scheduler
+	grp.Go(func() error {
+		var logMaxSize datasize.ByteSize
+		if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
+			logger.Error("invalid LOG_MAX_SIZE config", "value", app.Config.LogMaxSize, "error", err)
+			return nil // Don't crash server, just skip rotation
+		}
+
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-gctx.Done():
+				return nil
+			case <-ticker.C:
+				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.LogMaxFiles); err != nil {
+					logger.Error("log rotation failed", "error", err)
+				}
+			}
+		}
 	})
 
 	return grp.Wait()
