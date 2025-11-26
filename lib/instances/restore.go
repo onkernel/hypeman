@@ -48,7 +48,7 @@ func (m *manager) restoreInstance(
 	// 4. Recreate TAP device if network enabled
 	if stored.NetworkEnabled {
 		log.DebugContext(ctx, "recreating network for restore", "id", id, "network", "default")
-		if err := m.networkManager.RecreateNetwork(ctx, id); err != nil {
+		if err := m.networkManager.RecreateAllocation(ctx, id); err != nil {
 			log.ErrorContext(ctx, "failed to recreate network", "id", id, "error", err)
 			return nil, fmt.Errorf("recreate network: %w", err)
 		}
@@ -64,7 +64,7 @@ func (m *manager) restoreInstance(
 		// power loss) would require manual cleanup or host reboot.
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+			m.networkManager.ReleaseAllocation(ctx, netAlloc)
 		}
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (m *manager) restoreInstance(
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+			m.networkManager.ReleaseAllocation(ctx, netAlloc)
 		}
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
@@ -89,7 +89,7 @@ func (m *manager) restoreInstance(
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseNetwork(ctx, netAlloc)
+			m.networkManager.ReleaseAllocation(ctx, netAlloc)
 		}
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}

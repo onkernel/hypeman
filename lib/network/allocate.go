@@ -7,18 +7,12 @@ import (
 	mathrand "math/rand"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
 )
 
-func init() {
-	// Seed RNG with current timestamp for unique random IPs each run
-	mathrand.Seed(time.Now().UnixNano())
-}
-
-// AllocateNetwork allocates IP/MAC/TAP for instance on the default network
-func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
+// CreateAllocation allocates IP/MAC/TAP for instance on the default network
+func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
 	// Acquire lock to prevent concurrent allocations from:
 	// 1. Picking the same IP address
 	// 2. Creating duplicate instance names
@@ -89,12 +83,12 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 	}, nil
 }
 
-// RecreateNetwork recreates TAP for restore from standby
+// RecreateAllocation recreates TAP for restore from standby
 // Note: No lock needed - this operation:
 // 1. Doesn't allocate new IPs (reuses existing from snapshot)
 // 2. Is already protected by instance-level locking
 // 3. Uses deterministic TAP names that can't conflict
-func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error {
+func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) error {
 	log := logger.FromContext(ctx)
 
 	// 1. Derive allocation from snapshot
@@ -126,14 +120,14 @@ func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error 
 	return nil
 }
 
-// ReleaseNetwork cleans up network allocation (shutdown/delete)
+// ReleaseAllocation cleans up network allocation (shutdown/delete)
 // Takes the allocation directly since it should be retrieved before the VMM is killed.
 // If alloc is nil, this is a no-op (network not allocated or already released).
 // Note: TAP devices created with explicit Owner/Group fields do NOT auto-delete when
 // the process closes the file descriptor. They persist in the kernel and must be
 // explicitly deleted via this function. In case of unexpected scenarios like host
 // power loss, straggler TAP devices may remain until the host is rebooted or manually cleaned up.
-func (m *manager) ReleaseNetwork(ctx context.Context, alloc *Allocation) error {
+func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) error {
 	log := logger.FromContext(ctx)
 
 	// If no allocation provided, nothing to clean up

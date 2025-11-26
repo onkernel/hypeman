@@ -158,7 +158,7 @@ func (m *manager) createInstance(
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "id", id, "network", networkName)
-		netConfig, err = m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
+		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
 			InstanceID:   id,
 			InstanceName: req.Name,
 		})
@@ -168,10 +168,10 @@ func (m *manager) createInstance(
 		}
 		// Add network cleanup to stack
 		cu.Add(func() {
-			// Network cleanup: TAP devices are removed when ReleaseNetwork is called.
+			// Network cleanup: TAP devices are removed when ReleaseAllocation is called.
 			// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
 			if netAlloc, err := m.networkManager.GetAllocation(ctx, id); err == nil {
-				m.networkManager.ReleaseNetwork(ctx, netAlloc)
+				m.networkManager.ReleaseAllocation(ctx, netAlloc)
 			}
 		})
 	}

@@ -184,11 +184,6 @@ make test
 
 The test command compiles test binaries, grants capabilities via `sudo setcap`, then runs tests as the current user (not root). You may be prompted for your sudo password during the capability grant step.
 
-**Cleanup stale resources** (if tests were killed with Ctrl+C):
-```bash
-./scripts/cleanup-test-networks.sh
-```
-
 ### Code Generation
 
 After modifying `openapi.yaml`, regenerate the Go code:

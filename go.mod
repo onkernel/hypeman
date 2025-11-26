@@ -21,6 +21,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.2.1
 	github.com/opencontainers/umoci v0.6.0
+	github.com/samber/lo v1.52.0
 	github.com/stretchr/testify v1.11.1
 	github.com/u-root/u-root v0.15.0
 	github.com/vishvananda/netlink v1.3.1
@@ -29,6 +30,7 @@ require (
 	golang.org/x/term v0.37.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
+	gvisor.dev/gvisor v0.0.0-20251125014920-fc40e232ff54
 )
 
 require (
@@ -79,5 +81,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
-	gvisor.dev/gvisor v0.0.0-20251125014920-fc40e232ff54 // indirect
 )

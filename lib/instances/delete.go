@@ -52,7 +52,7 @@ func (m *manager) deleteInstance(
 	// 4. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
-		if err := m.networkManager.ReleaseNetwork(ctx, networkAlloc); err != nil {
+		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue with cleanup
 			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "id", id, "error", err)
 		}

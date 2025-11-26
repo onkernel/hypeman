@@ -21,8 +21,11 @@
 //	      overlay.raw
 //	      config.ext4
 //	      ch.sock
+//	      vsock.sock
 //	      logs/
 //	      snapshots/
+//	        snapshot-latest/
+//	          config.json
 package paths
 
 import "path/filepath"
@@ -173,12 +176,3 @@ func (p *Paths) InstanceSnapshotConfig(id string) string {
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")
 }
-
-// Network path methods
-
-// NetworkDir returns the network state directory.
-func (p *Paths) NetworkDir() string {
-	return filepath.Join(p.dataDir, "network")
-}
-
-

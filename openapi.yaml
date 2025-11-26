@@ -193,16 +193,16 @@ components:
               type: string
               description: Network name (always "default" when enabled)
               example: "default"
-        ip:
-          type: string
-          description: Assigned IP address (null if no network)
-          example: "192.168.100.10"
-          nullable: true
-        mac:
-          type: string
-          description: Assigned MAC address (null if no network)
-          example: "02:00:00:ab:cd:ef"
-          nullable: true
+            ip:
+              type: string
+              description: Assigned IP address (null if no network)
+              example: "192.168.100.10"
+              nullable: true
+            mac:
+              type: string
+              description: Assigned MAC address (null if no network)
+              example: "02:00:00:ab:cd:ef"
+              nullable: true
         created_at:
           type: string
           format: date-time

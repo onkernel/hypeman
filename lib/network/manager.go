@@ -16,10 +16,10 @@ type Manager interface {
 	// Lifecycle
 	Initialize(ctx context.Context, runningInstanceIDs []string) error
 
-	// Instance network operations (called by instance manager)
-	AllocateNetwork(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
-	RecreateNetwork(ctx context.Context, instanceID string) error
-	ReleaseNetwork(ctx context.Context, alloc *Allocation) error
+	// Instance allocation operations (called by instance manager)
+	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
+	RecreateAllocation(ctx context.Context, instanceID string) error
+	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
 
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)

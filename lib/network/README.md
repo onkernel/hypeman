@@ -128,7 +128,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 - Assign gateway IP
 - Setup iptables NAT and forwarding
 
-### AllocateNetwork
+### CreateAllocation
 1. Get default network details
 2. Check name uniqueness globally
 3. Allocate next available IP (starting from .2, after gateway at .1)
@@ -136,12 +136,12 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 5. Generate TAP name (tap-{first8chars-of-instance-id})
 6. Create TAP device and attach to bridge
 
-### RecreateNetwork (for restore from standby)
+### RecreateAllocation (for restore from standby)
 1. Derive allocation from snapshot config.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
 
-### ReleaseNetwork (for shutdown/delete)
+### ReleaseAllocation (for shutdown/delete)
 1. Derive current allocation
 2. Delete TAP device
 
@@ -166,17 +166,17 @@ Note: In case of unexpected scenarios like power loss, straggler TAP devices may
 The network manager uses a single mutex to protect allocation operations:
 
 ### Locked Operations
-- **AllocateNetwork**: Prevents concurrent IP allocation
+- **CreateAllocation**: Prevents concurrent IP allocation
 
 ### Unlocked Operations  
-- **RecreateNetwork**: Safe without lock - protected by instance-level locking, doesn't allocate IPs
-- **ReleaseNetwork**: Safe without lock - only deletes TAP device
+- **RecreateAllocation**: Safe without lock - protected by instance-level locking, doesn't allocate IPs
+- **ReleaseAllocation**: Safe without lock - only deletes TAP device
 - **Read operations** (GetAllocation, ListAllocations, NameExists): No lock needed - eventual consistency is acceptable
 
 ### Why This Works
 - Write operations are serialized to prevent race conditions
 - Read operations can run concurrently for better performance
-- Internal calls (e.g., AllocateNetwork → ListAllocations) work because reads don't lock
+- Internal calls (e.g., CreateAllocation → ListAllocations) work because reads don't lock
 - Instance manager already provides per-instance locking for state transitions
 
 ## Security
@@ -225,7 +225,7 @@ Cleanup happens automatically via `t.Cleanup()`, which runs even on test failure
 ### Unit Tests vs Integration Tests
 
 - **Unit tests** (TestGenerateMAC, etc.): Run without permissions, test logic only
-- **Integration tests** (TestInitializeIntegration, TestAllocateNetworkIntegration, etc.): Require permissions, create real devices
+- **Integration tests** (TestInitializeIntegration, TestCreateAllocationIntegration, etc.): Require permissions, create real devices
 
 All tests run via `make test` - no separate commands needed.
 

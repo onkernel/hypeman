@@ -93,7 +93,7 @@ func (m *manager) standbyInstance(
 	// They must be explicitly deleted
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
-		if err := m.networkManager.ReleaseNetwork(ctx, networkAlloc); err != nil {
+		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue - snapshot was created successfully
 			log.WarnContext(ctx, "failed to release network, continuing with standby", "id", id, "error", err)
 		}

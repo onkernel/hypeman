@@ -11,6 +11,7 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/samber/lo"
 )
 
 // ListInstances lists all instances
@@ -306,17 +307,18 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
-	// Build network object
-	networkEnabled := inst.NetworkEnabled
+	// Build network object with ip/mac nested inside
+	// Note: IP/MAC population from network allocations would be added in a follow-up
 	network := &struct {
 		Enabled *bool   `json:"enabled,omitempty"`
+		Ip      *string `json:"ip"`
+		Mac     *string `json:"mac"`
 		Name    *string `json:"name,omitempty"`
 	}{
-		Enabled: &networkEnabled,
+		Enabled: lo.ToPtr(inst.NetworkEnabled),
 	}
 	if inst.NetworkEnabled {
-		networkName := "default"
-		network.Name = &networkName
+		network.Name = lo.ToPtr("default")
 	}
 
 	oapiInst := oapi.Instance{
@@ -324,15 +326,15 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		Name:        inst.Name,
 		Image:       inst.Image,
 		State:       oapi.InstanceState(inst.State),
-		Size:        &sizeStr,
-		HotplugSize: &hotplugSizeStr,
-		OverlaySize: &overlaySizeStr,
-		Vcpus:       &inst.Vcpus,
+		Size:        lo.ToPtr(sizeStr),
+		HotplugSize: lo.ToPtr(hotplugSizeStr),
+		OverlaySize: lo.ToPtr(overlaySizeStr),
+		Vcpus:       lo.ToPtr(inst.Vcpus),
 		Network:     network,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
-		HasSnapshot: &inst.HasSnapshot,
+		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
 	}
 
 	if len(inst.Env) > 0 {
