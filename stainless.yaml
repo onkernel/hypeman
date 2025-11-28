@@ -100,6 +100,18 @@ resources:
       retrieve: get /volumes/{id}
       delete: delete /volumes/{id}
 
+  devices:
+    models:
+      device: '#/components/schemas/Device'
+      available_device: '#/components/schemas/AvailableDevice'
+      device_type: '#/components/schemas/DeviceType'
+    methods:
+      list: get /devices
+      create: post /devices
+      retrieve: get /devices/{id}
+      delete: delete /devices/{id}
+      list_available: get /devices/available
+
 settings:
   # All generated integration tests that hit the prism mock http server are marked
   # as skipped. Removing this setting or setting it to false enables tests, but
