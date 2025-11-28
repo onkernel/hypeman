@@ -71,6 +71,27 @@ else
   exit 1
 fi
 
+# Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode device:path:mode ...")
+if [ -n "${VOLUME_MOUNTS:-}" ]; then
+  echo "overlay-init: mounting volumes"
+  for vol in $VOLUME_MOUNTS; do
+    device=$(echo "$vol" | cut -d: -f1)
+    path=$(echo "$vol" | cut -d: -f2)
+    mode=$(echo "$vol" | cut -d: -f3)
+    
+    # Create mount point in overlay
+    mkdir -p "/overlay/newroot${path}"
+    
+    # Mount with appropriate options
+    if [ "$mode" = "ro" ]; then
+      mount -t ext4 -o ro "$device" "/overlay/newroot${path}"
+    else
+      mount -t ext4 "$device" "/overlay/newroot${path}"
+    fi
+    echo "overlay-init: mounted volume $device at $path ($mode)"
+  done
+fi
+
 # Prepare new root mount points
 # We use bind mounts instead of move so that the original /dev remains populated
 # for processes running in the initrd namespace (like exec-agent).

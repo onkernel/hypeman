@@ -104,6 +104,29 @@ GUEST_GW="%s"
 GUEST_DNS="%s"
 `, netConfig.IP, cidr, netConfig.Gateway, netConfig.DNS)
 	}
+
+	// Build volume mounts section
+	// Volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
+	volumeSection := ""
+	if len(inst.Volumes) > 0 {
+		var volumeLines strings.Builder
+		volumeLines.WriteString("\n# Volume mounts (device:path:readonly)\n")
+		volumeLines.WriteString("VOLUME_MOUNTS=\"")
+		for i, vol := range inst.Volumes {
+			// Device naming: vdd, vde, vdf, ...
+			device := fmt.Sprintf("/dev/vd%c", 'd'+i)
+			readonly := "rw"
+			if vol.Readonly {
+				readonly = "ro"
+			}
+			if i > 0 {
+				volumeLines.WriteString(" ")
+			}
+			volumeLines.WriteString(fmt.Sprintf("%s:%s:%s", device, vol.MountPath, readonly))
+		}
+		volumeLines.WriteString("\"\n")
+		volumeSection = volumeLines.String()
+	}
 	
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
@@ -116,13 +139,14 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s`, 
+%s%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
 		workdir,
 		envLines.String(),
 		networkSection,
+		volumeSection,
 	)
 	
 	return script
