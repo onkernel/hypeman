@@ -169,6 +169,25 @@ make test
 
 The test command compiles test binaries, grants capabilities via `sudo setcap`, then runs tests as the current user (not root). You may be prompted for your sudo password during the capability grant step.
 
+### Building the Preview CLI
+
+When working on a feature branch, you can build the `hypeman` CLI with your API changes before they're released. Stainless automatically creates preview branches in the SDK repos when you push changes to `openapi.yaml` or `stainless.yaml`.
+
+```bash
+# Build CLI from preview/<current-branch> (e.g., if you're on "devices", uses "preview/devices")
+make build-preview-cli
+
+# Build CLI from a specific branch
+make build-preview-cli CLI_BRANCH=preview/my-feature
+```
+
+The CLI binary is placed in `bin/hypeman`. Test it with:
+```bash
+./bin/hypeman --help
+```
+
+**Note:** This requires the preview branch to exist in `stainless-sdks/hypeman-cli`. Preview branches are created automatically when you push changes to the hypeman repo.
+
 ### Code Generation
 
 After modifying `openapi.yaml`, regenerate the Go code:

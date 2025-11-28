@@ -27,6 +27,12 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for DeviceType.
+const (
+	Gpu DeviceType = "gpu"
+	Pci DeviceType = "pci"
+)
+
 // Defines values for HealthStatus.
 const (
 	Ok HealthStatus = "ok"
@@ -60,6 +66,39 @@ type AttachVolumeRequest struct {
 	Readonly *bool `json:"readonly,omitempty"`
 }
 
+// AvailableDevice defines model for AvailableDevice.
+type AvailableDevice struct {
+	// CurrentDriver Currently bound driver (null if none)
+	CurrentDriver *string `json:"current_driver"`
+
+	// DeviceId PCI device ID (hex)
+	DeviceId string `json:"device_id"`
+
+	// DeviceName Human-readable device name
+	DeviceName *string `json:"device_name,omitempty"`
+
+	// IommuGroup IOMMU group number
+	IommuGroup int `json:"iommu_group"`
+
+	// PciAddress PCI address
+	PciAddress string `json:"pci_address"`
+
+	// VendorId PCI vendor ID (hex)
+	VendorId string `json:"vendor_id"`
+
+	// VendorName Human-readable vendor name
+	VendorName *string `json:"vendor_name,omitempty"`
+}
+
+// CreateDeviceRequest defines model for CreateDeviceRequest.
+type CreateDeviceRequest struct {
+	// Name Optional globally unique device name. If not provided, a name is auto-generated from the PCI address (e.g., "pci-0000-a2-00-0")
+	Name *string `json:"name,omitempty"`
+
+	// PciAddress PCI address of the device (required, e.g., "0000:a2:00.0")
+	PciAddress string `json:"pci_address"`
+}
+
 // CreateImageRequest defines model for CreateImageRequest.
 type CreateImageRequest struct {
 	// Name OCI image reference (e.g., docker.io/library/nginx:latest)
@@ -68,6 +107,9 @@ type CreateImageRequest struct {
 
 // CreateInstanceRequest defines model for CreateInstanceRequest.
 type CreateInstanceRequest struct {
+	// Devices Device IDs or names to attach for GPU/PCI passthrough
+	Devices *[]string `json:"devices,omitempty"`
+
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
@@ -107,6 +149,42 @@ type CreateVolumeRequest struct {
 	// SizeGb Size in gigabytes
 	SizeGb int `json:"size_gb"`
 }
+
+// Device defines model for Device.
+type Device struct {
+	// AttachedTo Instance ID if attached
+	AttachedTo *string `json:"attached_to"`
+
+	// BoundToVfio Whether device is bound to vfio-pci driver
+	BoundToVfio bool `json:"bound_to_vfio"`
+
+	// CreatedAt Registration timestamp (RFC3339)
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeviceId PCI device ID (hex)
+	DeviceId string `json:"device_id"`
+
+	// Id Auto-generated unique identifier (CUID2 format)
+	Id string `json:"id"`
+
+	// IommuGroup IOMMU group number
+	IommuGroup int `json:"iommu_group"`
+
+	// Name Device name (user-provided or auto-generated from PCI address)
+	Name *string `json:"name,omitempty"`
+
+	// PciAddress PCI address
+	PciAddress string `json:"pci_address"`
+
+	// Type Type of PCI device
+	Type DeviceType `json:"type"`
+
+	// VendorId PCI vendor ID (hex)
+	VendorId string `json:"vendor_id"`
+}
+
+// DeviceType Type of PCI device
+type DeviceType string
 
 // Error defines model for Error.
 type Error struct {
@@ -279,6 +357,9 @@ type GetInstanceLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// CreateDeviceJSONRequestBody defines body for CreateDevice for application/json ContentType.
+type CreateDeviceJSONRequestBody = CreateDeviceRequest
+
 // CreateImageJSONRequestBody defines body for CreateImage for application/json ContentType.
 type CreateImageJSONRequestBody = CreateImageRequest
 
@@ -364,6 +445,23 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListDevices request
+	ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateDeviceWithBody request with any body
+	CreateDeviceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateDevice(ctx context.Context, body CreateDeviceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListAvailableDevices request
+	ListAvailableDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteDevice request
+	DeleteDevice(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetDevice request
+	GetDevice(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetHealth request
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -425,6 +523,78 @@ type ClientInterface interface {
 
 	// GetVolume request
 	GetVolume(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListDevicesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateDeviceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateDeviceRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateDevice(ctx context.Context, body CreateDeviceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateDeviceRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListAvailableDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAvailableDevicesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteDevice(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteDeviceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetDevice(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetDeviceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -689,6 +859,168 @@ func (c *Client) GetVolume(ctx context.Context, id string, reqEditors ...Request
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListDevicesRequest generates requests for ListDevices
+func NewListDevicesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateDeviceRequest calls the generic CreateDevice builder with application/json body
+func NewCreateDeviceRequest(server string, body CreateDeviceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateDeviceRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateDeviceRequestWithBody generates requests for CreateDevice with any type of body
+func NewCreateDeviceRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewListAvailableDevicesRequest generates requests for ListAvailableDevices
+func NewListAvailableDevicesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices/available")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDeleteDeviceRequest generates requests for DeleteDevice
+func NewDeleteDeviceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetDeviceRequest generates requests for GetDevice
+func NewGetDeviceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewGetHealthRequest generates requests for GetHealth
@@ -1401,6 +1733,23 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListDevicesWithResponse request
+	ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error)
+
+	// CreateDeviceWithBodyWithResponse request with any body
+	CreateDeviceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDeviceResponse, error)
+
+	CreateDeviceWithResponse(ctx context.Context, body CreateDeviceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateDeviceResponse, error)
+
+	// ListAvailableDevicesWithResponse request
+	ListAvailableDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAvailableDevicesResponse, error)
+
+	// DeleteDeviceWithResponse request
+	DeleteDeviceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteDeviceResponse, error)
+
+	// GetDeviceWithResponse request
+	GetDeviceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetDeviceResponse, error)
+
 	// GetHealthWithResponse request
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
@@ -1462,6 +1811,129 @@ type ClientWithResponsesInterface interface {
 
 	// GetVolumeWithResponse request
 	GetVolumeWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetVolumeResponse, error)
+}
+
+type ListDevicesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]Device
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListDevicesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListDevicesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateDeviceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Device
+	JSON400      *Error
+	JSON401      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateDeviceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateDeviceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListAvailableDevicesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]AvailableDevice
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListAvailableDevicesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListAvailableDevicesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteDeviceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteDeviceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteDeviceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetDeviceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Device
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetDeviceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetDeviceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
 }
 
 type GetHealthResponse struct {
@@ -1898,6 +2370,59 @@ func (r GetVolumeResponse) StatusCode() int {
 	return 0
 }
 
+// ListDevicesWithResponse request returning *ListDevicesResponse
+func (c *ClientWithResponses) ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error) {
+	rsp, err := c.ListDevices(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListDevicesResponse(rsp)
+}
+
+// CreateDeviceWithBodyWithResponse request with arbitrary body returning *CreateDeviceResponse
+func (c *ClientWithResponses) CreateDeviceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDeviceResponse, error) {
+	rsp, err := c.CreateDeviceWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateDeviceResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateDeviceWithResponse(ctx context.Context, body CreateDeviceJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateDeviceResponse, error) {
+	rsp, err := c.CreateDevice(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateDeviceResponse(rsp)
+}
+
+// ListAvailableDevicesWithResponse request returning *ListAvailableDevicesResponse
+func (c *ClientWithResponses) ListAvailableDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListAvailableDevicesResponse, error) {
+	rsp, err := c.ListAvailableDevices(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListAvailableDevicesResponse(rsp)
+}
+
+// DeleteDeviceWithResponse request returning *DeleteDeviceResponse
+func (c *ClientWithResponses) DeleteDeviceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteDeviceResponse, error) {
+	rsp, err := c.DeleteDevice(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteDeviceResponse(rsp)
+}
+
+// GetDeviceWithResponse request returning *GetDeviceResponse
+func (c *ClientWithResponses) GetDeviceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetDeviceResponse, error) {
+	rsp, err := c.GetDevice(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetDeviceResponse(rsp)
+}
+
 // GetHealthWithResponse request returning *GetHealthResponse
 func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error) {
 	rsp, err := c.GetHealth(ctx, reqEditors...)
@@ -2090,6 +2615,227 @@ func (c *ClientWithResponses) GetVolumeWithResponse(ctx context.Context, id stri
 		return nil, err
 	}
 	return ParseGetVolumeResponse(rsp)
+}
+
+// ParseListDevicesResponse parses an HTTP response from a ListDevicesWithResponse call
+func ParseListDevicesResponse(rsp *http.Response) (*ListDevicesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListDevicesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []Device
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateDeviceResponse parses an HTTP response from a CreateDeviceWithResponse call
+func ParseCreateDeviceResponse(rsp *http.Response) (*CreateDeviceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateDeviceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Device
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListAvailableDevicesResponse parses an HTTP response from a ListAvailableDevicesWithResponse call
+func ParseListAvailableDevicesResponse(rsp *http.Response) (*ListAvailableDevicesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListAvailableDevicesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []AvailableDevice
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteDeviceResponse parses an HTTP response from a DeleteDeviceWithResponse call
+func ParseDeleteDeviceResponse(rsp *http.Response) (*DeleteDeviceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteDeviceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetDeviceResponse parses an HTTP response from a GetDeviceWithResponse call
+func ParseGetDeviceResponse(rsp *http.Response) (*GetDeviceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetDeviceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Device
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseGetHealthResponse parses an HTTP response from a GetHealthWithResponse call
@@ -2828,6 +3574,21 @@ func ParseGetVolumeResponse(rsp *http.Response) (*GetVolumeResponse, error) {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List registered devices
+	// (GET /devices)
+	ListDevices(w http.ResponseWriter, r *http.Request)
+	// Register a device for passthrough
+	// (POST /devices)
+	CreateDevice(w http.ResponseWriter, r *http.Request)
+	// Discover passthrough-capable devices on host
+	// (GET /devices/available)
+	ListAvailableDevices(w http.ResponseWriter, r *http.Request)
+	// Unregister device
+	// (DELETE /devices/{id})
+	DeleteDevice(w http.ResponseWriter, r *http.Request, id string)
+	// Get device details
+	// (GET /devices/{id})
+	GetDevice(w http.ResponseWriter, r *http.Request, id string)
 	// Health check
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -2887,6 +3648,36 @@ type ServerInterface interface {
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
+
+// List registered devices
+// (GET /devices)
+func (_ Unimplemented) ListDevices(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Register a device for passthrough
+// (POST /devices)
+func (_ Unimplemented) CreateDevice(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Discover passthrough-capable devices on host
+// (GET /devices/available)
+func (_ Unimplemented) ListAvailableDevices(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Unregister device
+// (DELETE /devices/{id})
+func (_ Unimplemented) DeleteDevice(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get device details
+// (GET /devices/{id})
+func (_ Unimplemented) GetDevice(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
 // Health check
 // (GET /health)
@@ -3004,6 +3795,128 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDevices(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateDevice operation middleware
+func (siw *ServerInterfaceWrapper) CreateDevice(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateDevice(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListAvailableDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListAvailableDevices(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAvailableDevices(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteDevice operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDevice(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDevice operation middleware
+func (siw *ServerInterfaceWrapper) GetDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDevice(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
@@ -3631,6 +4544,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	}
 
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/devices", wrapper.ListDevices)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/devices", wrapper.CreateDevice)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/devices/available", wrapper.ListAvailableDevices)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/devices/{id}", wrapper.DeleteDevice)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/devices/{id}", wrapper.GetDevice)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/health", wrapper.GetHealth)
 	})
 	r.Group(func(r chi.Router) {
@@ -3686,6 +4614,214 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 
 	return r
+}
+
+type ListDevicesRequestObject struct {
+}
+
+type ListDevicesResponseObject interface {
+	VisitListDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListDevices200JSONResponse []Device
+
+func (response ListDevices200JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListDevices401JSONResponse Error
+
+func (response ListDevices401JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListDevices500JSONResponse Error
+
+func (response ListDevices500JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDeviceRequestObject struct {
+	Body *CreateDeviceJSONRequestBody
+}
+
+type CreateDeviceResponseObject interface {
+	VisitCreateDeviceResponse(w http.ResponseWriter) error
+}
+
+type CreateDevice201JSONResponse Device
+
+func (response CreateDevice201JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDevice400JSONResponse Error
+
+func (response CreateDevice400JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDevice401JSONResponse Error
+
+func (response CreateDevice401JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDevice404JSONResponse Error
+
+func (response CreateDevice404JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDevice409JSONResponse Error
+
+func (response CreateDevice409JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateDevice500JSONResponse Error
+
+func (response CreateDevice500JSONResponse) VisitCreateDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListAvailableDevicesRequestObject struct {
+}
+
+type ListAvailableDevicesResponseObject interface {
+	VisitListAvailableDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListAvailableDevices200JSONResponse []AvailableDevice
+
+func (response ListAvailableDevices200JSONResponse) VisitListAvailableDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListAvailableDevices401JSONResponse Error
+
+func (response ListAvailableDevices401JSONResponse) VisitListAvailableDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListAvailableDevices500JSONResponse Error
+
+func (response ListAvailableDevices500JSONResponse) VisitListAvailableDevicesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDeviceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type DeleteDeviceResponseObject interface {
+	VisitDeleteDeviceResponse(w http.ResponseWriter) error
+}
+
+type DeleteDevice204Response struct {
+}
+
+func (response DeleteDevice204Response) VisitDeleteDeviceResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteDevice404JSONResponse Error
+
+func (response DeleteDevice404JSONResponse) VisitDeleteDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDevice409JSONResponse Error
+
+func (response DeleteDevice409JSONResponse) VisitDeleteDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDevice500JSONResponse Error
+
+func (response DeleteDevice500JSONResponse) VisitDeleteDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDeviceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetDeviceResponseObject interface {
+	VisitGetDeviceResponse(w http.ResponseWriter) error
+}
+
+type GetDevice200JSONResponse Device
+
+func (response GetDevice200JSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDevice404JSONResponse Error
+
+func (response GetDevice404JSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDevice500JSONResponse Error
+
+func (response GetDevice500JSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
 type GetHealthRequestObject struct {
@@ -4381,6 +5517,21 @@ func (response GetVolume500JSONResponse) VisitGetVolumeResponse(w http.ResponseW
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// List registered devices
+	// (GET /devices)
+	ListDevices(ctx context.Context, request ListDevicesRequestObject) (ListDevicesResponseObject, error)
+	// Register a device for passthrough
+	// (POST /devices)
+	CreateDevice(ctx context.Context, request CreateDeviceRequestObject) (CreateDeviceResponseObject, error)
+	// Discover passthrough-capable devices on host
+	// (GET /devices/available)
+	ListAvailableDevices(ctx context.Context, request ListAvailableDevicesRequestObject) (ListAvailableDevicesResponseObject, error)
+	// Unregister device
+	// (DELETE /devices/{id})
+	DeleteDevice(ctx context.Context, request DeleteDeviceRequestObject) (DeleteDeviceResponseObject, error)
+	// Get device details
+	// (GET /devices/{id})
+	GetDevice(ctx context.Context, request GetDeviceRequestObject) (GetDeviceResponseObject, error)
 	// Health check
 	// (GET /health)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
@@ -4464,6 +5615,137 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListDevices operation middleware
+func (sh *strictHandler) ListDevices(w http.ResponseWriter, r *http.Request) {
+	var request ListDevicesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDevices(ctx, request.(ListDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDevicesResponseObject); ok {
+		if err := validResponse.VisitListDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateDevice operation middleware
+func (sh *strictHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
+	var request CreateDeviceRequestObject
+
+	var body CreateDeviceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateDevice(ctx, request.(CreateDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateDeviceResponseObject); ok {
+		if err := validResponse.VisitCreateDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListAvailableDevices operation middleware
+func (sh *strictHandler) ListAvailableDevices(w http.ResponseWriter, r *http.Request) {
+	var request ListAvailableDevicesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAvailableDevices(ctx, request.(ListAvailableDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAvailableDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAvailableDevicesResponseObject); ok {
+		if err := validResponse.VisitListAvailableDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteDevice operation middleware
+func (sh *strictHandler) DeleteDevice(w http.ResponseWriter, r *http.Request, id string) {
+	var request DeleteDeviceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDevice(ctx, request.(DeleteDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDeviceResponseObject); ok {
+		if err := validResponse.VisitDeleteDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDevice operation middleware
+func (sh *strictHandler) GetDevice(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetDeviceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDevice(ctx, request.(GetDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDeviceResponseObject); ok {
+		if err := validResponse.VisitGetDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetHealth operation middleware
@@ -4954,63 +6236,75 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"//8RMkEhPk4AAA==",
+	"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",
+	"TblU/efh8zC4vbr9TwAAAP//uJV6HbBlAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

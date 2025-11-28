@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-preview-cli
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -109,6 +109,12 @@ build-exec: | $(BIN_DIR)
 
 # Build all binaries
 build-all: build build-exec
+
+# Build preview CLI from stainless-sdks/hypeman-cli
+# Usage: make build-preview-cli                         - uses preview/<current-branch>
+#        make build-preview-cli CLI_BRANCH=preview/xyz  - uses specific branch
+build-preview-cli:
+	@./scripts/build-preview-cli.sh $(CLI_BRANCH)
 
 # Run in development mode with hot reload
 dev: $(AIR)
