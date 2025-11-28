@@ -1,5 +1,3 @@
-//go:build gpu
-
 package devices_test
 
 import (
@@ -25,16 +23,15 @@ import (
 
 // TestGPUPassthrough is an E2E test that verifies GPU passthrough works.
 //
-// Run with:
+// This test automatically detects GPU availability and skips if:
+//   - No NVIDIA GPU is found
+//   - IOMMU is not enabled
+//   - VFIO modules are not loaded
+//   - Not running as root
 //
-//	sudo env PATH=$PATH:/sbin:/usr/sbin go test -tags "gpu containers_image_openpgp" -v -run TestGPUPassthrough ./lib/devices/...
+// To run manually:
 //
-// Prerequisites:
-//   - NVIDIA GPU available on host (bound to nvidia driver)
-//   - IOMMU enabled (intel_iommu=on or amd_iommu=on in kernel cmdline)
-//   - vfio-pci kernel module loaded (sudo modprobe vfio_pci vfio_iommu_type1)
-//   - Root permissions (sudo) for driver bind/unbind operations
-//   - /sbin in PATH for mkfs.ext4
+//	sudo env PATH=$PATH:/sbin:/usr/sbin go test -v -run TestGPUPassthrough ./lib/devices/...
 //
 // WARNING: This test will unbind the GPU from the nvidia driver, which may
 // disrupt other processes using the GPU. The test attempts to restore the
@@ -42,13 +39,15 @@ import (
 func TestGPUPassthrough(t *testing.T) {
 	ctx := context.Background()
 
-	// Check prerequisites
-	checkPrerequisites(t)
-
-	// Check if running as root (needed for driver bind/unbind)
-	if os.Geteuid() != 0 {
-		t.Skip("Skipping GPU test: must run as root (sudo) to bind/unbind drivers")
+	// Auto-detect GPU availability - skip if prerequisites not met
+	skipReason := checkGPUTestPrerequisites()
+	if skipReason != "" {
+		t.Skip(skipReason)
 	}
+
+	// Log that prerequisites passed
+	groups, _ := os.ReadDir("/sys/kernel/iommu_groups")
+	t.Logf("GPU test prerequisites met: %d IOMMU groups found", len(groups))
 
 	// Setup test infrastructure
 	tmpDir := t.TempDir()
@@ -267,25 +266,51 @@ func TestGPUPassthrough(t *testing.T) {
 	t.Log("✅ GPU passthrough test PASSED!")
 }
 
-func checkPrerequisites(t *testing.T) {
-	t.Helper()
-
+// checkGPUTestPrerequisites checks if GPU passthrough test can run.
+// Returns empty string if all prerequisites are met, otherwise returns skip reason.
+func checkGPUTestPrerequisites() string {
 	// Check KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group")
+		return "GPU passthrough test requires /dev/kvm"
 	}
 
-	// Check VFIO
+	// Check VFIO modules
 	if _, err := os.Stat("/dev/vfio/vfio"); os.IsNotExist(err) {
-		t.Fatal("/dev/vfio/vfio not available - ensure vfio-pci module is loaded (modprobe vfio-pci)")
+		return "GPU passthrough test requires VFIO (modprobe vfio_pci vfio_iommu_type1)"
 	}
 
 	// Check IOMMU is enabled by looking for IOMMU groups
 	groups, err := os.ReadDir("/sys/kernel/iommu_groups")
 	if err != nil || len(groups) == 0 {
-		t.Fatal("No IOMMU groups found - ensure IOMMU is enabled (intel_iommu=on or amd_iommu=on in kernel cmdline)")
+		return "GPU passthrough test requires IOMMU (intel_iommu=on or amd_iommu=on)"
 	}
-	t.Logf("Found %d IOMMU groups", len(groups))
+
+	// Check for NVIDIA GPU
+	available, err := devices.DiscoverAvailableDevices()
+	if err != nil {
+		return "GPU passthrough test failed to discover devices: " + err.Error()
+	}
+
+	hasNvidiaGPU := false
+	for _, d := range available {
+		if strings.Contains(strings.ToLower(d.VendorName), "nvidia") {
+			hasNvidiaGPU = true
+			break
+		}
+	}
+	if !hasNvidiaGPU {
+		return "GPU passthrough test requires an NVIDIA GPU"
+	}
+
+	// GPU passthrough requires root (euid=0) for sysfs driver bind/unbind operations.
+	// Unlike network operations which can use CAP_NET_ADMIN, sysfs file writes are
+	// protected by standard Unix DAC (file permissions), not just capabilities.
+	// The files in /sys/bus/pci/drivers/ are owned by root with mode 0200.
+	if os.Geteuid() != 0 {
+		return "GPU passthrough test requires root (sudo) for sysfs driver operations"
+	}
+
+	return "" // All prerequisites met
 }
 
 func waitForInstanceReady(ctx context.Context, t *testing.T, mgr instances.Manager, id string, timeout time.Duration) error {

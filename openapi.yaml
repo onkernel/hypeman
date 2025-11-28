@@ -382,21 +382,21 @@ components:
     
     CreateDeviceRequest:
       type: object
-      required: [name, pci_address]
+      required: [pci_address]
       properties:
         name:
           type: string
-          description: Globally unique device name
+          description: Optional globally unique device name. If not provided, a name is auto-generated from the PCI address (e.g., "pci-0000-a2-00-0")
           pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]+$
           example: l4-gpu
         pci_address:
           type: string
-          description: PCI address of the device (e.g., "0000:a2:00.0")
+          description: PCI address of the device (required, e.g., "0000:a2:00.0")
           example: "0000:a2:00.0"
     
     Device:
       type: object
-      required: [id, name, type, pci_address, vendor_id, device_id, iommu_group, bound_to_vfio, created_at]
+      required: [id, type, pci_address, vendor_id, device_id, iommu_group, bound_to_vfio, created_at]
       properties:
         id:
           type: string
@@ -404,7 +404,7 @@ components:
           example: tz4a98xxat96iws9zmbrgj3a
         name:
           type: string
-          description: Globally unique device name
+          description: Device name (user-provided or auto-generated from PCI address)
           example: l4-gpu
         type:
           $ref: "#/components/schemas/DeviceType"

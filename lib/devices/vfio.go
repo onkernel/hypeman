@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -170,15 +171,42 @@ func (v *VFIOBinder) triggerDriverProbe(pciAddress string) error {
 // This service keeps /dev/nvidia* open and blocks driver unbind
 func (v *VFIOBinder) stopNvidiaPersistenced() error {
 	slog.Debug("stopping nvidia-persistenced service")
+	
+	// Try systemctl first (works as root)
 	cmd := exec.Command("systemctl", "stop", "nvidia-persistenced")
-	return cmd.Run()
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+	
+	// Fall back to killing the process directly (works with CAP_KILL or as root)
+	// This is less clean but allows running with capabilities instead of full root
+	cmd = exec.Command("pkill", "-TERM", "nvidia-persistenced")
+	if err := cmd.Run(); err != nil {
+		// Check if process even exists
+		checkCmd := exec.Command("pgrep", "nvidia-persistenced")
+		if checkCmd.Run() != nil {
+			// Process doesn't exist, that's fine
+			return nil
+		}
+		return fmt.Errorf("failed to stop nvidia-persistenced (try: sudo systemctl stop nvidia-persistenced)")
+	}
+	
+	// Give it a moment to exit
+	time.Sleep(500 * time.Millisecond)
+	return nil
 }
 
 // startNvidiaPersistenced starts the nvidia-persistenced service
 func (v *VFIOBinder) startNvidiaPersistenced() error {
 	slog.Debug("starting nvidia-persistenced service")
+	
+	// Try systemctl first (works as root)
 	cmd := exec.Command("systemctl", "start", "nvidia-persistenced")
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// If we can't start it, just log - not critical for test cleanup
+		slog.Warn("could not restart nvidia-persistenced", "error", err)
+	}
+	return nil
 }
 
 // GetVFIOGroupPath returns the path to the VFIO group device for a PCI device

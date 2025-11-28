@@ -29,8 +29,8 @@ type Device struct {
 
 // CreateDeviceRequest is the request to register a new device
 type CreateDeviceRequest struct {
-	Name       string `json:"name"`        // required: globally unique name
-	PCIAddress string `json:"pci_address"` // required: PCI address (e.g., "0000:a2:00.0")
+	Name       string `json:"name,omitempty"` // optional: globally unique name (auto-generated if not provided)
+	PCIAddress string `json:"pci_address"`    // required: PCI address (e.g., "0000:a2:00.0")
 }
 
 // AvailableDevice represents a PCI device discovered on the host

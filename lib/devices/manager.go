@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,8 +62,7 @@ func (m *manager) ListDevices(ctx context.Context) ([]Device, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	devicesDir := m.devicesDir()
-	entries, err := os.ReadDir(devicesDir)
+	entries, err := os.ReadDir(m.paths.DevicesDir())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []Device{}, nil
@@ -98,12 +97,7 @@ func (m *manager) ListAvailableDevices(ctx context.Context) ([]AvailableDevice, 
 func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*Device, error) {
 	log := logger.FromContext(ctx)
 
-	// Validate name
-	if !ValidateDeviceName(req.Name) {
-		return nil, ErrInvalidName
-	}
-
-	// Validate PCI address format
+	// Validate PCI address format (required)
 	if !ValidatePCIAddress(req.PCIAddress) {
 		return nil, ErrInvalidPCIAddress
 	}
@@ -114,11 +108,26 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 		return nil, fmt.Errorf("get device info: %w", err)
 	}
 
+	// Generate ID
+	id := cuid2.Generate()
+
+	// Handle optional name: if not provided, generate one from PCI address
+	name := req.Name
+	if name == "" {
+		// Generate name from PCI address: 0000:a2:00.0 -> pci-0000-a2-00-0
+		name = "pci-" + strings.ReplaceAll(strings.ReplaceAll(req.PCIAddress, ":", "-"), ".", "-")
+	}
+
+	// Validate name format
+	if !ValidateDeviceName(name) {
+		return nil, ErrInvalidName
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Check if name already exists
-	if _, err := m.findByName(req.Name); err == nil {
+	if _, err := m.findByName(name); err == nil {
 		return nil, ErrNameExists
 	}
 
@@ -127,13 +136,10 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 		return nil, ErrAlreadyExists
 	}
 
-	// Generate ID
-	id := cuid2.Generate()
-
 	// Create device
 	device := &Device{
 		Id:          id,
-		Name:        req.Name,
+		Name:        name,
 		Type:        DetermineDeviceType(deviceInfo),
 		PCIAddress:  req.PCIAddress,
 		VendorID:    deviceInfo.VendorID,
@@ -145,19 +151,19 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 	}
 
 	// Ensure directories exist
-	if err := os.MkdirAll(m.deviceDir(id), 0755); err != nil {
+	if err := os.MkdirAll(m.paths.DeviceDir(id), 0755); err != nil {
 		return nil, fmt.Errorf("create device dir: %w", err)
 	}
 
 	// Save device metadata
 	if err := m.saveDevice(device); err != nil {
-		os.RemoveAll(m.deviceDir(id))
+		os.RemoveAll(m.paths.DeviceDir(id))
 		return nil, fmt.Errorf("save device: %w", err)
 	}
 
 	log.InfoContext(ctx, "registered device",
 		"id", id,
-		"name", req.Name,
+		"name", name,
 		"pci_address", req.PCIAddress,
 		"type", device.Type,
 	)
@@ -208,7 +214,7 @@ func (m *manager) DeleteDevice(ctx context.Context, id string) error {
 	}
 
 	// Remove device directory
-	if err := os.RemoveAll(m.deviceDir(id)); err != nil {
+	if err := os.RemoveAll(m.paths.DeviceDir(id)); err != nil {
 		return fmt.Errorf("remove device dir: %w", err)
 	}
 
@@ -339,20 +345,8 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 
 // Helper methods
 
-func (m *manager) devicesDir() string {
-	return filepath.Join(m.paths.GuestsDir(), "..", "devices")
-}
-
-func (m *manager) deviceDir(id string) string {
-	return filepath.Join(m.devicesDir(), id)
-}
-
-func (m *manager) deviceMetadataPath(id string) string {
-	return filepath.Join(m.deviceDir(id), "metadata.json")
-}
-
 func (m *manager) loadDevice(id string) (*Device, error) {
-	data, err := os.ReadFile(m.deviceMetadataPath(id))
+	data, err := os.ReadFile(m.paths.DeviceMetadata(id))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
@@ -374,11 +368,11 @@ func (m *manager) saveDevice(device *Device) error {
 		return err
 	}
 
-	return os.WriteFile(m.deviceMetadataPath(device.Id), data, 0644)
+	return os.WriteFile(m.paths.DeviceMetadata(device.Id), data, 0644)
 }
 
 func (m *manager) findByName(name string) (*Device, error) {
-	entries, err := os.ReadDir(m.devicesDir())
+	entries, err := os.ReadDir(m.paths.DevicesDir())
 	if err != nil {
 		return nil, ErrNotFound
 	}
@@ -402,7 +396,7 @@ func (m *manager) findByName(name string) (*Device, error) {
 }
 
 func (m *manager) findByPCIAddress(pciAddress string) (*Device, error) {
-	entries, err := os.ReadDir(m.devicesDir())
+	entries, err := os.ReadDir(m.paths.DevicesDir())
 	if err != nil {
 		return nil, ErrNotFound
 	}

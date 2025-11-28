@@ -37,7 +37,7 @@ lib/devices/
 ├── vfio.go         # VFIO bind/unbind operations
 ├── manager.go      # Manager interface and implementation
 ├── manager_test.go # Unit tests
-├── gpu_e2e_test.go # End-to-end GPU passthrough test
+├── gpu_e2e_test.go # End-to-end GPU passthrough test (auto-skips if no GPU)
 └── scripts/
     └── gpu-reset.sh  # GPU recovery script (see Troubleshooting)
 ```
@@ -285,29 +285,36 @@ Then reboot.
 
 ### Running the E2E Test
 
-The GPU passthrough E2E test requires:
-- Root permissions (for driver bind/unbind)
+The GPU passthrough E2E test **automatically detects** GPU availability and skips if prerequisites aren't met.
+
+**Why GPU tests require root**: Unlike network tests which can use Linux capabilities (`CAP_NET_ADMIN`), GPU passthrough requires writing to sysfs files (`/sys/bus/pci/drivers/*/unbind`, etc.) which are protected by standard Unix file permissions (owned by root, mode 0200). Capabilities don't bypass DAC (discretionary access control) for file writes.
+
+Prerequisites for the test to run (not skip):
+- **Root permissions** (sudo) - required for sysfs driver operations
 - NVIDIA GPU on host
-- IOMMU enabled
+- IOMMU enabled (`intel_iommu=on` or `amd_iommu=on`)
 - `vfio_pci` and `vfio_iommu_type1` modules loaded
 - `/sbin` in PATH (for `mkfs.ext4`)
 
 ```bash
-# Load VFIO modules
+# Prepare the environment
 sudo modprobe vfio_pci vfio_iommu_type1
 
-# Run the test
+# Run via make - test auto-skips if not root or no GPU
+make test
+
+# Or run directly with sudo
 sudo env PATH=$PATH:/sbin:/usr/sbin \
-  go test -v -tags=integration,gpu -run TestGPUPassthrough \
-  -timeout 5m ./lib/devices/...
+  go test -v -run TestGPUPassthrough -timeout 5m ./lib/devices/...
 ```
 
 The test will:
-1. Discover available NVIDIA GPUs
-2. Register the first GPU found
-3. Create a VM with GPU passthrough
-4. Verify the GPU is visible inside the VM
-5. Clean up (delete VM, unbind from VFIO, restore nvidia driver)
+1. Check prerequisites and skip if not met (not root, no GPU, no IOMMU, etc.)
+2. Discover available NVIDIA GPUs
+3. Register the first GPU found
+4. Create a VM with GPU passthrough
+5. Verify the GPU is visible inside the VM
+6. Clean up (delete VM, unbind from VFIO, restore nvidia driver)
 
 ## Future Plans: GPU Sharing Across Multiple VMs
 

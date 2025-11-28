@@ -46,8 +46,12 @@ func (s *ApiService) ListAvailableDevices(ctx context.Context, request oapi.List
 
 // CreateDevice registers a new device for passthrough
 func (s *ApiService) CreateDevice(ctx context.Context, request oapi.CreateDeviceRequestObject) (oapi.CreateDeviceResponseObject, error) {
+	var name string
+	if request.Body.Name != nil {
+		name = *request.Body.Name
+	}
 	req := devices.CreateDeviceRequest{
-		Name:       request.Body.Name,
+		Name:       name,
 		PCIAddress: request.Body.PciAddress,
 	}
 
@@ -136,7 +140,7 @@ func deviceToOAPI(d devices.Device) oapi.Device {
 	deviceType := oapi.DeviceType(d.Type)
 	return oapi.Device{
 		Id:          d.Id,
-		Name:        d.Name,
+		Name:        &d.Name,
 		Type:        deviceType,
 		PciAddress:  d.PCIAddress,
 		VendorId:    d.VendorID,
