@@ -34,49 +34,12 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("System files ready")
 
-	// First, create and wait for the image to be ready
-	// Use nginx which has a proper long-running process
-	t.Log("Creating nginx:alpine image...")
-	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
-		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/nginx:alpine",
-		},
-	})
-	require.NoError(t, err)
-	imgCreated, ok := imgResp.(oapi.CreateImage202JSONResponse)
-	require.True(t, ok, "expected 202 response")
-	assert.Equal(t, "docker.io/library/nginx:alpine", imgCreated.Name)
-
-	// Wait for image to be ready (poll with timeout)
-	t.Log("Waiting for image to be ready...")
-	timeout := time.After(30 * time.Second)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	imageReady := false
-	for !imageReady {
-		select {
-		case <-timeout:
-			t.Fatal("Timeout waiting for image to be ready")
-		case <-ticker.C:
-			imgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-				Name: "docker.io/library/nginx:alpine",
-			})
-			require.NoError(t, err)
-
-			img, ok := imgResp.(oapi.GetImage200JSONResponse)
-			if ok && img.Status == "ready" {
-				imageReady = true
-				t.Log("Image is ready")
-			} else if ok {
-				t.Logf("Image status: %s", img.Status)
-			}
-		}
-	}
+	// Create and wait for nginx image (has a proper long-running process)
+	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
-	networkDisabled := false
+	networkEnabled := false
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "exec-test",
@@ -84,7 +47,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Network: &struct {
 				Enabled *bool `json:"enabled,omitempty"`
 			}{
-				Enabled: &networkDisabled,
+				Enabled: &networkEnabled,
 			},
 		},
 	})
@@ -222,47 +185,11 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create Debian 12 slim image (minimal, no iproute2)
-	t.Log("Creating debian:12-slim image...")
-	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
-		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/debian:12-slim",
-		},
-	})
-	require.NoError(t, err)
-	imgCreated, ok := imgResp.(oapi.CreateImage202JSONResponse)
-	require.True(t, ok, "expected 202 response")
-	assert.Equal(t, "docker.io/library/debian:12-slim", imgCreated.Name)
-
-	// Wait for image to be ready
-	t.Log("Waiting for image to be ready...")
-	timeout := time.After(60 * time.Second)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	imageReady := false
-	for !imageReady {
-		select {
-		case <-timeout:
-			t.Fatal("Timeout waiting for image to be ready")
-		case <-ticker.C:
-			imgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-				Name: "docker.io/library/debian:12-slim",
-			})
-			require.NoError(t, err)
-
-			img, ok := imgResp.(oapi.GetImage200JSONResponse)
-			if ok && img.Status == "ready" {
-				imageReady = true
-				t.Log("Image is ready")
-			} else if ok {
-				t.Logf("Image status: %s", img.Status)
-			}
-		}
-	}
+	createAndWaitForImage(t, svc, "docker.io/library/debian:12-slim", 60*time.Second)
 
 	// Create instance (network disabled in test environment)
 	t.Log("Creating Debian instance...")
-	networkDisabled := false
+	networkEnabled := false
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "debian-exec-test",
@@ -270,7 +197,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 			Network: &struct {
 				Enabled *bool `json:"enabled,omitempty"`
 			}{
-				Enabled: &networkDisabled,
+				Enabled: &networkEnabled,
 			},
 		},
 	})
