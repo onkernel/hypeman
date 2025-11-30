@@ -63,7 +63,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 				Name: "docker.io/library/nginx:alpine",
 			})
 			require.NoError(t, err)
-			
+
 			img, ok := imgResp.(oapi.GetImage200JSONResponse)
 			if ok && img.Status == "ready" {
 				imageReady = true
@@ -82,8 +82,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Name:  "exec-test",
 			Image: "docker.io/library/nginx:alpine",
 			Network: &struct {
-				Enabled *bool   `json:"enabled,omitempty"`
-				Name    *string `json:"name,omitempty"`
+				Enabled *bool `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkDisabled,
 			},
@@ -108,8 +107,8 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		case <-nginxTimeout:
 			t.Fatal("Timeout waiting for nginx to start")
 		case <-nginxTicker.C:
-			logs, err := svc.InstanceManager.GetInstanceLogs(ctx(), inst.Id, false, 100)
-			if err == nil && strings.Contains(logs, "start worker processes") {
+			logs := collectTestLogs(t, svc, inst.Id, 100)
+			if strings.Contains(logs, "start worker processes") {
 				nginxReady = true
 				t.Log("Nginx is ready")
 			}
@@ -132,7 +131,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
 			if consoleData, err := os.ReadFile(consolePath); err == nil {
 				lines := strings.Split(string(consoleData), "\n")
-				
+
 				// Print exec-agent specific logs
 				t.Logf("=== Exec Agent Logs ===")
 				for _, line := range lines {
@@ -155,13 +154,13 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	var exit *exec.ExitStatus
 	var stdout, stderr outputBuffer
 	var execErr error
-	
+
 	t.Log("Testing exec command: whoami")
 	maxRetries := 10
 	for i := 0; i < maxRetries; i++ {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
-		
+
 		exit, execErr = exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "whoami"},
 			Stdin:   nil,
@@ -169,26 +168,25 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Stderr:  &stderr,
 			TTY:     false,
 		})
-		
+
 		if execErr == nil {
 			break
 		}
-		
+
 		t.Logf("Exec attempt %d/%d failed, retrying: %v", i+1, maxRetries, execErr)
 		time.Sleep(1 * time.Second)
 	}
-	
+
 	// Assert exec worked
 	require.NoError(t, execErr, "exec should succeed after retries")
 	require.NotNil(t, exit, "exit status should be returned")
 	require.Equal(t, 0, exit.Code, "whoami should exit with code 0")
-	
 
 	// Verify output
 	outStr := stdout.String()
 	t.Logf("Command output: %q", outStr)
 	require.Contains(t, outStr, "root", "whoami should return root user")
-	
+
 	// Cleanup
 	t.Log("Cleaning up instance...")
 	delResp, err := svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{
@@ -197,6 +195,175 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = delResp.(oapi.DeleteInstance204Response)
 	require.True(t, ok, "expected 204 response")
+}
+
+// TestExecWithDebianMinimal tests exec with a minimal Debian image.
+// This test specifically catches issues that wouldn't appear with Alpine-based images:
+// 1. Debian's default entrypoint (bash) exits immediately without a TTY
+// 2. exec-agent must keep running even after the main app exits
+// 3. The VM must not kernel panic when the entrypoint exits
+func TestExecWithDebianMinimal(t *testing.T) {
+	// Require KVM access for VM creation
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
+	}
+
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	svc := newTestService(t)
+
+	// Ensure system files (kernel and initrd) are available
+	t.Log("Ensuring system files...")
+	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
+	err := systemMgr.EnsureSystemFiles(ctx())
+	require.NoError(t, err)
+	t.Log("System files ready")
+
+	// Create Debian 12 slim image (minimal, no iproute2)
+	t.Log("Creating debian:12-slim image...")
+	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{
+			Name: "docker.io/library/debian:12-slim",
+		},
+	})
+	require.NoError(t, err)
+	imgCreated, ok := imgResp.(oapi.CreateImage202JSONResponse)
+	require.True(t, ok, "expected 202 response")
+	assert.Equal(t, "docker.io/library/debian:12-slim", imgCreated.Name)
+
+	// Wait for image to be ready
+	t.Log("Waiting for image to be ready...")
+	timeout := time.After(60 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	imageReady := false
+	for !imageReady {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for image to be ready")
+		case <-ticker.C:
+			imgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
+				Name: "docker.io/library/debian:12-slim",
+			})
+			require.NoError(t, err)
+
+			img, ok := imgResp.(oapi.GetImage200JSONResponse)
+			if ok && img.Status == "ready" {
+				imageReady = true
+				t.Log("Image is ready")
+			} else if ok {
+				t.Logf("Image status: %s", img.Status)
+			}
+		}
+	}
+
+	// Create instance (network disabled in test environment)
+	t.Log("Creating Debian instance...")
+	networkDisabled := false
+	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "debian-exec-test",
+			Image: "docker.io/library/debian:12-slim",
+			Network: &struct {
+				Enabled *bool `json:"enabled,omitempty"`
+			}{
+				Enabled: &networkDisabled,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	inst, ok := instResp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotEmpty(t, inst.Id)
+	t.Logf("Instance created: %s", inst.Id)
+
+	// Cleanup on exit
+	t.Cleanup(func() {
+		t.Log("Cleaning up instance...")
+		svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{Id: inst.Id})
+	})
+
+	// Get actual instance to access vsock fields
+	actualInst, err := svc.InstanceManager.GetInstance(ctx(), inst.Id)
+	require.NoError(t, err)
+	require.NotNil(t, actualInst)
+
+	// Wait for exec-agent to be ready by checking logs
+	// This is the key difference: we wait for exec-agent, not the app (which exits immediately)
+	t.Log("Waiting for exec-agent to start...")
+	execAgentReady := false
+	agentTimeout := time.After(15 * time.Second)
+	agentTicker := time.NewTicker(500 * time.Millisecond)
+	defer agentTicker.Stop()
+
+	var logs string
+	for !execAgentReady {
+		select {
+		case <-agentTimeout:
+			// Dump logs on failure for debugging
+			logs = collectTestLogs(t, svc, inst.Id, 200)
+			t.Logf("Console logs:\n%s", logs)
+			t.Fatal("Timeout waiting for exec-agent to start")
+		case <-agentTicker.C:
+			logs = collectTestLogs(t, svc, inst.Id, 100)
+			if strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
+				execAgentReady = true
+				t.Log("exec-agent is ready")
+			}
+		}
+	}
+
+	// Verify the app exited but VM is still usable (key behavior this test validates)
+	logs = collectTestLogs(t, svc, inst.Id, 200)
+	assert.Contains(t, logs, "overlay-init: app exited with code", "App should have exited")
+
+	// Test exec commands work even though the main app (bash) has exited
+	t.Log("Testing exec command: echo")
+	var stdout, stderr outputBuffer
+	exit, err := exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"echo", "hello from debian"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		TTY:     false,
+	})
+	require.NoError(t, err, "exec should succeed")
+	require.NotNil(t, exit)
+	require.Equal(t, 0, exit.Code, "echo should exit with code 0")
+	assert.Contains(t, stdout.String(), "hello from debian")
+
+	// Verify we're actually in Debian
+	t.Log("Verifying OS release...")
+	stdout = outputBuffer{}
+	exit, err = exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"cat", "/etc/os-release"},
+		Stdout:  &stdout,
+		TTY:     false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, exit.Code)
+	assert.Contains(t, stdout.String(), "Debian", "Should be running Debian")
+	assert.Contains(t, stdout.String(), "bookworm", "Should be Debian 12 (bookworm)")
+	t.Logf("OS: %s", strings.Split(stdout.String(), "\n")[0])
+
+}
+
+// collectTestLogs collects logs from an instance (non-streaming)
+func collectTestLogs(t *testing.T, svc *ApiService, instanceID string, n int) string {
+	logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), instanceID, n, false)
+	if err != nil {
+		return ""
+	}
+
+	var lines []string
+	for line := range logChan {
+		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // outputBuffer is a simple buffer for capturing exec output
