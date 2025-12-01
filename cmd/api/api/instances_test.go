@@ -44,46 +44,13 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 
 	svc := newTestService(t)
 
-	// First, create and wait for the image to be ready
-	t.Log("Creating alpine image...")
-	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
-		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/alpine:latest",
-		},
-	})
-	require.NoError(t, err)
-	
-	imgCreated, ok := imgResp.(oapi.CreateImage202JSONResponse)
-	require.True(t, ok, "expected 202 accepted response for image creation")
-	img := oapi.Image(imgCreated)
-	
-	// Wait for image to be ready
-	t.Log("Waiting for image to be ready...")
-	imageName := img.Name
-	var image *oapi.Image
-	for i := 0; i < 60; i++ {
-		getImgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{Name: imageName})
-		require.NoError(t, err)
-		
-		if getImg, ok := getImgResp.(oapi.GetImage200JSONResponse); ok {
-			img := oapi.Image(getImg)
-			if img.Status == "ready" {
-				image = &img
-				break
-			}
-			if img.Status == "failed" {
-				t.Fatalf("Image build failed: %v", img.Error)
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	require.NotNil(t, image, "image should be ready within 6 seconds")
-	t.Log("Image ready!")
+	// Create and wait for alpine image
+	createAndWaitForImage(t, svc, "docker.io/library/alpine:latest", 30*time.Second)
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
 	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
-	err = systemMgr.EnsureSystemFiles(ctx())
+	err := systemMgr.EnsureSystemFiles(ctx())
 	require.NoError(t, err)
 	t.Log("System files ready!")
 	
@@ -138,7 +105,7 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 
 	// Test with invalid size format
 	invalidSize := "not-a-size"
-	networkDisabled := false
+	networkEnabled := false
 
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
@@ -148,7 +115,7 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 			Network: &struct {
 				Enabled *bool `json:"enabled,omitempty"`
 			}{
-				Enabled: &networkDisabled,
+				Enabled: &networkEnabled,
 			},
 		},
 	})
