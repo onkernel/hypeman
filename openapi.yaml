@@ -71,6 +71,14 @@ components:
           type: boolean
           description: Whether volume is mounted read-only
           default: false
+        overlay:
+          type: boolean
+          description: Create per-instance overlay for writes (requires readonly=true)
+          default: false
+        overlay_size:
+          type: string
+          description: Max overlay size as human-readable string (e.g., "1GB"). Required if overlay=true.
+          example: "1GB"
     
     PortMapping:
       type: object

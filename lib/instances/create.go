@@ -285,6 +285,15 @@ func (m *manager) createInstance(
 			cu.Add(func() {
 				m.volumeManager.DetachVolume(ctx, volumeID, id)
 			})
+
+			// Create overlay disk for volumes with overlay enabled
+			if volAttach.Overlay {
+				log.DebugContext(ctx, "creating volume overlay disk", "id", id, "volume_id", volAttach.VolumeID, "size", volAttach.OverlaySize)
+				if err := m.createVolumeOverlayDisk(id, volAttach.VolumeID, volAttach.OverlaySize); err != nil {
+					log.ErrorContext(ctx, "failed to create volume overlay disk", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+					return nil, fmt.Errorf("create volume overlay disk %s: %w", volAttach.VolumeID, err)
+				}
+			}
 		}
 		// Store volume attachments in metadata
 		stored.Volumes = req.Volumes
@@ -373,8 +382,16 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 
 // validateVolumeAttachments validates volume attachment requests
 func validateVolumeAttachments(volumes []VolumeAttachment) error {
-	if len(volumes) > MaxVolumesPerInstance {
-		return fmt.Errorf("cannot attach more than %d volumes per instance", MaxVolumesPerInstance)
+	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
+	totalDevices := 0
+	for _, vol := range volumes {
+		totalDevices++
+		if vol.Overlay {
+			totalDevices++ // Overlay needs an additional device
+		}
+	}
+	if totalDevices > MaxVolumesPerInstance {
+		return fmt.Errorf("cannot attach more than %d volume devices per instance (overlay volumes count as 2)", MaxVolumesPerInstance)
 	}
 
 	seenPaths := make(map[string]bool)
@@ -397,6 +414,16 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 			return fmt.Errorf("duplicate mount path %q", cleanPath)
 		}
 		seenPaths[cleanPath] = true
+
+		// Validate overlay mode requirements
+		if vol.Overlay {
+			if !vol.Readonly {
+				return fmt.Errorf("volume %s: overlay mode requires readonly=true", vol.VolumeID)
+			}
+			if vol.OverlaySize <= 0 {
+				return fmt.Errorf("volume %s: overlay_size is required when overlay=true", vol.VolumeID)
+			}
+		}
 	}
 
 	return nil
@@ -552,12 +579,26 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 	}
 
 	// Add attached volumes as additional disks
+	// For overlay volumes, add both base (readonly) and overlay disk
 	for _, volAttach := range inst.Volumes {
 		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
-		disks = append(disks, vmm.DiskConfig{
-			Path:     &volumePath,
-			Readonly: ptr(volAttach.Readonly),
-		})
+		if volAttach.Overlay {
+			// Base volume is always read-only when overlay is enabled
+			disks = append(disks, vmm.DiskConfig{
+				Path:     &volumePath,
+				Readonly: ptr(true),
+			})
+			// Overlay disk is writable
+			overlayPath := m.paths.InstanceVolumeOverlay(inst.Id, volAttach.VolumeID)
+			disks = append(disks, vmm.DiskConfig{
+				Path: &overlayPath,
+			})
+		} else {
+			disks = append(disks, vmm.DiskConfig{
+				Path:     &volumePath,
+				Readonly: ptr(volAttach.Readonly),
+			})
+		}
 	}
 
 	// Serial console configuration

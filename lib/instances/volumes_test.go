@@ -157,8 +157,9 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Reader 1 created: %s", reader1.Id)
 
+	// Reader 2 uses overlay mode: can read base data AND write to its own overlay
 	reader2, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "reader-2",
+		Name:           "reader-2-overlay",
 		Image:          "docker.io/library/alpine:latest",
 		Size:           512 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
@@ -166,11 +167,11 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
-			{VolumeID: vol.Id, MountPath: "/data", Readonly: true},
+			{VolumeID: vol.Id, MountPath: "/data", Readonly: true, Overlay: true, OverlaySize: 100 * 1024 * 1024}, // 100MB overlay
 		},
 	})
 	require.NoError(t, err)
-	t.Logf("Reader 2 created: %s", reader2.Id)
+	t.Logf("Reader 2 (overlay) created: %s", reader2.Id)
 
 	// Verify volume has two attachments
 	vol, err = volumeManager.GetVolume(ctx, vol.Id)
@@ -189,24 +190,37 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	output1, code, err := execWithRetry(ctx, reader1.VsockSocket, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
-	assert.Contains(t, output1, "Hello from writer", "Reader 1 should see the file")
+	require.Contains(t, output1, "Hello from writer", "Reader 1 should see the file")
 
-	// Verify data is readable from reader-2
-	t.Log("Verifying data from reader-2...")
+	// Verify data is readable from reader-2 (overlay mode)
+	t.Log("Verifying data from reader-2 (overlay)...")
 	output2, code, err := execWithRetry(ctx, reader2.VsockSocket, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
-	assert.Contains(t, output2, "Hello from writer", "Reader 2 should see the file")
+	assert.Contains(t, output2, "Hello from writer", "Reader 2 should see the file from base volume")
 
-	// Verify write fails on read-only mount (reader-1)
-	t.Log("Verifying read-only enforcement...")
-	_, code, err = execWithRetry(ctx, reader1.VsockSocket, []string{
-		"/bin/sh", "-c", "echo 'illegal write' > /data/illegal.txt",
+	// Verify overlay allows writes: append to the file and verify in one command
+	t.Log("Verifying overlay allows writes (append to file)...")
+	output2, code, err = execWithRetry(ctx, reader2.VsockSocket, []string{
+		"/bin/sh", "-c", "echo 'Appended by overlay' >> /data/test.txt && sync && cat /data/test.txt",
 	})
-	require.NoError(t, err, "Exec should succeed even if command fails")
-	assert.NotEqual(t, 0, code, "Write to read-only volume should fail with non-zero exit")
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "Append to file should succeed with overlay")
+	assert.Contains(t, output2, "Hello from writer", "Reader 2 should still see original data")
+	assert.Contains(t, output2, "Appended by overlay", "Reader 2 should see appended data")
 
-	t.Log("Multi-attach read-only test passed!")
+	// Verify reader-1 does NOT see the appended data AND write fails (all in one command)
+	t.Log("Verifying read-only enforcement and isolation on reader-1...")
+	output1, code, err = execWithRetry(ctx, reader1.VsockSocket, []string{
+		"/bin/sh", "-c", "cat /data/test.txt && echo 'illegal' > /data/illegal.txt",
+	})
+	require.NoError(t, err, "Exec should succeed even if write command fails")
+	// Code should be non-zero because the write fails
+	assert.NotEqual(t, 0, code, "Write to read-only volume should fail with non-zero exit")
+	assert.Contains(t, output1, "Hello from writer", "Reader 1 should see original data")
+	assert.NotContains(t, output1, "Appended by overlay", "Reader 1 should NOT see overlay data (isolated)")
+
+	t.Log("Multi-attach with overlay test passed!")
 
 	// Cleanup
 	t.Log("Cleaning up...")
