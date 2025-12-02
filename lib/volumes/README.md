@@ -31,6 +31,16 @@ A single volume can be attached to multiple instances simultaneously if **all** 
 - If all existing attachments are read-only, additional read-only attachments are allowed
 - Cannot add read-write attachment to a volume with existing attachments
 
+## Overlay Mode
+
+When attaching a volume with `overlay: true`, the instance gets copy-on-write semantics:
+- Base volume is mounted read-only (shared)
+- A per-instance overlay disk captures all writes
+- Instance sees combined view: base data + its local changes
+- Other instances don't see each other's overlay writes (isolated)
+
+This allows multiple instances to share a common base (e.g., dataset, model weights) while each can make local modifications without affecting others. Requires `readonly: true` and `overlay_size` specifying the max size of per-instance writes.
+
 ## Constraints
 
 - Volumes can only be attached at instance creation time (no hot-attach)
