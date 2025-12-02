@@ -600,6 +600,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance details
@@ -630,6 +631,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         204:
           description: Instance deleted
@@ -658,6 +660,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance in standby
@@ -696,6 +699,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance restored
@@ -738,6 +742,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: tail
           in: query
           required: false
@@ -784,11 +789,13 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: volumeId
           in: path
           required: true
           schema:
             type: string
+          description: Volume ID or name
       requestBody:
         required: true
         content:
@@ -831,11 +838,13 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: volumeId
           in: path
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         200:
           description: Volume detached
@@ -932,6 +941,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         200:
           description: Volume details
@@ -962,6 +972,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         204:
           description: Volume deleted
