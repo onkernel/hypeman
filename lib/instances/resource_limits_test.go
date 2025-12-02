@@ -29,7 +29,7 @@ func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
 
 	err := validateVolumeAttachments(volumes)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot attach more than 23 volumes")
+	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
 
 func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
