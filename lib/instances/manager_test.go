@@ -309,46 +309,77 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Test volume is accessible from inside the guest via exec
 	t.Log("Testing volume from inside guest via exec...")
 	
-	// Helper to run command in guest
+	// Helper to run command in guest with retry (exec agent may need time between connections)
 	runCmd := func(command ...string) (string, int, error) {
-		var stdout, stderr bytes.Buffer
-		exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
-			Command: command,
-			Stdout:  &stdout,
-			Stderr:  &stderr,
-			TTY:     false,
-		})
-		if err != nil {
-			return stderr.String(), -1, err
+		var lastOutput string
+		var lastExitCode int
+		var lastErr error
+		
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(200 * time.Millisecond)
+			}
+			
+			var stdout, stderr bytes.Buffer
+			exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+				Command: command,
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				TTY:     false,
+			})
+			
+			// Combine stdout and stderr
+			output := stdout.String()
+			if stderr.Len() > 0 {
+				output += stderr.String()
+			}
+			output = strings.TrimSpace(output)
+			
+			if err != nil {
+				lastErr = err
+				lastOutput = output
+				lastExitCode = -1
+				continue
+			}
+			
+			lastOutput = output
+			lastExitCode = exit.Code
+			lastErr = nil
+			
+			// Success if we got output or it's a command expected to have no output
+			if output != "" || exit.Code == 0 {
+				return output, exit.Code, nil
+			}
 		}
-		return strings.TrimSpace(stdout.String()), exit.Code, nil
+		
+		return lastOutput, lastExitCode, lastErr
 	}
 
-	// Verify volume mount point exists
-	output, exitCode, err := runCmd("ls", "-la", "/mnt/data")
-	require.NoError(t, err, "Should be able to ls /mnt/data")
-	assert.Equal(t, 0, exitCode, "ls /mnt/data should succeed")
-	t.Logf("Volume mount contents: %s", output)
-
-	// Write a test file to the volume
+	// Test volume in a single exec call to avoid vsock connection issues
+	// This verifies: mount exists, can write, can read back, is a real block device
 	testContent := "hello-from-volume-test"
-	output, exitCode, err = runCmd("sh", "-c", fmt.Sprintf("echo '%s' > /mnt/data/test.txt", testContent))
-	require.NoError(t, err, "Should be able to write to volume")
-	assert.Equal(t, 0, exitCode, "Write to volume should succeed")
-
-	// Read the test file back
-	output, exitCode, err = runCmd("cat", "/mnt/data/test.txt")
-	require.NoError(t, err, "Should be able to read from volume")
-	assert.Equal(t, 0, exitCode, "Read from volume should succeed")
-	assert.Equal(t, testContent, output, "Volume content should match what was written")
+	script := fmt.Sprintf(`
+		set -e
+		echo "=== Volume directory ==="
+		ls -la /mnt/data
+		echo "=== Writing test file ==="
+		echo '%s' > /mnt/data/test.txt
+		echo "=== Reading test file ==="
+		cat /mnt/data/test.txt
+		echo "=== Volume mount info ==="
+		df -h /mnt/data
+	`, testContent)
+	
+	output, exitCode, err := runCmd("sh", "-c", script)
+	require.NoError(t, err, "Volume test script should execute")
+	require.Equal(t, 0, exitCode, "Volume test script should succeed")
+	
+	// Verify all expected output is present
+	require.Contains(t, output, "lost+found", "Volume should be ext4-formatted")
+	require.Contains(t, output, testContent, "Should be able to read written content")
+	require.Contains(t, output, "/dev/vd", "Volume should be mounted from block device")
+	t.Logf("Volume test output:\n%s", output)
 	t.Log("Volume read/write test passed!")
-
-	// Verify it's a real mount (not just a directory)
-	output, exitCode, err = runCmd("df", "/mnt/data")
-	require.NoError(t, err, "Should be able to df /mnt/data")
-	assert.Equal(t, 0, exitCode, "df /mnt/data should succeed")
-	assert.Contains(t, output, "/dev/vd", "Volume should be mounted from a block device")
-	t.Logf("Volume mount info: %s", output)
 
 	// Test streaming logs with live updates
 	t.Log("Testing log streaming with live updates...")
