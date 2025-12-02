@@ -16,6 +16,7 @@ type Manager interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
 	GetInstance(ctx context.Context, id string) (*Instance, error)
+	GetInstanceByName(ctx context.Context, name string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
@@ -25,26 +26,35 @@ type Manager interface {
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 }
 
+// ResourceLimits contains configurable resource limits for instances
+type ResourceLimits struct {
+	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
+	MaxVcpusPerInstance  int   // Maximum vCPUs per instance (0 = unlimited)
+	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
+	MaxTotalVcpus        int   // Maximum total vCPUs across all instances (0 = unlimited)
+	MaxTotalMemory       int64 // Maximum total memory in bytes across all instances (0 = unlimited)
+}
+
 type manager struct {
 	paths          *paths.Paths
 	imageManager   images.Manager
 	systemManager  system.Manager
 	networkManager network.Manager
 	volumeManager  volumes.Manager
-	maxOverlaySize int64         // Maximum overlay disk size in bytes
+	limits         ResourceLimits
 	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
 	hostTopology   *HostTopology // Cached host CPU topology
 }
 
 // NewManager creates a new instances manager
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, maxOverlaySize int64) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, limits ResourceLimits) Manager {
 	return &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		networkManager: networkManager,
 		volumeManager:  volumeManager,
-		maxOverlaySize: maxOverlaySize,
+		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
 	}
@@ -109,6 +119,31 @@ func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error)
 	lock.RLock()
 	defer lock.RUnlock()
 	return m.getInstance(ctx, id)
+}
+
+// GetInstanceByName returns an instance by name
+// Returns ErrNotFound if no instance matches, ErrAmbiguousName if multiple match
+func (m *manager) GetInstanceByName(ctx context.Context, name string) (*Instance, error) {
+	instances, err := m.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []Instance
+	for _, inst := range instances {
+		if inst.Name == name {
+			matches = append(matches, inst)
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(matches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return &matches[0], nil
 }
 
 // StreamInstanceLogs streams instance console logs

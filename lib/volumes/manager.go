@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ type Manager interface {
 	ListVolumes(ctx context.Context) ([]Volume, error)
 	CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
 	GetVolume(ctx context.Context, id string) (*Volume, error)
+	GetVolumeByName(ctx context.Context, name string) (*Volume, error)
 	DeleteVolume(ctx context.Context, id string) error
 
 	// Attachment operations (called by instance manager)
@@ -25,15 +27,18 @@ type Manager interface {
 }
 
 type manager struct {
-	paths       *paths.Paths
-	volumeLocks sync.Map // map[string]*sync.RWMutex - per-volume locks
+	paths                 *paths.Paths
+	maxTotalVolumeStorage int64    // Maximum total volume storage in bytes (0 = unlimited)
+	volumeLocks           sync.Map // map[string]*sync.RWMutex - per-volume locks
 }
 
 // NewManager creates a new volumes manager
-func NewManager(p *paths.Paths) Manager {
+// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited)
+func NewManager(p *paths.Paths, maxTotalVolumeStorage int64) Manager {
 	return &manager{
-		paths:       p,
-		volumeLocks: sync.Map{},
+		paths:                 p,
+		maxTotalVolumeStorage: maxTotalVolumeStorage,
+		volumeLocks:           sync.Map{},
 	}
 }
 
@@ -63,6 +68,20 @@ func (m *manager) ListVolumes(ctx context.Context) ([]Volume, error) {
 	return volumes, nil
 }
 
+// calculateTotalVolumeStorage calculates total storage used by all volumes
+func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error) {
+	volumes, err := m.ListVolumes(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var totalBytes int64
+	for _, vol := range volumes {
+		totalBytes += int64(vol.SizeGb) * 1024 * 1024 * 1024
+	}
+	return totalBytes, nil
+}
+
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
 	// Generate or use provided ID
@@ -74,6 +93,20 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 	// Check volume doesn't already exist
 	if _, err := loadMetadata(m.paths, id); err == nil {
 		return nil, ErrAlreadyExists
+	}
+
+	// Check total volume storage limit
+	if m.maxTotalVolumeStorage > 0 {
+		currentStorage, err := m.calculateTotalVolumeStorage(ctx)
+		if err != nil {
+			// Log but don't fail - continue with creation
+			// (better to allow creation than block due to listing error)
+		} else {
+			newVolumeSize := int64(req.SizeGb) * 1024 * 1024 * 1024
+			if currentStorage+newVolumeSize > m.maxTotalVolumeStorage {
+				return nil, fmt.Errorf("total volume storage would be %d bytes, exceeds limit of %d bytes", currentStorage+newVolumeSize, m.maxTotalVolumeStorage)
+			}
+		}
 	}
 
 	// Create volume directory
@@ -119,6 +152,31 @@ func (m *manager) GetVolume(ctx context.Context, id string) (*Volume, error) {
 	}
 
 	return m.metadataToVolume(meta), nil
+}
+
+// GetVolumeByName returns a volume by name
+// Returns ErrNotFound if no volume matches, ErrAmbiguousName if multiple match
+func (m *manager) GetVolumeByName(ctx context.Context, name string) (*Volume, error) {
+	volumes, err := m.ListVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []Volume
+	for _, vol := range volumes {
+		if vol.Name == name {
+			matches = append(matches, vol)
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(matches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return &matches[0], nil
 }
 
 // DeleteVolume deletes a volume

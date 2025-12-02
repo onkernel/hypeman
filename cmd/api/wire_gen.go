@@ -37,7 +37,10 @@ func initializeApp() (*application, func(), error) {
 	}
 	systemManager := providers.ProvideSystemManager(paths)
 	networkManager := providers.ProvideNetworkManager(paths, config)
-	volumesManager := providers.ProvideVolumeManager(paths)
+	volumesManager, err := providers.ProvideVolumeManager(paths, config)
+	if err != nil {
+		return nil, nil, err
+	}
 	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, volumesManager)
 	if err != nil {
 		return nil, nil, err

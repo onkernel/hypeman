@@ -61,10 +61,49 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	if err := maxOverlaySize.UnmarshalText([]byte(cfg.MaxOverlaySize)); err != nil {
 		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.MaxOverlaySize, err)
 	}
-	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, int64(maxOverlaySize)), nil
+
+	// Parse max memory per instance (empty or "0" means unlimited)
+	var maxMemoryPerInstance int64
+	if cfg.MaxMemoryPerInstance != "" && cfg.MaxMemoryPerInstance != "0" {
+		var memSize datasize.ByteSize
+		if err := memSize.UnmarshalText([]byte(cfg.MaxMemoryPerInstance)); err != nil {
+			return nil, fmt.Errorf("failed to parse MAX_MEMORY_PER_INSTANCE '%s': %w", cfg.MaxMemoryPerInstance, err)
+		}
+		maxMemoryPerInstance = int64(memSize)
+	}
+
+	// Parse max total memory (empty or "0" means unlimited)
+	var maxTotalMemory int64
+	if cfg.MaxTotalMemory != "" && cfg.MaxTotalMemory != "0" {
+		var memSize datasize.ByteSize
+		if err := memSize.UnmarshalText([]byte(cfg.MaxTotalMemory)); err != nil {
+			return nil, fmt.Errorf("failed to parse MAX_TOTAL_MEMORY '%s': %w", cfg.MaxTotalMemory, err)
+		}
+		maxTotalMemory = int64(memSize)
+	}
+
+	limits := instances.ResourceLimits{
+		MaxOverlaySize:       int64(maxOverlaySize),
+		MaxVcpusPerInstance:  cfg.MaxVcpusPerInstance,
+		MaxMemoryPerInstance: maxMemoryPerInstance,
+		MaxTotalVcpus:        cfg.MaxTotalVcpus,
+		MaxTotalMemory:       maxTotalMemory,
+	}
+
+	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits), nil
 }
 
 // ProvideVolumeManager provides the volume manager
-func ProvideVolumeManager(p *paths.Paths) volumes.Manager {
-	return volumes.NewManager(p)
+func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, error) {
+	// Parse max total volume storage (empty or "0" means unlimited)
+	var maxTotalVolumeStorage int64
+	if cfg.MaxTotalVolumeStorage != "" && cfg.MaxTotalVolumeStorage != "0" {
+		var storageSize datasize.ByteSize
+		if err := storageSize.UnmarshalText([]byte(cfg.MaxTotalVolumeStorage)); err != nil {
+			return nil, fmt.Errorf("failed to parse MAX_TOTAL_VOLUME_STORAGE '%s': %w", cfg.MaxTotalVolumeStorage, err)
+		}
+		maxTotalVolumeStorage = int64(storageSize)
+	}
+
+	return volumes.NewManager(p, maxTotalVolumeStorage), nil
 }

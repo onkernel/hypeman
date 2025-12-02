@@ -40,9 +40,15 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
-	volumeManager := volumes.NewManager(p)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, maxOverlaySize).(*manager)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
+	limits := ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
+		MaxVcpusPerInstance:  0,                        // unlimited
+		MaxMemoryPerInstance: 0,                        // unlimited
+		MaxTotalVcpus:        0,                        // unlimited
+		MaxTotalMemory:       0,                        // unlimited
+	}
+	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -204,7 +210,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 
 	// Create a volume to attach
 	p := paths.New(tmpDir)
-	volumeManager := volumes.NewManager(p)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
 	t.Log("Creating volume...")
 	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 		Name:   "test-data",
@@ -468,9 +474,15 @@ func TestStorageOperations(t *testing.T) {
 	imageManager, _ := images.NewManager(p, 1)
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
-	volumeManager := volumes.NewManager(p)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(p, imageManager, systemManager, networkManager, volumeManager, maxOverlaySize).(*manager)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
+	limits := ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
+		MaxVcpusPerInstance:  0,                        // unlimited
+		MaxMemoryPerInstance: 0,                        // unlimited
+		MaxTotalVcpus:        0,                        // unlimited
+		MaxTotalMemory:       0,                        // unlimited
+	}
+	manager := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

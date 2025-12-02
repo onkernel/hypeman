@@ -45,6 +45,31 @@ var systemDirectories = []string{
 	"/var",
 }
 
+// AggregateUsage represents total resource usage across all instances
+type AggregateUsage struct {
+	TotalVcpus  int
+	TotalMemory int64 // in bytes
+}
+
+// calculateAggregateUsage calculates total resource usage across all running instances
+func (m *manager) calculateAggregateUsage(ctx context.Context) (AggregateUsage, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return AggregateUsage{}, err
+	}
+
+	var usage AggregateUsage
+	for _, inst := range instances {
+		// Only count running/paused instances (those consuming resources)
+		if inst.State == StateRunning || inst.State == StatePaused || inst.State == StateCreated {
+			usage.TotalVcpus += inst.Vcpus
+			usage.TotalMemory += inst.Size + inst.HotplugSize
+		}
+	}
+
+	return usage, nil
+}
+
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
 // CIDs 0-2 are reserved (hypervisor, loopback, host)
 // Returns value in range 3 to 4294967295
@@ -121,13 +146,38 @@ func (m *manager) createInstance(
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
 	// Validate overlay size against max
-	if overlaySize > m.maxOverlaySize {
-		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.maxOverlaySize)
+	if overlaySize > m.limits.MaxOverlaySize {
+		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
 	}
+
+	// Validate per-instance resource limits
+	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
+		return nil, fmt.Errorf("vcpus %d exceeds maximum allowed %d per instance", vcpus, m.limits.MaxVcpusPerInstance)
+	}
+	totalMemory := size + hotplugSize
+	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
+		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+	}
+
+	// Validate aggregate resource limits
+	if m.limits.MaxTotalVcpus > 0 || m.limits.MaxTotalMemory > 0 {
+		usage, err := m.calculateAggregateUsage(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "failed to calculate aggregate usage, skipping limit check", "error", err)
+		} else {
+			if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
+				return nil, fmt.Errorf("total vcpus would be %d, exceeds aggregate limit of %d", usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
+			}
+			if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+totalMemory > m.limits.MaxTotalMemory {
+				return nil, fmt.Errorf("total memory would be %d, exceeds aggregate limit of %d", usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
+			}
+		}
+	}
+
 	if req.Env == nil {
 		req.Env = make(map[string]string)
 	}
