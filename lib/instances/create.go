@@ -3,7 +3,9 @@ package instances
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nrednav/cuid2"
@@ -15,6 +17,33 @@ import (
 	"github.com/onkernel/hypeman/lib/volumes"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
+
+const (
+	// MaxVolumesPerInstance is the maximum number of volumes that can be attached
+	// to a single instance. This limit exists because volume devices are named
+	// /dev/vdd, /dev/vde, ... /dev/vdz (letters d-z = 23 devices).
+	// Devices a-c are reserved for rootfs, overlay, and config disk.
+	MaxVolumesPerInstance = 23
+)
+
+// systemDirectories are paths that cannot be used as volume mount points
+var systemDirectories = []string{
+	"/",
+	"/bin",
+	"/boot",
+	"/dev",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/proc",
+	"/root",
+	"/run",
+	"/sbin",
+	"/sys",
+	"/tmp",
+	"/usr",
+	"/var",
+}
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
 // CIDs 0-2 are reserved (hypervisor, loopback, host)
@@ -287,7 +316,59 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
+
+	// Validate volume attachments
+	if err := validateVolumeAttachments(req.Volumes); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateVolumeAttachments validates volume attachment requests
+func validateVolumeAttachments(volumes []VolumeAttachment) error {
+	if len(volumes) > MaxVolumesPerInstance {
+		return fmt.Errorf("cannot attach more than %d volumes per instance", MaxVolumesPerInstance)
+	}
+
+	seenPaths := make(map[string]bool)
+	for _, vol := range volumes {
+		// Validate mount path is absolute
+		if !filepath.IsAbs(vol.MountPath) {
+			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
+		}
+
+		// Clean the path to normalize it
+		cleanPath := filepath.Clean(vol.MountPath)
+
+		// Check for system directories
+		if isSystemDirectory(cleanPath) {
+			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
+		}
+
+		// Check for duplicate mount paths
+		if seenPaths[cleanPath] {
+			return fmt.Errorf("duplicate mount path %q", cleanPath)
+		}
+		seenPaths[cleanPath] = true
+	}
+
+	return nil
+}
+
+// isSystemDirectory checks if a path is or is under a system directory
+func isSystemDirectory(path string) bool {
+	cleanPath := filepath.Clean(path)
+	for _, sysDir := range systemDirectories {
+		if cleanPath == sysDir {
+			return true
+		}
+		// Also block subdirectories of system paths (except / which would block everything)
+		if sysDir != "/" && (strings.HasPrefix(cleanPath, sysDir+"/") || cleanPath == sysDir) {
+			return true
+		}
+	}
+	return false
 }
 
 // startAndBootVM starts the VMM and boots the VM
