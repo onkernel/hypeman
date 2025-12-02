@@ -116,22 +116,17 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	t.Logf("Writer instance created: %s", writerInst.Id)
 
 	// Wait for exec-agent
-	err = waitForExecAgent(ctx, manager, writerInst.Id, 30*time.Second)
+	err = waitForExecAgent(ctx, manager, writerInst.Id, 15*time.Second)
 	require.NoError(t, err, "exec-agent should be ready")
 
-	// Write test file
+	// Write test file, sync, and verify in one command to ensure data persistence
 	t.Log("Writing test file to volume...")
-	_, code, err := execWithRetry(ctx, writerInst.VsockSocket, []string{
-		"/bin/sh", "-c", "echo 'Hello from writer' > /data/test.txt",
+	output, code, err := execWithRetry(ctx, writerInst.VsockSocket, []string{
+		"/bin/sh", "-c", "echo 'Hello from writer' > /data/test.txt && sync && cat /data/test.txt",
 	})
 	require.NoError(t, err)
-	require.Equal(t, 0, code, "Write command should succeed")
-
-	// Verify file was written
-	output, code, err := execWithRetry(ctx, writerInst.VsockSocket, []string{"cat", "/data/test.txt"})
-	require.NoError(t, err)
-	require.Equal(t, 0, code)
-	assert.Contains(t, output, "Hello from writer")
+	require.Equal(t, 0, code, "Write+verify command should succeed")
+	require.Contains(t, output, "Hello from writer", "File should contain test data")
 	t.Log("Test file written successfully")
 
 	// Delete writer instance (detaches volume)
@@ -183,25 +178,25 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	assert.Len(t, vol.Attachments, 2, "Volume should have 2 attachments")
 
 	// Wait for exec-agent on both readers
-	err = waitForExecAgent(ctx, manager, reader1.Id, 30*time.Second)
+	err = waitForExecAgent(ctx, manager, reader1.Id, 15*time.Second)
 	require.NoError(t, err, "reader-1 exec-agent should be ready")
 
-	err = waitForExecAgent(ctx, manager, reader2.Id, 30*time.Second)
+	err = waitForExecAgent(ctx, manager, reader2.Id, 15*time.Second)
 	require.NoError(t, err, "reader-2 exec-agent should be ready")
 
 	// Verify data is readable from reader-1
 	t.Log("Verifying data from reader-1...")
-	output, code, err = execWithRetry(ctx, reader1.VsockSocket, []string{"cat", "/data/test.txt"})
+	output1, code, err := execWithRetry(ctx, reader1.VsockSocket, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
-	assert.Contains(t, output, "Hello from writer", "Reader 1 should see the file")
+	assert.Contains(t, output1, "Hello from writer", "Reader 1 should see the file")
 
 	// Verify data is readable from reader-2
 	t.Log("Verifying data from reader-2...")
-	output, code, err = execWithRetry(ctx, reader2.VsockSocket, []string{"cat", "/data/test.txt"})
+	output2, code, err := execWithRetry(ctx, reader2.VsockSocket, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
-	assert.Contains(t, output, "Hello from writer", "Reader 2 should see the file")
+	assert.Contains(t, output2, "Hello from writer", "Reader 2 should see the file")
 
 	// Verify write fails on read-only mount (reader-1)
 	t.Log("Verifying read-only enforcement...")

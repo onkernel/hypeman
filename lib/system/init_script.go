@@ -83,8 +83,9 @@ if [ -n "${VOLUME_MOUNTS:-}" ]; then
     mkdir -p "/overlay/newroot${path}"
     
     # Mount with appropriate options
+    # For read-only mounts, use noload to skip journal recovery (safe since no writes will occur)
     if [ "$mode" = "ro" ]; then
-      mount -t ext4 -o ro "$device" "/overlay/newroot${path}"
+      mount -t ext4 -o ro,noload "$device" "/overlay/newroot${path}"
     else
       mount -t ext4 "$device" "/overlay/newroot${path}"
     fi
