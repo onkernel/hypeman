@@ -263,18 +263,14 @@ func (m *manager) createInstance(
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "id", id, "count", len(req.Volumes))
 		for _, volAttach := range req.Volumes {
-			// Check volume exists and is not attached
-			vol, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
+			// Check volume exists
+			_, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
 			if err != nil {
 				log.ErrorContext(ctx, "volume not found", "id", id, "volume_id", volAttach.VolumeID, "error", err)
 				return nil, fmt.Errorf("volume %s: %w", volAttach.VolumeID, err)
 			}
-			if vol.AttachedTo != nil {
-				log.ErrorContext(ctx, "volume already attached", "id", id, "volume_id", volAttach.VolumeID, "attached_to", *vol.AttachedTo)
-				return nil, fmt.Errorf("volume %s is already attached to instance %s", volAttach.VolumeID, *vol.AttachedTo)
-			}
 
-			// Mark volume as attached
+			// Mark volume as attached (AttachVolume handles multi-attach validation)
 			if err := m.volumeManager.AttachVolume(ctx, volAttach.VolumeID, volumes.AttachVolumeRequest{
 				InstanceID: id,
 				MountPath:  volAttach.MountPath,
@@ -287,7 +283,7 @@ func (m *manager) createInstance(
 			// Add volume cleanup to stack
 			volumeID := volAttach.VolumeID // capture for closure
 			cu.Add(func() {
-				m.volumeManager.DetachVolume(ctx, volumeID)
+				m.volumeManager.DetachVolume(ctx, volumeID, id)
 			})
 		}
 		// Store volume attachments in metadata
