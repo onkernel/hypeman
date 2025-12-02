@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,9 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestExecRapidSequential tests rapid sequential exec commands.
-// This catches timing/concurrency issues in the exec infrastructure.
-func TestExecRapidSequential(t *testing.T) {
+// waitForExecAgent polls until exec-agent is ready
+func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		logs, err := collectLogs(ctx, mgr, instanceID, 100)
+		if err == nil && strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return context.DeadlineExceeded
+}
+
+// Note: execCommand is defined in network_test.go
+
+// TestExecConcurrent tests concurrent exec commands from multiple goroutines.
+// This validates that the exec infrastructure handles concurrent access correctly.
+func TestExecConcurrent(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available")
 	}
@@ -61,7 +77,7 @@ func TestExecRapidSequential(t *testing.T) {
 		Size:           512 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
-		Vcpus:          1,
+		Vcpus:          2, // More vCPUs for concurrency
 		NetworkEnabled: false,
 	})
 	require.NoError(t, err)
@@ -72,31 +88,77 @@ func TestExecRapidSequential(t *testing.T) {
 		manager.DeleteInstance(ctx, inst.Id)
 	})
 
-	// Wait for exec-agent
+	// Wait for exec-agent to be ready (retry here is OK - we're just waiting for startup)
 	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
 	require.NoError(t, err, "exec-agent should be ready")
 
-	// Run rapid sequential exec commands
-	t.Log("Running rapid sequential exec commands...")
-	for i := 1; i <= 10; i++ {
-		// Write
-		writeCmd := fmt.Sprintf("echo '%d' > /tmp/test.txt", i)
-		output, code, err := execWithRetry(ctx, inst.VsockSocket, []string{"/bin/sh", "-c", writeCmd})
-		require.NoError(t, err, "write %d should not error", i)
-		require.Equal(t, 0, code, "write %d should succeed, output: %s", i, output)
+	// Verify exec-agent works with a simple command first
+	_, code, err := execCommand(ctx, inst.VsockSocket, "echo", "ready")
+	require.NoError(t, err, "initial exec should work")
+	require.Equal(t, 0, code, "initial exec should succeed")
 
-		// Read
-		output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/tmp/test.txt"})
-		require.NoError(t, err, "read %d should not error", i)
-		require.Equal(t, 0, code, "read %d should succeed", i)
+	// Run 5 concurrent workers, each doing 25 iterations with its own file
+	// NO RETRIES - this tests that exec works reliably under concurrent load
+	const numWorkers = 5
+	const numIterations = 25
 
-		expected := fmt.Sprintf("%d", i)
-		actual := strings.TrimSpace(output)
-		require.Equal(t, expected, actual, "iteration %d: expected %q, got %q", i, expected, actual)
+	t.Logf("Running %d concurrent workers, %d iterations each (no retries)...", numWorkers, numIterations)
 
-		t.Logf("Iteration %d: wrote and read %q successfully", i, expected)
+	var wg sync.WaitGroup
+	errors := make(chan error, numWorkers)
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			filename := fmt.Sprintf("/tmp/test%d.txt", workerID)
+
+			for i := 1; i <= numIterations; i++ {
+				// Write (no retry - must work first time)
+				writeCmd := fmt.Sprintf("echo '%d-%d' > %s", workerID, i, filename)
+				output, code, err := execCommand(ctx, inst.VsockSocket, "/bin/sh", "-c", writeCmd)
+				if err != nil {
+					errors <- fmt.Errorf("worker %d, iter %d: write error: %w", workerID, i, err)
+					return
+				}
+				if code != 0 {
+					errors <- fmt.Errorf("worker %d, iter %d: write failed with code %d, output: %s", workerID, i, code, output)
+					return
+				}
+
+				// Read (no retry - must work first time)
+				output, code, err = execCommand(ctx, inst.VsockSocket, "cat", filename)
+				if err != nil {
+					errors <- fmt.Errorf("worker %d, iter %d: read error: %w", workerID, i, err)
+					return
+				}
+				if code != 0 {
+					errors <- fmt.Errorf("worker %d, iter %d: read failed with code %d", workerID, i, code)
+					return
+				}
+
+				expected := fmt.Sprintf("%d-%d", workerID, i)
+				actual := strings.TrimSpace(output)
+				if expected != actual {
+					errors <- fmt.Errorf("worker %d, iter %d: expected %q, got %q", workerID, i, expected, actual)
+					return
+				}
+			}
+			t.Logf("Worker %d completed %d iterations", workerID, numIterations)
+		}(w)
 	}
 
-	t.Log("All 10 iterations passed!")
+	// Wait for all workers
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	var errs []error
+	for err := range errors {
+		errs = append(errs, err)
+	}
+	require.Empty(t, errs, "concurrent exec failed: %v", errs)
+
+	t.Logf("All %d workers completed %d iterations each (total: %d exec pairs)", numWorkers, numIterations, numWorkers*numIterations*2)
 }
 
