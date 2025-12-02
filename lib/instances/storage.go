@@ -87,7 +87,10 @@ func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
 	return images.CreateEmptyExt4Disk(overlayPath, sizeBytes)
 }
 
-// createVolumeOverlayDisk creates a sparse overlay disk for a volume attachment
+// createVolumeOverlayDisk creates a sparse overlay disk for a volume attachment.
+// Cleanup note: If instance creation fails after this point, the overlay disk is
+// cleaned up automatically by deleteInstanceData() which removes the entire instance
+// directory (including vol-overlays/) via the cleanup stack in createInstance().
 func (m *manager) createVolumeOverlayDisk(instanceID, volumeID string, sizeBytes int64) error {
 	// Ensure vol-overlays directory exists
 	overlaysDir := m.paths.InstanceVolumeOverlaysDir(instanceID)

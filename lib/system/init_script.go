@@ -87,7 +87,10 @@ if [ -n "${VOLUME_MOUNTS:-}" ]; then
       # Overlay mode: mount base read-only, create overlayfs with per-instance writable layer
       overlay_device=$(echo "$vol" | cut -d: -f4)
       
-      # Create temp mount points for base and overlay disk
+      # Create temp mount points for base and overlay disk.
+      # These persist for the lifetime of the VM but are NOT leaked - they exist inside
+      # the ephemeral guest rootfs (which is itself an overlayfs) and are destroyed
+      # when the VM terminates along with all guest state.
       base_mount="/mnt/vol-base-$(basename "$path")"
       overlay_mount="/mnt/vol-overlay-$(basename "$path")"
       mkdir -p "$base_mount" "$overlay_mount"

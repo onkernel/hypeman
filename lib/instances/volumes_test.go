@@ -228,3 +228,88 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	manager.DeleteInstance(ctx, reader2.Id)
 	volumeManager.DeleteVolume(ctx, vol.Id)
 }
+
+// TestOverlayDiskCleanupOnDelete verifies that vol-overlays/ directory is removed
+// when an instance with overlay volumes is deleted.
+func TestOverlayDiskCleanupOnDelete(t *testing.T) {
+	// Skip in short mode - this is an integration test
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Require KVM access
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available - skipping VM test")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	// Setup: prepare image and system files
+	imageManager, err := images.NewManager(p, 1)
+	require.NoError(t, err)
+
+	t.Log("Pulling alpine image...")
+	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, "docker.io/library/alpine:latest")
+		if err == nil && img.Status == images.StatusReady {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	systemManager := system.NewManager(p)
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+
+	// Create volume
+	volumeManager := volumes.NewManager(p, 0)
+	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+		Name:   "cleanup-test-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	// Create instance with overlay volume
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "overlay-cleanup-test",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           512 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Volumes: []VolumeAttachment{
+			{VolumeID: vol.Id, MountPath: "/data", Readonly: true, Overlay: true, OverlaySize: 100 * 1024 * 1024},
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify vol-overlays directory exists
+	overlaysDir := p.InstanceVolumeOverlaysDir(inst.Id)
+	_, err = os.Stat(overlaysDir)
+	require.NoError(t, err, "vol-overlays directory should exist after instance creation")
+
+	// Verify overlay disk file exists
+	overlayDisk := p.InstanceVolumeOverlay(inst.Id, vol.Id)
+	_, err = os.Stat(overlayDisk)
+	require.NoError(t, err, "overlay disk file should exist after instance creation")
+
+	// Delete the instance
+	err = manager.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	// Verify instance directory is removed (which includes vol-overlays/)
+	instanceDir := p.InstanceDir(inst.Id)
+	_, err = os.Stat(instanceDir)
+	assert.True(t, os.IsNotExist(err), "instance directory should be removed after deletion")
+
+	// Cleanup
+	volumeManager.DeleteVolume(ctx, vol.Id)
+}

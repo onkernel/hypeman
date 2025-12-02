@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -290,5 +291,102 @@ func TestDeleteVolume_RejectIfAttached(t *testing.T) {
 	// Try to delete - should fail
 	err = manager.DeleteVolume(ctx, vol.Id)
 	assert.ErrorIs(t, err, ErrInUse)
+}
+
+func TestMultiAttach_ConcurrentAttachments(t *testing.T) {
+	manager, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create a volume
+	vol, err := manager.CreateVolume(ctx, CreateVolumeRequest{
+		Name:   "concurrent-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	// Launch multiple goroutines trying to attach simultaneously
+	const numGoroutines = 10
+	results := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(instanceNum int) {
+			err := manager.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+				InstanceID: fmt.Sprintf("instance-%d", instanceNum),
+				MountPath:  "/data",
+				Readonly:   true,
+			})
+			results <- err
+		}(i)
+	}
+
+	// Collect results
+	var successCount, errorCount int
+	for i := 0; i < numGoroutines; i++ {
+		err := <-results
+		if err == nil {
+			successCount++
+		} else {
+			errorCount++
+		}
+	}
+
+	// All should succeed since all are read-only
+	assert.Equal(t, numGoroutines, successCount, "All read-only attachments should succeed")
+	assert.Equal(t, 0, errorCount, "No errors expected for concurrent read-only attachments")
+
+	// Verify final state has all attachments
+	vol, err = manager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Len(t, vol.Attachments, numGoroutines, "Should have all attachments")
+}
+
+func TestMultiAttach_ConcurrentRWConflict(t *testing.T) {
+	manager, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create a volume
+	vol, err := manager.CreateVolume(ctx, CreateVolumeRequest{
+		Name:   "rw-conflict-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	// Launch multiple goroutines trying to attach read-write simultaneously
+	const numGoroutines = 5
+	results := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(instanceNum int) {
+			err := manager.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+				InstanceID: fmt.Sprintf("instance-%d", instanceNum),
+				MountPath:  "/data",
+				Readonly:   false, // All trying read-write
+			})
+			results <- err
+		}(i)
+	}
+
+	// Collect results
+	var successCount, errorCount int
+	for i := 0; i < numGoroutines; i++ {
+		err := <-results
+		if err == nil {
+			successCount++
+		} else {
+			errorCount++
+		}
+	}
+
+	// Only ONE should succeed (first one gets exclusive lock)
+	assert.Equal(t, 1, successCount, "Exactly one read-write attachment should succeed")
+	assert.Equal(t, numGoroutines-1, errorCount, "Others should fail due to exclusive lock")
+
+	// Verify final state has exactly one attachment
+	vol, err = manager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Len(t, vol.Attachments, 1, "Should have exactly one attachment")
+	assert.False(t, vol.Attachments[0].Readonly, "Attachment should be read-write")
 }
 
