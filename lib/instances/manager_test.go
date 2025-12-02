@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,11 +12,13 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/onkernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,8 +40,15 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
+	limits := ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
+		MaxVcpusPerInstance:  0,                        // unlimited
+		MaxMemoryPerInstance: 0,                        // unlimited
+		MaxTotalVcpus:        0,                        // unlimited
+		MaxTotalMemory:       0,                        // unlimited
+	}
+	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -198,7 +208,23 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("System files ready")
 
-	// Create instance with real nginx image (stays running)
+	// Create a volume to attach
+	p := paths.New(tmpDir)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
+	t.Log("Creating volume...")
+	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+		Name:   "test-data",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vol)
+	t.Logf("Volume created: %s", vol.Id)
+
+	// Verify volume file exists and is not attached
+	assert.FileExists(t, p.VolumeData(vol.Id))
+	assert.Nil(t, vol.AttachedTo, "Volume should not be attached yet")
+
+	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
 		Name:        "test-nginx",
 		Image:       "docker.io/library/nginx:alpine",
@@ -209,6 +235,13 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 		NetworkEnabled: false, // No network for tests
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
+		},
+		Volumes: []VolumeAttachment{
+			{
+				VolumeID:  vol.Id,
+				MountPath: "/mnt/data",
+				Readonly:  false,
+			},
 		},
 	}
 
@@ -226,8 +259,19 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
 
+	// Verify volume is attached to instance
+	assert.Len(t, inst.Volumes, 1, "Instance should have 1 volume attached")
+	assert.Equal(t, vol.Id, inst.Volumes[0].VolumeID)
+	assert.Equal(t, "/mnt/data", inst.Volumes[0].MountPath)
+
+	// Verify volume shows as attached
+	vol, err = volumeManager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	require.NotNil(t, vol.AttachedTo, "Volume should be attached")
+	assert.Equal(t, inst.Id, *vol.AttachedTo)
+	assert.Equal(t, "/mnt/data", *vol.MountPath)
+
 	// Verify directories exist
-	p := paths.New(tmpDir)
 	assert.DirExists(t, p.InstanceDir(inst.Id))
 	assert.FileExists(t, p.InstanceMetadata(inst.Id))
 	assert.FileExists(t, p.InstanceOverlay(inst.Id))
@@ -267,6 +311,81 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+
+	// Test volume is accessible from inside the guest via exec
+	t.Log("Testing volume from inside guest via exec...")
+	
+	// Helper to run command in guest with retry (exec agent may need time between connections)
+	runCmd := func(command ...string) (string, int, error) {
+		var lastOutput string
+		var lastExitCode int
+		var lastErr error
+		
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(200 * time.Millisecond)
+			}
+			
+			var stdout, stderr bytes.Buffer
+			exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+				Command: command,
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				TTY:     false,
+			})
+			
+			// Combine stdout and stderr
+			output := stdout.String()
+			if stderr.Len() > 0 {
+				output += stderr.String()
+			}
+			output = strings.TrimSpace(output)
+			
+			if err != nil {
+				lastErr = err
+				lastOutput = output
+				lastExitCode = -1
+				continue
+			}
+			
+			lastOutput = output
+			lastExitCode = exit.Code
+			lastErr = nil
+			
+			// Success if we got output or it's a command expected to have no output
+			if output != "" || exit.Code == 0 {
+				return output, exit.Code, nil
+			}
+		}
+		
+		return lastOutput, lastExitCode, lastErr
+	}
+
+	// Test volume in a single exec call to avoid vsock connection issues
+	// This verifies: mount exists, can write, can read back, is a real block device
+	testContent := "hello-from-volume-test"
+	script := fmt.Sprintf(`
+		set -e
+		echo "=== Volume directory ==="
+		ls -la /mnt/data
+		echo "=== Writing test file ==="
+		echo '%s' > /mnt/data/test.txt
+		echo "=== Reading test file ==="
+		cat /mnt/data/test.txt
+		echo "=== Volume mount info ==="
+		df -h /mnt/data
+	`, testContent)
+	
+	output, exitCode, err := runCmd("sh", "-c", script)
+	require.NoError(t, err, "Volume test script should execute")
+	require.Equal(t, 0, exitCode, "Volume test script should succeed")
+	
+	// Verify all expected output is present
+	require.Contains(t, output, "lost+found", "Volume should be ext4-formatted")
+	require.Contains(t, output, testContent, "Should be able to read written content")
+	require.Contains(t, output, "/dev/vd", "Volume should be mounted from block device")
+	t.Logf("Volume test output:\n%s", output)
+	t.Log("Volume read/write test passed!")
 
 	// Test streaming logs with live updates
 	t.Log("Testing log streaming with live updates...")
@@ -321,8 +440,23 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Verify instance no longer exists
 	_, err = manager.GetInstance(ctx, inst.Id)
 	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Verify volume is detached but still exists
+	vol, err = volumeManager.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Nil(t, vol.AttachedTo, "Volume should be detached after instance deletion")
+	assert.FileExists(t, p.VolumeData(vol.Id), "Volume file should still exist")
+
+	// Delete volume
+	t.Log("Deleting volume...")
+	err = volumeManager.DeleteVolume(ctx, vol.Id)
+	require.NoError(t, err)
+
+	// Verify volume is gone
+	_, err = volumeManager.GetVolume(ctx, vol.Id)
+	assert.ErrorIs(t, err, volumes.ErrNotFound)
 	
-	t.Log("Instance lifecycle test complete!")
+	t.Log("Instance and volume lifecycle test complete!")
 }
 
 func TestStorageOperations(t *testing.T) {
@@ -340,8 +474,15 @@ func TestStorageOperations(t *testing.T) {
 	imageManager, _ := images.NewManager(p, 1)
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
+	volumeManager := volumes.NewManager(p, 0) // 0 = unlimited storage
+	limits := ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
+		MaxVcpusPerInstance:  0,                        // unlimited
+		MaxMemoryPerInstance: 0,                        // unlimited
+		MaxTotalVcpus:        0,                        // unlimited
+		MaxTotalMemory:       0,                        // unlimited
+	}
+	manager := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

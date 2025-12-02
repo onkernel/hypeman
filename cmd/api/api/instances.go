@@ -95,6 +95,23 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 
+	// Parse volumes
+	var volumes []instances.VolumeAttachment
+	if request.Body.Volumes != nil {
+		volumes = make([]instances.VolumeAttachment, len(*request.Body.Volumes))
+		for i, vol := range *request.Body.Volumes {
+			readonly := false
+			if vol.Readonly != nil {
+				readonly = *vol.Readonly
+			}
+			volumes[i] = instances.VolumeAttachment{
+				VolumeID:  vol.VolumeId,
+				MountPath: vol.MountPath,
+				Readonly:  readonly,
+			}
+		}
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:           request.Body.Name,
 		Image:          request.Body.Image,
@@ -104,6 +121,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Vcpus:          vcpus,
 		Env:            env,
 		NetworkEnabled: networkEnabled,
+		Volumes:        volumes,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -136,16 +154,28 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 }
 
 // GetInstance gets instance details
+// The id parameter can be either an instance ID or name
 func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRequestObject) (oapi.GetInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Try lookup by ID first
 	inst, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if errors.Is(err, instances.ErrNotFound) {
+		// Try lookup by name
+		inst, err = s.InstanceManager.GetInstanceByName(ctx, request.Id)
+	}
+
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
 			return oapi.GetInstance404JSONResponse{
 				Code:    "not_found",
 				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrAmbiguousName):
+			return oapi.GetInstance404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple instances have this name, use instance ID instead",
 			}, nil
 		default:
 			log.Error("failed to get instance", "error", err, "id", request.Id)
@@ -159,10 +189,27 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 }
 
 // DeleteInstance stops and deletes an instance
+// The id parameter can be either an instance ID or name
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	err := s.InstanceManager.DeleteInstance(ctx, request.Id)
+	// Resolve ID - try direct ID first, then name lookup
+	instanceID := request.Id
+	_, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if errors.Is(err, instances.ErrNotFound) {
+		// Try lookup by name
+		inst, nameErr := s.InstanceManager.GetInstanceByName(ctx, request.Id)
+		if nameErr == nil {
+			instanceID = inst.Id
+		} else if errors.Is(nameErr, instances.ErrAmbiguousName) {
+			return oapi.DeleteInstance404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple instances have this name, use instance ID instead",
+			}, nil
+		}
+	}
+
+	err = s.InstanceManager.DeleteInstance(ctx, instanceID)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -182,10 +229,27 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
+// The id parameter can be either an instance ID or name
 func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyInstanceRequestObject) (oapi.StandbyInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	inst, err := s.InstanceManager.StandbyInstance(ctx, request.Id)
+	// Resolve ID - try direct ID first, then name lookup
+	instanceID := request.Id
+	_, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if errors.Is(err, instances.ErrNotFound) {
+		// Try lookup by name
+		inst, nameErr := s.InstanceManager.GetInstanceByName(ctx, request.Id)
+		if nameErr == nil {
+			instanceID = inst.Id
+		} else if errors.Is(nameErr, instances.ErrAmbiguousName) {
+			return oapi.StandbyInstance404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple instances have this name, use instance ID instead",
+			}, nil
+		}
+	}
+
+	inst, err := s.InstanceManager.StandbyInstance(ctx, instanceID)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -210,10 +274,27 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 }
 
 // RestoreInstance restores an instance from standby
+// The id parameter can be either an instance ID or name
 func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreInstanceRequestObject) (oapi.RestoreInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	inst, err := s.InstanceManager.RestoreInstance(ctx, request.Id)
+	// Resolve ID - try direct ID first, then name lookup
+	instanceID := request.Id
+	_, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if errors.Is(err, instances.ErrNotFound) {
+		// Try lookup by name
+		inst, nameErr := s.InstanceManager.GetInstanceByName(ctx, request.Id)
+		if nameErr == nil {
+			instanceID = inst.Id
+		} else if errors.Is(nameErr, instances.ErrAmbiguousName) {
+			return oapi.RestoreInstance404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple instances have this name, use instance ID instead",
+			}, nil
+		}
+	}
+
+	inst, err := s.InstanceManager.RestoreInstance(ctx, instanceID)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -265,6 +346,7 @@ func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) 
 // GetInstanceLogs streams instance logs via SSE
 // With follow=false (default), streams last N lines then closes
 // With follow=true, streams last N lines then continues following new output
+// The id parameter can be either an instance ID or name
 func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
 	tail := 100
 	if request.Params.Tail != nil {
@@ -276,7 +358,23 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 		follow = *request.Params.Follow
 	}
 
-	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, request.Id, tail, follow)
+	// Resolve ID - try direct ID first, then name lookup
+	instanceID := request.Id
+	_, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if errors.Is(err, instances.ErrNotFound) {
+		// Try lookup by name
+		inst, nameErr := s.InstanceManager.GetInstanceByName(ctx, request.Id)
+		if nameErr == nil {
+			instanceID = inst.Id
+		} else if errors.Is(nameErr, instances.ErrAmbiguousName) {
+			return oapi.GetInstanceLogs404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple instances have this name, use instance ID instead",
+			}, nil
+		}
+	}
+
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, instanceID, tail, follow)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -357,6 +455,19 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	if len(inst.Env) > 0 {
 		oapiInst.Env = &inst.Env
+	}
+
+	// Convert volume attachments
+	if len(inst.Volumes) > 0 {
+		oapiVolumes := make([]oapi.VolumeAttachment, len(inst.Volumes))
+		for i, vol := range inst.Volumes {
+			oapiVolumes[i] = oapi.VolumeAttachment{
+				VolumeId:  vol.VolumeID,
+				MountPath: vol.MountPath,
+				Readonly:  lo.ToPtr(vol.Readonly),
+			}
+		}
+		oapiInst.Volumes = &oapiVolumes
 	}
 
 	return oapiInst

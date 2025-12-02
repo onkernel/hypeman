@@ -52,16 +52,28 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 }
 
 // GetVolume gets volume details
+// The id parameter can be either a volume ID or name
 func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeRequestObject) (oapi.GetVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Try lookup by ID first
 	vol, err := s.VolumeManager.GetVolume(ctx, request.Id)
+	if errors.Is(err, volumes.ErrNotFound) {
+		// Try lookup by name
+		vol, err = s.VolumeManager.GetVolumeByName(ctx, request.Id)
+	}
+
 	if err != nil {
 		switch {
 		case errors.Is(err, volumes.ErrNotFound):
 			return oapi.GetVolume404JSONResponse{
 				Code:    "not_found",
 				Message: "volume not found",
+			}, nil
+		case errors.Is(err, volumes.ErrAmbiguousName):
+			return oapi.GetVolume404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple volumes have this name, use volume ID instead",
 			}, nil
 		default:
 			log.Error("failed to get volume", "error", err, "id", request.Id)
@@ -75,10 +87,29 @@ func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeReques
 }
 
 // DeleteVolume deletes a volume
+// The id parameter can be either a volume ID or name
 func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolumeRequestObject) (oapi.DeleteVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	err := s.VolumeManager.DeleteVolume(ctx, request.Id)
+	// Resolve ID - try direct ID first, then name lookup
+	volumeID := request.Id
+	_, err := s.VolumeManager.GetVolume(ctx, request.Id)
+	if errors.Is(err, volumes.ErrNotFound) {
+		// Try lookup by name
+		vol, nameErr := s.VolumeManager.GetVolumeByName(ctx, request.Id)
+		if nameErr == nil {
+			volumeID = vol.Id
+		} else if errors.Is(nameErr, volumes.ErrAmbiguousName) {
+			return oapi.DeleteVolume404JSONResponse{
+				Code:    "ambiguous_name",
+				Message: "multiple volumes have this name, use volume ID instead",
+			}, nil
+		}
+		// If name lookup also fails with ErrNotFound, we'll proceed with original ID
+		// and let DeleteVolume return the proper 404
+	}
+
+	err = s.VolumeManager.DeleteVolume(ctx, volumeID)
 	if err != nil {
 		switch {
 		case errors.Is(err, volumes.ErrNotFound):
@@ -103,11 +134,18 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 }
 
 func volumeToOAPI(vol volumes.Volume) oapi.Volume {
-	return oapi.Volume{
+	oapiVol := oapi.Volume{
 		Id:        vol.Id,
 		Name:      vol.Name,
 		SizeGb:    vol.SizeGb,
 		CreatedAt: vol.CreatedAt,
 	}
+	if vol.AttachedTo != nil {
+		oapiVol.AttachedTo = vol.AttachedTo
+	}
+	if vol.MountPath != nil {
+		oapiVol.MountPath = vol.MountPath
+	}
+	return oapiVol
 }
 

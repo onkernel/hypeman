@@ -21,6 +21,15 @@ type Config struct {
 	LogMaxSize          string
 	LogMaxFiles         int
 	LogRotateInterval   string
+
+	// Resource limits - per instance
+	MaxVcpusPerInstance   int    // Max vCPUs for a single VM (0 = unlimited)
+	MaxMemoryPerInstance  string // Max memory for a single VM (0 = unlimited)
+
+	// Resource limits - aggregate
+	MaxTotalVcpus         int    // Aggregate vCPU limit across all instances (0 = unlimited)
+	MaxTotalMemory        string // Aggregate memory limit across all instances (0 = unlimited)
+	MaxTotalVolumeStorage string // Total volume storage limit (0 = unlimited)
 }
 
 // Load loads configuration from environment variables
@@ -43,6 +52,15 @@ func Load() *Config {
 		LogMaxSize:          getEnv("LOG_MAX_SIZE", "50MB"),
 		LogMaxFiles:         getEnvInt("LOG_MAX_FILES", 1),
 		LogRotateInterval:   getEnv("LOG_ROTATE_INTERVAL", "5m"),
+
+		// Resource limits - per instance (0 = unlimited)
+		MaxVcpusPerInstance:  getEnvInt("MAX_VCPUS_PER_INSTANCE", 16),
+		MaxMemoryPerInstance: getEnv("MAX_MEMORY_PER_INSTANCE", "32GB"),
+
+		// Resource limits - aggregate (0 or empty = unlimited)
+		MaxTotalVcpus:         getEnvInt("MAX_TOTAL_VCPUS", 0),
+		MaxTotalMemory:        getEnv("MAX_TOTAL_MEMORY", ""),
+		MaxTotalVolumeStorage: getEnv("MAX_TOTAL_VOLUME_STORAGE", ""),
 	}
 
 	return cfg

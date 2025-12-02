@@ -14,4 +14,7 @@ var (
 
 	// ErrImageNotReady is returned when the image is not ready for use
 	ErrImageNotReady = errors.New("image not ready")
+
+	// ErrAmbiguousName is returned when multiple instances have the same name
+	ErrAmbiguousName = errors.New("multiple instances with the same name")
 )

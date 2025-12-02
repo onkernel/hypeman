@@ -3,39 +3,269 @@ package volumes
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
+	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
+// Manager provides volume lifecycle operations
 type Manager interface {
 	ListVolumes(ctx context.Context) ([]Volume, error)
 	CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
 	GetVolume(ctx context.Context, id string) (*Volume, error)
+	GetVolumeByName(ctx context.Context, name string) (*Volume, error)
 	DeleteVolume(ctx context.Context, id string) error
+
+	// Attachment operations (called by instance manager)
+	AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error
+	DetachVolume(ctx context.Context, id string) error
+
+	// GetVolumePath returns the path to the volume data file
+	GetVolumePath(id string) string
 }
 
 type manager struct {
-	paths *paths.Paths
+	paths                 *paths.Paths
+	maxTotalVolumeStorage int64    // Maximum total volume storage in bytes (0 = unlimited)
+	volumeLocks           sync.Map // map[string]*sync.RWMutex - per-volume locks
 }
 
-func NewManager(p *paths.Paths) Manager {
+// NewManager creates a new volumes manager
+// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited)
+func NewManager(p *paths.Paths, maxTotalVolumeStorage int64) Manager {
 	return &manager{
-		paths: p,
+		paths:                 p,
+		maxTotalVolumeStorage: maxTotalVolumeStorage,
+		volumeLocks:           sync.Map{},
 	}
 }
 
+// getVolumeLock returns or creates a lock for a specific volume
+func (m *manager) getVolumeLock(id string) *sync.RWMutex {
+	lock, _ := m.volumeLocks.LoadOrStore(id, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
+}
+
+// ListVolumes returns all volumes
 func (m *manager) ListVolumes(ctx context.Context) ([]Volume, error) {
-	return []Volume{}, nil
+	ids, err := listVolumeIDs(m.paths)
+	if err != nil {
+		return nil, err
+	}
+
+	volumes := make([]Volume, 0, len(ids))
+	for _, id := range ids {
+		vol, err := m.GetVolume(ctx, id)
+		if err != nil {
+			// Skip volumes that can't be loaded
+			continue
+		}
+		volumes = append(volumes, *vol)
+	}
+
+	return volumes, nil
 }
 
+// calculateTotalVolumeStorage calculates total storage used by all volumes
+func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error) {
+	volumes, err := m.ListVolumes(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var totalBytes int64
+	for _, vol := range volumes {
+		totalBytes += int64(vol.SizeGb) * 1024 * 1024 * 1024
+	}
+	return totalBytes, nil
+}
+
+// CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
-	return nil, fmt.Errorf("volume creation not yet implemented")
+	// Generate or use provided ID
+	id := cuid2.Generate()
+	if req.Id != nil && *req.Id != "" {
+		id = *req.Id
+	}
+
+	// Check volume doesn't already exist
+	if _, err := loadMetadata(m.paths, id); err == nil {
+		return nil, ErrAlreadyExists
+	}
+
+	// Check total volume storage limit
+	if m.maxTotalVolumeStorage > 0 {
+		currentStorage, err := m.calculateTotalVolumeStorage(ctx)
+		if err != nil {
+			// Log but don't fail - continue with creation
+			// (better to allow creation than block due to listing error)
+		} else {
+			newVolumeSize := int64(req.SizeGb) * 1024 * 1024 * 1024
+			if currentStorage+newVolumeSize > m.maxTotalVolumeStorage {
+				return nil, fmt.Errorf("total volume storage would be %d bytes, exceeds limit of %d bytes", currentStorage+newVolumeSize, m.maxTotalVolumeStorage)
+			}
+		}
+	}
+
+	// Create volume directory
+	if err := ensureVolumeDir(m.paths, id); err != nil {
+		return nil, err
+	}
+
+	// Create and format the disk
+	if err := createVolumeDisk(m.paths, id, req.SizeGb); err != nil {
+		// Cleanup on error
+		deleteVolumeData(m.paths, id)
+		return nil, err
+	}
+
+	// Create metadata
+	now := time.Now()
+	meta := &storedMetadata{
+		Id:        id,
+		Name:      req.Name,
+		SizeGb:    req.SizeGb,
+		CreatedAt: now.Format(time.RFC3339),
+	}
+
+	// Save metadata
+	if err := saveMetadata(m.paths, meta); err != nil {
+		// Cleanup on error
+		deleteVolumeData(m.paths, id)
+		return nil, err
+	}
+
+	return m.metadataToVolume(meta), nil
 }
 
+// GetVolume returns a volume by ID
 func (m *manager) GetVolume(ctx context.Context, id string) (*Volume, error) {
-	return nil, ErrNotFound
+	lock := m.getVolumeLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
+
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return m.metadataToVolume(meta), nil
 }
 
+// GetVolumeByName returns a volume by name
+// Returns ErrNotFound if no volume matches, ErrAmbiguousName if multiple match
+func (m *manager) GetVolumeByName(ctx context.Context, name string) (*Volume, error) {
+	volumes, err := m.ListVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []Volume
+	for _, vol := range volumes {
+		if vol.Name == name {
+			matches = append(matches, vol)
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(matches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return &matches[0], nil
+}
+
+// DeleteVolume deletes a volume
 func (m *manager) DeleteVolume(ctx context.Context, id string) error {
-	return ErrNotFound
+	lock := m.getVolumeLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Load metadata to check attachment
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return err
+	}
+
+	// Check if volume is attached
+	if meta.AttachedTo != nil {
+		return ErrInUse
+	}
+
+	// Delete volume data
+	if err := deleteVolumeData(m.paths, id); err != nil {
+		return err
+	}
+
+	// Clean up lock
+	m.volumeLocks.Delete(id)
+
+	return nil
+}
+
+// AttachVolume marks a volume as attached to an instance
+func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error {
+	lock := m.getVolumeLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return err
+	}
+
+	// Check if already attached
+	if meta.AttachedTo != nil {
+		return ErrInUse
+	}
+
+	// Update attachment info
+	meta.AttachedTo = &req.InstanceID
+	meta.MountPath = &req.MountPath
+	meta.Readonly = req.Readonly
+
+	return saveMetadata(m.paths, meta)
+}
+
+// DetachVolume marks a volume as detached from an instance
+func (m *manager) DetachVolume(ctx context.Context, id string) error {
+	lock := m.getVolumeLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return err
+	}
+
+	// Clear attachment info
+	meta.AttachedTo = nil
+	meta.MountPath = nil
+	meta.Readonly = false
+
+	return saveMetadata(m.paths, meta)
+}
+
+// GetVolumePath returns the path to the volume data file
+func (m *manager) GetVolumePath(id string) string {
+	return m.paths.VolumeData(id)
+}
+
+// metadataToVolume converts stored metadata to a Volume struct
+func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
+	createdAt, _ := time.Parse(time.RFC3339, meta.CreatedAt)
+
+	return &Volume{
+		Id:         meta.Id,
+		Name:       meta.Name,
+		SizeGb:     meta.SizeGb,
+		CreatedAt:  createdAt,
+		AttachedTo: meta.AttachedTo,
+		MountPath:  meta.MountPath,
+		Readonly:   meta.Readonly,
+	}
 }

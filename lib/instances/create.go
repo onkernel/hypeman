@@ -3,7 +3,9 @@ package instances
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nrednav/cuid2"
@@ -12,8 +14,61 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/onkernel/hypeman/lib/volumes"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
+
+const (
+	// MaxVolumesPerInstance is the maximum number of volumes that can be attached
+	// to a single instance. This limit exists because volume devices are named
+	// /dev/vdd, /dev/vde, ... /dev/vdz (letters d-z = 23 devices).
+	// Devices a-c are reserved for rootfs, overlay, and config disk.
+	MaxVolumesPerInstance = 23
+)
+
+// systemDirectories are paths that cannot be used as volume mount points
+var systemDirectories = []string{
+	"/",
+	"/bin",
+	"/boot",
+	"/dev",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/proc",
+	"/root",
+	"/run",
+	"/sbin",
+	"/sys",
+	"/tmp",
+	"/usr",
+	"/var",
+}
+
+// AggregateUsage represents total resource usage across all instances
+type AggregateUsage struct {
+	TotalVcpus  int
+	TotalMemory int64 // in bytes
+}
+
+// calculateAggregateUsage calculates total resource usage across all running instances
+func (m *manager) calculateAggregateUsage(ctx context.Context) (AggregateUsage, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return AggregateUsage{}, err
+	}
+
+	var usage AggregateUsage
+	for _, inst := range instances {
+		// Only count running/paused instances (those consuming resources)
+		if inst.State == StateRunning || inst.State == StatePaused || inst.State == StateCreated {
+			usage.TotalVcpus += inst.Vcpus
+			usage.TotalMemory += inst.Size + inst.HotplugSize
+		}
+	}
+
+	return usage, nil
+}
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
 // CIDs 0-2 are reserved (hypervisor, loopback, host)
@@ -91,13 +146,38 @@ func (m *manager) createInstance(
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
 	// Validate overlay size against max
-	if overlaySize > m.maxOverlaySize {
-		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.maxOverlaySize)
+	if overlaySize > m.limits.MaxOverlaySize {
+		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
 	}
+
+	// Validate per-instance resource limits
+	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
+		return nil, fmt.Errorf("vcpus %d exceeds maximum allowed %d per instance", vcpus, m.limits.MaxVcpusPerInstance)
+	}
+	totalMemory := size + hotplugSize
+	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
+		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+	}
+
+	// Validate aggregate resource limits
+	if m.limits.MaxTotalVcpus > 0 || m.limits.MaxTotalMemory > 0 {
+		usage, err := m.calculateAggregateUsage(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "failed to calculate aggregate usage, skipping limit check", "error", err)
+		} else {
+			if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
+				return nil, fmt.Errorf("total vcpus would be %d, exceeds aggregate limit of %d", usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
+			}
+			if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+totalMemory > m.limits.MaxTotalMemory {
+				return nil, fmt.Errorf("total memory would be %d, exceeds aggregate limit of %d", usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
+			}
+		}
+	}
+
 	if req.Env == nil {
 		req.Env = make(map[string]string)
 	}
@@ -179,6 +259,41 @@ func (m *manager) createInstance(
 		})
 	}
 
+	// 10.5. Validate and attach volumes
+	if len(req.Volumes) > 0 {
+		log.DebugContext(ctx, "validating volumes", "id", id, "count", len(req.Volumes))
+		for _, volAttach := range req.Volumes {
+			// Check volume exists and is not attached
+			vol, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
+			if err != nil {
+				log.ErrorContext(ctx, "volume not found", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("volume %s: %w", volAttach.VolumeID, err)
+			}
+			if vol.AttachedTo != nil {
+				log.ErrorContext(ctx, "volume already attached", "id", id, "volume_id", volAttach.VolumeID, "attached_to", *vol.AttachedTo)
+				return nil, fmt.Errorf("volume %s is already attached to instance %s", volAttach.VolumeID, *vol.AttachedTo)
+			}
+
+			// Mark volume as attached
+			if err := m.volumeManager.AttachVolume(ctx, volAttach.VolumeID, volumes.AttachVolumeRequest{
+				InstanceID: id,
+				MountPath:  volAttach.MountPath,
+				Readonly:   volAttach.Readonly,
+			}); err != nil {
+				log.ErrorContext(ctx, "failed to attach volume", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("attach volume %s: %w", volAttach.VolumeID, err)
+			}
+
+			// Add volume cleanup to stack
+			volumeID := volAttach.VolumeID // capture for closure
+			cu.Add(func() {
+				m.volumeManager.DetachVolume(ctx, volumeID)
+			})
+		}
+		// Store volume attachments in metadata
+		stored.Volumes = req.Volumes
+	}
+
 	// 11. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "id", id)
@@ -251,7 +366,59 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
+
+	// Validate volume attachments
+	if err := validateVolumeAttachments(req.Volumes); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateVolumeAttachments validates volume attachment requests
+func validateVolumeAttachments(volumes []VolumeAttachment) error {
+	if len(volumes) > MaxVolumesPerInstance {
+		return fmt.Errorf("cannot attach more than %d volumes per instance", MaxVolumesPerInstance)
+	}
+
+	seenPaths := make(map[string]bool)
+	for _, vol := range volumes {
+		// Validate mount path is absolute
+		if !filepath.IsAbs(vol.MountPath) {
+			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
+		}
+
+		// Clean the path to normalize it
+		cleanPath := filepath.Clean(vol.MountPath)
+
+		// Check for system directories
+		if isSystemDirectory(cleanPath) {
+			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
+		}
+
+		// Check for duplicate mount paths
+		if seenPaths[cleanPath] {
+			return fmt.Errorf("duplicate mount path %q", cleanPath)
+		}
+		seenPaths[cleanPath] = true
+	}
+
+	return nil
+}
+
+// isSystemDirectory checks if a path is or is under a system directory
+func isSystemDirectory(path string) bool {
+	cleanPath := filepath.Clean(path)
+	for _, sysDir := range systemDirectories {
+		if cleanPath == sysDir {
+			return true
+		}
+		// Also block subdirectories of system paths (except / which would block everything)
+		if sysDir != "/" && (strings.HasPrefix(cleanPath, sysDir+"/") || cleanPath == sysDir) {
+			return true
+		}
+	}
+	return false
 }
 
 // startAndBootVM starts the VMM and boots the VM
@@ -386,6 +553,15 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 			Path:     ptr(m.paths.InstanceConfigDisk(inst.Id)),
 			Readonly: ptr(true),
 		},
+	}
+
+	// Add attached volumes as additional disks
+	for _, volAttach := range inst.Volumes {
+		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
+		disks = append(disks, vmm.DiskConfig{
+			Path:     &volumePath,
+			Readonly: ptr(volAttach.Readonly),
+		})
 	}
 
 	// Serial console configuration
