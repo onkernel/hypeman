@@ -2,10 +2,51 @@ package config
 
 import (
 	"os"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/joho/godotenv"
 )
+
+func getHostname() string {
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return "unknown"
+}
+
+// getBuildVersion extracts version info from Go's embedded build info.
+// Returns git short hash + "-dirty" suffix if uncommitted changes, or "unknown" if unavailable.
+func getBuildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	var revision string
+	var dirty bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+
+	if revision == "" {
+		return "unknown"
+	}
+
+	// Use short hash (8 chars)
+	if len(revision) > 8 {
+		revision = revision[:8]
+	}
+	if dirty {
+		revision += "-dirty"
+	}
+	return revision
+}
 
 type Config struct {
 	Port                string
@@ -32,11 +73,13 @@ type Config struct {
 	MaxTotalVolumeStorage string // Total volume storage limit (0 = unlimited)
 
 	// OpenTelemetry configuration
-	OtelEnabled     bool   // Enable OpenTelemetry
-	OtelEndpoint    string // OTLP endpoint (gRPC)
-	OtelServiceName string // Service name for tracing
-	OtelInsecure    bool   // Disable TLS for OTLP
-	Version         string // Application version for telemetry
+	OtelEnabled           bool   // Enable OpenTelemetry
+	OtelEndpoint          string // OTLP endpoint (gRPC)
+	OtelServiceName       string // Service name for tracing
+	OtelServiceInstanceID string // Service instance ID (default: hostname)
+	OtelInsecure          bool   // Disable TLS for OTLP
+	Version               string // Application version for telemetry
+	Env                   string // Deployment environment (e.g., dev, staging, prod)
 
 	// Logging configuration
 	LogLevel string // Default log level (debug, info, warn, error)
@@ -73,11 +116,13 @@ func Load() *Config {
 		MaxTotalVolumeStorage: getEnv("MAX_TOTAL_VOLUME_STORAGE", ""),
 
 		// OpenTelemetry configuration
-		OtelEnabled:     getEnvBool("OTEL_ENABLED", false),
-		OtelEndpoint:    getEnv("OTEL_ENDPOINT", "localhost:4317"),
-		OtelServiceName: getEnv("OTEL_SERVICE_NAME", "hypeman"),
-		OtelInsecure:    getEnvBool("OTEL_INSECURE", true),
-		Version:         getEnv("VERSION", "dev"),
+		OtelEnabled:           getEnvBool("OTEL_ENABLED", false),
+		OtelEndpoint:          getEnv("OTEL_ENDPOINT", "localhost:4317"),
+		OtelServiceName:       getEnv("OTEL_SERVICE_NAME", "hypeman"),
+		OtelServiceInstanceID: getEnv("OTEL_SERVICE_INSTANCE_ID", getHostname()),
+		OtelInsecure:          getEnvBool("OTEL_INSECURE", true),
+		Version:               getEnv("VERSION", getBuildVersion()),
+		Env:                   getEnv("ENV", "unset"),
 
 		// Logging configuration
 		LogLevel: getEnv("LOG_LEVEL", "info"),

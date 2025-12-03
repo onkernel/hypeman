@@ -43,11 +43,13 @@ func run() error {
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
-		Enabled:     cfg.OtelEnabled,
-		Endpoint:    cfg.OtelEndpoint,
-		ServiceName: cfg.OtelServiceName,
-		Insecure:    cfg.OtelInsecure,
-		Version:     cfg.Version,
+		Enabled:           cfg.OtelEnabled,
+		Endpoint:          cfg.OtelEndpoint,
+		ServiceName:       cfg.OtelServiceName,
+		ServiceInstanceID: cfg.OtelServiceInstanceID,
+		Insecure:          cfg.OtelInsecure,
+		Version:           cfg.Version,
+		Env:               cfg.Env,
 	}
 
 	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)

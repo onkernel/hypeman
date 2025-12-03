@@ -13,9 +13,11 @@ Provides OpenTelemetry initialization and metric definitions for Hypeman.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `ENV` | Deployment environment (`deployment.environment` attribute) | `unset` |
 | `OTEL_ENABLED` | Enable OpenTelemetry | `false` |
 | `OTEL_ENDPOINT` | OTLP endpoint (gRPC) | `localhost:4317` |
 | `OTEL_SERVICE_NAME` | Service name | `hypeman` |
+| `OTEL_SERVICE_INSTANCE_ID` | Instance ID (`service.instance.id` attribute) | hostname |
 | `OTEL_INSECURE` | Disable TLS for OTLP | `true` |
 
 ## Metrics

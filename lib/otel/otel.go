@@ -24,11 +24,13 @@ import (
 
 // Config holds OpenTelemetry configuration.
 type Config struct {
-	Enabled     bool
-	Endpoint    string
-	ServiceName string
-	Insecure    bool
-	Version     string
+	Enabled           bool
+	Endpoint          string
+	ServiceName       string
+	ServiceInstanceID string
+	Insecure          bool
+	Version           string
+	Env               string
 }
 
 // Provider holds initialized OTel providers.
@@ -60,6 +62,8 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 			semconv.SchemaURL,
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion(cfg.Version),
+			semconv.ServiceInstanceID(cfg.ServiceInstanceID),
+			semconv.DeploymentEnvironment(cfg.Env),
 		),
 	)
 	if err != nil {
