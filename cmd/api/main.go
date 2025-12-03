@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,12 +131,8 @@ func run() error {
 	// Create router
 	r := chi.NewRouter()
 
-	// Add OpenTelemetry tracing middleware if enabled
-	if cfg.OtelEnabled {
-		r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
-	}
-
-	// Add HTTP metrics middleware if OTel is enabled
+	// Prepare HTTP metrics middleware (applied inside API group, not globally)
+	// Global application breaks WebSocket (Hijacker) and SSE (Flusher)
 	var httpMetricsMw func(http.Handler) http.Handler
 	if otelProvider != nil && otelProvider.Meter != nil {
 		httpMetrics, err := mw.NewHTTPMetrics(otelProvider.Meter)
@@ -143,10 +140,6 @@ func run() error {
 			httpMetricsMw = httpMetrics.Middleware
 		}
 	}
-	if httpMetricsMw == nil {
-		httpMetricsMw = mw.NoopHTTPMetrics()
-	}
-	r.Use(httpMetricsMw)
 
 	// Load OpenAPI spec for request validation
 	spec, err := oapi.GetSwagger()
@@ -174,6 +167,24 @@ func run() error {
 		r.Use(middleware.RealIP)
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+
+		// OpenTelemetry middleware (inside group to avoid breaking WebSocket/SSE on other routes)
+		if cfg.OtelEnabled {
+			r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
+		}
+		if httpMetricsMw != nil {
+			// Skip HTTP metrics for SSE streaming endpoints (logs)
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/logs") {
+						next.ServeHTTP(w, r)
+						return
+					}
+					httpMetricsMw(next).ServeHTTP(w, r)
+				})
+			})
+		}
+
 		r.Use(middleware.Timeout(60 * time.Second))
 
 		// OpenAPI request validation with authentication
