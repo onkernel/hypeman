@@ -214,21 +214,21 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_exec_bytes_sent_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "expr": "hypeman_exec_bytes_sent_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "sent (stdin)",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_exec_bytes_received_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "expr": "hypeman_exec_bytes_received_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "received (stdout+stderr)",
           "refId": "B"
         }
       ],
-      "title": "Exec Throughput",
+      "title": "Exec Bytes (cumulative)",
       "type": "timeseries",
       "fieldConfig": {
-        "defaults": { "unit": "Bps" },
+        "defaults": { "unit": "bytes" },
         "overrides": []
       }
     },
@@ -248,8 +248,8 @@
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_images_pulls_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
-          "legendFormat": "pulls/sec ({{status}})",
+          "expr": "hypeman_images_pulls_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "pulls ({{status}})",
           "refId": "B"
         }
       ],
@@ -294,8 +294,8 @@
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_network_tap_operations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
-          "legendFormat": "TAP ops/sec ({{operation}})",
+          "expr": "hypeman_network_tap_operations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "TAP ops ({{operation}})",
           "refId": "B"
         }
       ],
@@ -340,12 +340,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_instances_state_transitions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "expr": "hypeman_instances_state_transitions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "{{from}} → {{to}}",
           "refId": "A"
         }
       ],
-      "title": "Instance State Transitions/sec",
+      "title": "Instance State Transitions",
       "type": "timeseries"
     },
     {
@@ -404,12 +404,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_exec_sessions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
-          "legendFormat": "sessions/sec ({{status}})",
+          "expr": "hypeman_exec_sessions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "sessions ({{status}}, exit={{exit_code}})",
           "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_exec_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_exec_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg duration (s)",
+          "refId": "B"
         }
       ],
-      "title": "Exec Sessions/sec",
+      "title": "Exec Sessions & Duration",
       "type": "timeseries"
     }
   ],
