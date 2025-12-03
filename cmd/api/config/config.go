@@ -117,7 +117,7 @@ func Load() *Config {
 
 		// OpenTelemetry configuration
 		OtelEnabled:           getEnvBool("OTEL_ENABLED", false),
-		OtelEndpoint:          getEnv("OTEL_ENDPOINT", "localhost:4317"),
+		OtelEndpoint:          getEnv("OTEL_ENDPOINT", "127.0.0.1:4317"),
 		OtelServiceName:       getEnv("OTEL_SERVICE_NAME", "hypeman"),
 		OtelServiceInstanceID: getEnv("OTEL_SERVICE_INSTANCE_ID", getHostname()),
 		OtelInsecure:          getEnvBool("OTEL_INSECURE", true),

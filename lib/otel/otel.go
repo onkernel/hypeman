@@ -16,7 +16,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -63,7 +63,7 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion(cfg.Version),
 			semconv.ServiceInstanceID(cfg.ServiceInstanceID),
-			semconv.DeploymentEnvironment(cfg.Env),
+			semconv.DeploymentEnvironmentName(cfg.Env),
 		),
 	)
 	if err != nil {
