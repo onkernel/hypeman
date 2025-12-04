@@ -114,12 +114,13 @@ hypeman push myimage:latest my-custom-name
 
 ## Authentication
 
-The registry endpoints use the same JWT authentication as the rest of the API. The CLI reads `HYPEMAN_API_KEY` or `HYPEMAN_BEARER_TOKEN` and passes it as a registry token.
+The registry endpoints use JWT bearer token authentication. The hypeman CLI reads `HYPEMAN_API_KEY` or `HYPEMAN_BEARER_TOKEN` and passes it directly as a registry token using go-containerregistry's `RegistryToken` auth.
+
+**Note:** `docker push` will not work with this registry. Docker CLI expects the v2 registry token auth flow (WWW-Authenticate challenge → token endpoint → retry with JWT), which we don't implement. Use the hypeman CLI for pushing images.
 
 ## Limitations
 
-- **Docker v2 manifests**: Images from local Docker daemon use Docker v2 manifest format which may need additional handling for conversion. Images pulled directly from registries (OCI format) work seamlessly.
-- **Digest references only**: Conversion is triggered only for digest references (`@sha256:...`), not tag references (`:latest`). The CLI automatically converts to digest references.
+- **No docker push support**: Docker CLI requires the v2 registry token auth flow. Use `hypeman push` instead.
 
 ## Design Decisions
 
@@ -149,3 +150,5 @@ The registry endpoints use the same JWT authentication as the rest of the API. T
 - Docker v2 (`application/vnd.docker.distribution.manifest.v2+json`) vs OCI (`application/vnd.oci.image.manifest.v1+json`)
 - Wrong mediaType in index.json causes "malicious manifest" errors during conversion
 - Content-based detection ensures compatibility with all sources
+
+**Note:** Both Docker v2 and OCI manifest formats work. go-containerregistry normalizes Docker v2 manifests to OCI format when storing to the OCI layout, so umoci always sees OCI manifests regardless of the source format.

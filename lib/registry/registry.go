@@ -16,6 +16,10 @@ import (
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
 )
@@ -66,8 +70,6 @@ func (r *Registry) Handler() http.Handler {
 				repo := matches[1]
 				reference := matches[2]
 
-				// Read the manifest body so we can store it in our blob store
-				// go-containerregistry stores manifests in-memory, but we need them on disk
 				body, err := io.ReadAll(req.Body)
 				req.Body.Close()
 				if err != nil {
@@ -75,31 +77,29 @@ func (r *Registry) Handler() http.Handler {
 					return
 				}
 
-				// Store manifest in blob store if reference is a digest
-				if strings.HasPrefix(reference, "sha256:") {
-					if err := r.storeManifestBlob(reference, body); err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: failed to store manifest blob: %v\n", err)
-					}
+				digest := computeDigest(body)
+
+				// Verify digest if reference is a digest
+				if strings.HasPrefix(reference, "sha256:") && reference != digest {
+					http.Error(w, fmt.Sprintf("digest mismatch: expected %s, got %s", reference, digest), http.StatusBadRequest)
+					return
 				}
 
-				// Reconstruct request body for the underlying handler
+				if err := r.storeManifestBlob(digest, body); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to store manifest blob: %v\n", err)
+				}
+
 				req.Body = io.NopCloser(bytes.NewReader(body))
-
-				// Wrap the response writer to capture the status code
 				wrapper := &responseWrapper{ResponseWriter: w}
-
-				// Let the underlying registry handle the request
 				r.handler.ServeHTTP(wrapper, req)
 
-				// If manifest was successfully stored, trigger conversion
 				if wrapper.statusCode == http.StatusCreated {
-					go r.triggerConversion(repo, reference)
+					go r.triggerConversion(repo, reference, digest)
 				}
 				return
 			}
 		}
 
-		// Pass through all other requests
 		r.handler.ServeHTTP(w, req)
 	})
 }
@@ -130,142 +130,355 @@ func (w *responseWrapper) WriteHeader(code int) {
 }
 
 // triggerConversion queues the image for conversion to ext4 disk format.
-func (r *Registry) triggerConversion(repo, reference string) {
-	// Build the full image reference for logging
+func (r *Registry) triggerConversion(repo, reference, dockerDigest string) {
 	imageRef := repo + ":" + reference
 	if strings.HasPrefix(reference, "sha256:") {
 		imageRef = repo + "@" + reference
 	}
 
-	// Update OCI layout index so the existing image pipeline can find it
-	if err := r.updateOCILayoutIndex(repo, reference); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to update OCI layout index for %s: %v\n", imageRef, err)
-	}
-
-	// For pushed images, we need the digest. If reference is already a digest, use it.
-	// Otherwise, we need to look it up (but for now, we only support digest references for conversion)
-	var digest string
-	if strings.HasPrefix(reference, "sha256:") {
-		digest = reference
-	} else {
-		// For tag references, skip conversion trigger - the client should also push by digest
-		fmt.Fprintf(os.Stderr, "Warning: skipping conversion for tag reference %s (push by digest to trigger conversion)\n", imageRef)
+	ociDigest, err := r.addToOCILayout(dockerDigest)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to add image to OCI layout for %s: %v\n", imageRef, err)
 		return
 	}
 
-	// Queue image conversion via image manager using ImportLocalImage
-	_, err := r.imageManager.ImportLocalImage(context.Background(), repo, reference, digest)
+	_, err = r.imageManager.ImportLocalImage(context.Background(), repo, reference, ociDigest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to queue image conversion for %s: %v\n", imageRef, err)
 	}
 }
 
-// ociIndex represents the OCI image index structure
-type ociIndex struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	MediaType     string            `json:"mediaType,omitempty"`
-	Manifests     []ociManifestDesc `json:"manifests"`
-}
-
-type ociManifestDesc struct {
-	MediaType   string            `json:"mediaType"`
-	Size        int64             `json:"size"`
-	Digest      string            `json:"digest"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-// updateOCILayoutIndex updates the OCI layout index.json with the new manifest.
-func (r *Registry) updateOCILayoutIndex(repo, reference string) error {
-	indexPath := r.paths.OCICacheIndex()
-	layoutPath := r.paths.OCICacheLayout()
-
-	// Ensure oci-layout file exists
-	if _, err := os.Stat(layoutPath); os.IsNotExist(err) {
-		layout := `{"imageLayoutVersion": "1.0.0"}`
-		if err := os.WriteFile(layoutPath, []byte(layout), 0644); err != nil {
-			return fmt.Errorf("write oci-layout: %w", err)
-		}
-	}
-
-	// Determine digest - if reference is a digest, use it directly
-	var digest string
-	var size int64
-	var mediaType string
-	if strings.HasPrefix(reference, "sha256:") {
-		digest = reference
-		digestHex := strings.TrimPrefix(digest, "sha256:")
-		manifestPath := r.paths.OCICacheBlob(digestHex)
-		if data, err := os.ReadFile(manifestPath); err == nil {
-			size = int64(len(data))
-			// Extract mediaType from manifest
-			var manifest struct {
-				MediaType string `json:"mediaType"`
-			}
-			if json.Unmarshal(data, &manifest) == nil && manifest.MediaType != "" {
-				mediaType = manifest.MediaType
-			}
-		}
-		if mediaType == "" {
-			mediaType = "application/vnd.oci.image.manifest.v1+json"
-		}
-	} else {
-		// For tags, skip - the digest reference push will handle it
-		return nil
-	}
-
-	// Read existing index or create new one
-	var index ociIndex
-	if data, err := os.ReadFile(indexPath); err == nil {
-		if err := json.Unmarshal(data, &index); err != nil {
-			return fmt.Errorf("parse index.json: %w", err)
-		}
-	} else {
-		index = ociIndex{
-			SchemaVersion: 2,
-			MediaType:     "application/vnd.oci.image.index.v1+json",
-			Manifests:     []ociManifestDesc{},
-		}
-	}
-
-	// Use digest hex as the layout tag
-	digestHex := strings.TrimPrefix(digest, "sha256:")
-
-	// Check if this manifest already exists in the index
-	found := false
-	for i, m := range index.Manifests {
-		if m.Digest == digest {
-			if m.Annotations == nil {
-				index.Manifests[i].Annotations = make(map[string]string)
-			}
-			index.Manifests[i].Annotations["org.opencontainers.image.ref.name"] = digestHex
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		desc := ociManifestDesc{
-			MediaType: mediaType,
-			Size:      size,
-			Digest:    digest,
-			Annotations: map[string]string{
-				"org.opencontainers.image.ref.name": digestHex,
-			},
-		}
-		index.Manifests = append(index.Manifests, desc)
-	}
-
-	// Write updated index
-	indexData, err := json.MarshalIndent(index, "", "  ")
+// addToOCILayout adds the image to the OCI layout, converting Docker v2 to OCI if needed.
+func (r *Registry) addToOCILayout(inputDigest string) (string, error) {
+	cacheDir := r.paths.SystemOCICache()
+	path, err := layout.FromPath(cacheDir)
 	if err != nil {
-		return fmt.Errorf("marshal index.json: %w", err)
+		path, err = layout.Write(cacheDir, empty.Index)
+		if err != nil {
+			return "", fmt.Errorf("create oci layout: %w", err)
+		}
 	}
 
-	if err := os.WriteFile(indexPath, indexData, 0644); err != nil {
-		return fmt.Errorf("write index.json: %w", err)
+	img, err := r.imageFromBlobStore(inputDigest)
+	if err != nil {
+		return "", fmt.Errorf("create image from blob store: %w", err)
 	}
 
-	return nil
+	digestHash, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("compute digest: %w", err)
+	}
+	digest := digestHash.String()
+	digestHex := digestHash.Hex
+
+	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestHex,
+	}))
+	if err != nil {
+		return "", fmt.Errorf("append image to layout: %w", err)
+	}
+
+	return digest, nil
+}
+
+// imageFromBlobStore creates a v1.Image that reads from our blob store.
+func (r *Registry) imageFromBlobStore(digest string) (v1.Image, error) {
+	digestHex := strings.TrimPrefix(digest, "sha256:")
+	manifestPath := r.paths.OCICacheBlob(digestHex)
+
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest: %w", err)
+	}
+
+	return &blobStoreImage{
+		paths:        r.paths,
+		manifestData: manifestData,
+		digest:       digest,
+	}, nil
+}
+
+// blobStoreImage implements v1.Image by reading from the blob store.
+// It transparently converts Docker v2 manifests to OCI format.
+type blobStoreImage struct {
+	paths        *paths.Paths
+	manifestData []byte
+	digest       string
+}
+
+// Layers returns wrapped blobStoreLayer instances for each layer in the manifest.
+func (img *blobStoreImage) Layers() ([]v1.Layer, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	var layers []v1.Layer
+	for _, layerDesc := range manifest.Layers {
+		layer := &blobStoreLayer{
+			paths:     img.paths,
+			digest:    layerDesc.Digest,
+			size:      layerDesc.Size,
+			mediaType: layerDesc.MediaType,
+		}
+		layers = append(layers, layer)
+	}
+	return layers, nil
+}
+
+// MediaType returns OCI manifest type, converting from Docker v2 if needed.
+func (img *blobStoreImage) MediaType() (types.MediaType, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return "", err
+	}
+	if isOCIMediaType(manifest.MediaType) {
+		return types.MediaType(manifest.MediaType), nil
+	}
+	return types.OCIManifestSchema1, nil
+}
+
+// isOCIMediaType returns true if the media type is an OCI manifest type
+func isOCIMediaType(mediaType string) bool {
+	return mediaType == string(types.OCIManifestSchema1) ||
+		mediaType == "application/vnd.oci.image.manifest.v1+json"
+}
+
+func (img *blobStoreImage) Size() (int64, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return 0, err
+	}
+	if isOCIMediaType(manifest.MediaType) {
+		return int64(len(img.manifestData)), nil
+	}
+	rawManifest, err := img.RawManifest()
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(rawManifest)), nil
+}
+
+func (img *blobStoreImage) ConfigName() (v1.Hash, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	h, err := v1.NewHash(manifest.Config.Digest)
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	return h, nil
+}
+
+func (img *blobStoreImage) ConfigFile() (*v1.ConfigFile, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	digestHex := strings.TrimPrefix(manifest.Config.Digest, "sha256:")
+	configPath := img.paths.OCICacheBlob(digestHex)
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	var config v1.ConfigFile
+	if err := json.Unmarshal(configData, &config); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	return &config, nil
+}
+
+func (img *blobStoreImage) RawConfigFile() ([]byte, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	digestHex := strings.TrimPrefix(manifest.Config.Digest, "sha256:")
+	configPath := img.paths.OCICacheBlob(digestHex)
+	return os.ReadFile(configPath)
+}
+
+// Digest returns the manifest digest. For Docker v2, returns the digest of the
+// converted OCI manifest (which differs from the original Docker v2 digest).
+func (img *blobStoreImage) Digest() (v1.Hash, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	if isOCIMediaType(manifest.MediaType) {
+		return v1.NewHash(img.digest)
+	}
+	rawManifest, err := img.RawManifest()
+	if err != nil {
+		return v1.Hash{}, err
+	}
+	sum := sha256.Sum256(rawManifest)
+	return v1.Hash{
+		Algorithm: "sha256",
+		Hex:       hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+// Manifest returns the parsed manifest with Docker v2 media types converted to OCI.
+func (img *blobStoreImage) Manifest() (*v1.Manifest, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	targetMediaType := types.OCIManifestSchema1
+	if isOCIMediaType(manifest.MediaType) {
+		targetMediaType = types.MediaType(manifest.MediaType)
+	}
+
+	v1Manifest := &v1.Manifest{
+		SchemaVersion: int64(manifest.SchemaVersion),
+		MediaType:     targetMediaType,
+		Config: v1.Descriptor{
+			MediaType: convertToOCIMediaType(manifest.Config.MediaType),
+			Size:      manifest.Config.Size,
+		},
+	}
+
+	configHash, err := v1.NewHash(manifest.Config.Digest)
+	if err != nil {
+		return nil, err
+	}
+	v1Manifest.Config.Digest = configHash
+
+	for _, layer := range manifest.Layers {
+		layerHash, err := v1.NewHash(layer.Digest)
+		if err != nil {
+			return nil, err
+		}
+		v1Manifest.Layers = append(v1Manifest.Layers, v1.Descriptor{
+			MediaType: convertToOCIMediaType(layer.MediaType),
+			Size:      layer.Size,
+			Digest:    layerHash,
+		})
+	}
+
+	return v1Manifest, nil
+}
+
+// convertToOCIMediaType converts Docker v2 media types to OCI equivalents
+func convertToOCIMediaType(mediaType string) types.MediaType {
+	switch mediaType {
+	case "application/vnd.docker.distribution.manifest.v2+json":
+		return types.OCIManifestSchema1
+	case "application/vnd.docker.container.image.v1+json":
+		return types.OCIConfigJSON
+	case "application/vnd.docker.image.rootfs.diff.tar.gzip":
+		return types.OCILayer
+	case "application/vnd.docker.image.rootfs.diff.tar":
+		return types.OCIUncompressedLayer
+	default:
+		// If already OCI or unknown, return as-is
+		return types.MediaType(mediaType)
+	}
+}
+
+// RawManifest returns the manifest JSON. For OCI, returns original bytes to preserve
+// digest. For Docker v2, returns the converted OCI manifest JSON.
+func (img *blobStoreImage) RawManifest() ([]byte, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+	if isOCIMediaType(manifest.MediaType) {
+		return img.manifestData, nil
+	}
+	v1Manifest, err := img.Manifest()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(v1Manifest)
+}
+
+func (img *blobStoreImage) LayerByDigest(hash v1.Hash) (v1.Layer, error) {
+	manifest, err := img.parseManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, layer := range manifest.Layers {
+		if layer.Digest == hash.String() {
+			return &blobStoreLayer{
+				paths:     img.paths,
+				digest:    layer.Digest,
+				size:      layer.Size,
+				mediaType: layer.MediaType,
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("layer not found: %s", hash.String())
+}
+
+func (img *blobStoreImage) LayerByDiffID(hash v1.Hash) (v1.Layer, error) {
+	return nil, fmt.Errorf("LayerByDiffID not implemented")
+}
+
+// Internal manifest structure for parsing
+type internalManifest struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	MediaType     string `json:"mediaType"`
+	Config        struct {
+		MediaType string `json:"mediaType"`
+		Size      int64  `json:"size"`
+		Digest    string `json:"digest"`
+	} `json:"config"`
+	Layers []struct {
+		MediaType string `json:"mediaType"`
+		Size      int64  `json:"size"`
+		Digest    string `json:"digest"`
+	} `json:"layers"`
+}
+
+func (img *blobStoreImage) parseManifest() (*internalManifest, error) {
+	var manifest internalManifest
+	if err := json.Unmarshal(img.manifestData, &manifest); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	return &manifest, nil
+}
+
+// blobStoreLayer implements v1.Layer by reading blobs from the filesystem.
+// Layer content is served directly; media types are converted to OCI format.
+type blobStoreLayer struct {
+	paths     *paths.Paths
+	digest    string
+	size      int64
+	mediaType string
+}
+
+func (l *blobStoreLayer) Digest() (v1.Hash, error) {
+	return v1.NewHash(l.digest)
+}
+
+func (l *blobStoreLayer) DiffID() (v1.Hash, error) {
+	return v1.Hash{}, nil
+}
+
+func (l *blobStoreLayer) Compressed() (io.ReadCloser, error) {
+	digestHex := strings.TrimPrefix(l.digest, "sha256:")
+	blobPath := l.paths.OCICacheBlob(digestHex)
+	return os.Open(blobPath)
+}
+
+func (l *blobStoreLayer) Uncompressed() (io.ReadCloser, error) {
+	return l.Compressed()
+}
+
+func (l *blobStoreLayer) Size() (int64, error) {
+	return l.size, nil
+}
+
+func (l *blobStoreLayer) MediaType() (types.MediaType, error) {
+	return convertToOCIMediaType(l.mediaType), nil
 }
 
 // computeDigest calculates SHA256 hash of data
