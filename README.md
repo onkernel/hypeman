@@ -58,6 +58,24 @@ getcap ./bin/hypeman
 
 **Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 
+**File Descriptor Limits:**
+
+Envoy (used for ingress) requires a higher file descriptor limit than the default on some systems (root defaults to 1024 on many systems). If you see "Too many open files" errors, increase the limit:
+
+```bash
+# Check current limit (also check with: sudo bash -c 'ulimit -n')
+ulimit -n
+
+# Increase temporarily (current session)
+ulimit -n 65536
+
+# For persistent changes, add to /etc/security/limits.conf:
+*  soft  nofile  65536
+*  hard  nofile  65536
+root  soft  nofile  65536
+root  hard  nofile  65536
+```
+
 ### Configuration
 
 #### Environment variables

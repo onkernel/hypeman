@@ -15,12 +15,18 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-// EnvoyDaemon manages the Envoy proxy daemon lifecycle.
+// baseID is a unique identifier for this Envoy instance on the host.
+// This allows multiple Envoy instances to run on the same host with independent hot restart.
+const baseID = 1
+
+// EnvoyDaemon manages the Envoy proxy daemon lifecycle with hot restart support.
+// See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/hot_restart
 type EnvoyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string
 	adminPort      int
 	pid            int
+	epoch          int  // Current restart epoch
 	stopOnShutdown bool // If true, stop Envoy when hypeman shuts down
 }
 
@@ -45,9 +51,20 @@ func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
 	// Check if already running
 	if pid, running := d.DiscoverRunning(); running {
 		d.pid = pid
+		// Load current epoch from file
+		d.epoch = d.loadEpoch()
 		return pid, nil
 	}
 
+	// Clean up any stale shared memory from previous crashed instances
+	d.cleanupStaleSharedMemory()
+
+	// Start fresh with epoch 0
+	return d.startEnvoy(ctx, 0)
+}
+
+// startEnvoy starts a new Envoy process with the given restart epoch.
+func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 	// Get binary path (extracts if needed)
 	binaryPath, err := GetEnvoyBinaryPath(d.paths)
 	if err != nil {
@@ -69,19 +86,21 @@ func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
 		}
 	}
 
-	// Build command arguments
+	// Build command arguments with hot restart support
 	args := []string{
 		"--config-path", configPath,
 		"--log-path", d.paths.EnvoyLogFile(),
 		"--log-level", "info",
+		"--base-id", strconv.Itoa(baseID),
+		"--restart-epoch", strconv.Itoa(epoch),
 	}
 
 	// Use Command (not CommandContext) so process survives parent context cancellation
 	cmd := exec.Command(binaryPath, args...)
 
-	// Daemonize: detach from parent process group
+	// Daemonize: create new session to fully detach from parent
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // Create new process group
+		Setsid: true, // Create new session (implies new process group)
 	}
 
 	// Redirect stdout/stderr to log file
@@ -111,8 +130,11 @@ func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
 		fmt.Printf("warning: failed to write PID file: %v\n", err)
 	}
 
+	// Save epoch
+	d.saveEpoch(epoch)
+
 	// Wait for admin API to be ready
-	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := d.waitForAdmin(waitCtx); err != nil {
@@ -124,6 +146,7 @@ func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
 	}
 
 	d.pid = pid
+	d.epoch = epoch
 	return pid, nil
 }
 
@@ -161,27 +184,32 @@ func (d *EnvoyDaemon) Stop() error {
 		}
 	}
 
-	// Clean up PID file
+	// Clean up PID file and epoch file
 	os.Remove(d.paths.EnvoyPIDFile())
+	os.Remove(d.epochFilePath())
 	d.pid = 0
+	d.epoch = 0
+
+	// Clean up shared memory
+	d.cleanupStaleSharedMemory()
 
 	return nil
 }
 
-// ReloadConfig signals Envoy to reload its configuration file.
+// ReloadConfig performs a hot restart to reload Envoy's configuration.
+// This spawns a new Envoy process that coordinates with the old one to take over
+// without dropping connections during the drain period.
 func (d *EnvoyDaemon) ReloadConfig() error {
-	pid, running := d.DiscoverRunning()
-	if !running {
+	if !d.IsRunning() {
 		return fmt.Errorf("envoy is not running")
 	}
 
-	proc, err := os.FindProcess(pid)
+	// Increment epoch and start new Envoy process
+	// The new process will coordinate with the old one via shared memory
+	newEpoch := d.epoch + 1
+	_, err := d.startEnvoy(context.Background(), newEpoch)
 	if err != nil {
-		return fmt.Errorf("find process: %w", err)
-	}
-
-	if err := proc.Signal(syscall.SIGHUP); err != nil {
-		return fmt.Errorf("send SIGHUP: %w", err)
+		return fmt.Errorf("hot restart failed: %w", err)
 	}
 
 	return nil
@@ -236,6 +264,39 @@ func (d *EnvoyDaemon) GetPID() int {
 // AdminURL returns the admin API URL.
 func (d *EnvoyDaemon) AdminURL() string {
 	return fmt.Sprintf("http://%s:%d", d.adminAddress, d.adminPort)
+}
+
+// epochFilePath returns the path to the epoch file.
+func (d *EnvoyDaemon) epochFilePath() string {
+	return filepath.Join(d.paths.EnvoyDir(), "epoch")
+}
+
+// loadEpoch loads the current epoch from file.
+func (d *EnvoyDaemon) loadEpoch() int {
+	data, err := os.ReadFile(d.epochFilePath())
+	if err != nil {
+		return 0
+	}
+	epoch, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0
+	}
+	return epoch
+}
+
+// saveEpoch saves the current epoch to file.
+func (d *EnvoyDaemon) saveEpoch(epoch int) {
+	os.WriteFile(d.epochFilePath(), []byte(strconv.Itoa(epoch)), 0644)
+}
+
+// cleanupStaleSharedMemory removes any stale shared memory regions from crashed Envoy instances.
+func (d *EnvoyDaemon) cleanupStaleSharedMemory() {
+	// Envoy uses /dev/shm/envoy_shared_memory_{base_id * 10 + epoch} for hot restart coordination
+	// Clean up all possible epochs (0-9) for our base ID
+	for epoch := 0; epoch < 10; epoch++ {
+		shmPath := fmt.Sprintf("/dev/shm/envoy_shared_memory_%d", baseID*10+epoch)
+		os.Remove(shmPath)
+	}
 }
 
 // writeMinimalConfig writes a minimal Envoy bootstrap config.
@@ -320,8 +381,9 @@ func (d *EnvoyDaemon) findEnvoyPID() int {
 			continue
 		}
 
-		// Check if it's envoy
-		if strings.Contains(string(cmdline), "envoy") {
+		// Check if it's envoy with our base-id
+		cmdStr := string(cmdline)
+		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, fmt.Sprintf("--base-id\x00%d", baseID)) {
 			return pid
 		}
 	}

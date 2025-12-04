@@ -3,6 +3,7 @@ package ingress
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/onkernel/hypeman/lib/paths"
@@ -42,6 +43,12 @@ func (g *EnvoyConfigGenerator) WriteConfig(ingresses []Ingress, ipResolver func(
 	}
 
 	configPath := g.paths.EnvoyConfig()
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
