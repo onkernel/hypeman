@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -22,6 +24,62 @@ const (
 	// vsockGuestPort is the port the exec-agent listens on inside the guest
 	vsockGuestPort = 2222
 )
+
+// connPool manages reusable gRPC connections per vsock socket path
+// This avoids the overhead and potential issues of rapidly creating/closing connections
+var connPool = struct {
+	sync.RWMutex
+	conns map[string]*grpc.ClientConn
+}{
+	conns: make(map[string]*grpc.ClientConn),
+}
+
+// getOrCreateConn returns an existing connection or creates a new one
+func getOrCreateConn(ctx context.Context, vsockSocketPath string) (*grpc.ClientConn, error) {
+	// Try read lock first for existing connection
+	connPool.RLock()
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		connPool.RUnlock()
+		return conn, nil
+	}
+	connPool.RUnlock()
+
+	// Need to create new connection - acquire write lock
+	connPool.Lock()
+	defer connPool.Unlock()
+
+	// Double-check after acquiring write lock
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		return conn, nil
+	}
+
+	// Create new connection
+	conn, err := grpc.Dial("passthrough:///vsock",
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return dialVsock(ctx, vsockSocketPath)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create grpc connection: %w", err)
+	}
+
+	connPool.conns[vsockSocketPath] = conn
+	slog.Debug("created new gRPC connection", "socket", vsockSocketPath)
+	return conn, nil
+}
+
+// CloseConn closes and removes a connection from the pool (call when VM is deleted)
+func CloseConn(vsockSocketPath string) {
+	connPool.Lock()
+	defer connPool.Unlock()
+
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		conn.Close()
+		delete(connPool.conns, vsockSocketPath)
+		slog.Debug("closed gRPC connection", "socket", vsockSocketPath)
+	}
+}
 
 // ExitStatus represents command exit information
 type ExitStatus struct {
@@ -54,17 +112,16 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 // ExecIntoInstance executes command in instance via vsock using gRPC
 // vsockSocketPath is the Unix socket created by Cloud Hypervisor (e.g., /var/lib/hypeman/guests/{id}/vsock.sock)
 func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOptions) (*ExitStatus, error) {
-	// Connect to Cloud Hypervisor's vsock Unix socket with custom dialer
-	grpcConn, err := grpc.NewClient("passthrough:///vsock",
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return dialVsock(ctx, vsockSocketPath)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	start := time.Now()
+	var bytesSent int64
+
+	// Get or create a reusable gRPC connection for this vsock socket
+	// Connection pooling avoids issues with rapid connect/disconnect cycles
+	grpcConn, err := getOrCreateConn(ctx, vsockSocketPath)
 	if err != nil {
-		return nil, fmt.Errorf("create grpc client: %w", err)
+		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
-	defer grpcConn.Close()
+	// Note: Don't close the connection - it's pooled and reused
 
 	// Create exec client
 	client := NewExecServiceClient(grpcConn)
@@ -72,6 +129,8 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	if err != nil {
 		return nil, fmt.Errorf("start exec stream: %w", err)
 	}
+	// Ensure stream is properly closed when we're done
+	defer stream.CloseSend()
 
 	// Send start request
 	if err := stream.Send(&ExecRequest{
@@ -91,13 +150,14 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	// Handle stdin in background
 	if opts.Stdin != nil {
 		go func() {
-			buf := make([]byte, 32 * 1024)
+			buf := make([]byte, 32*1024)
 			for {
 				n, err := opts.Stdin.Read(buf)
 				if n > 0 {
 					stream.Send(&ExecRequest{
 						Request: &ExecRequest_Stdin{Stdin: buf[:n]},
 					})
+					atomic.AddInt64(&bytesSent, int64(n))
 				}
 				if err != nil {
 					stream.CloseSend()
@@ -108,34 +168,42 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	}
 
 	// Receive responses
+	var totalStdout, totalStderr int
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			// Stream closed without exit code
-			return nil, fmt.Errorf("stream closed without exit code")
+			return nil, fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("receive response: %w", err)
+			return nil, fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
 		}
 
 		switch r := resp.Response.(type) {
 		case *ExecResponse_Stdout:
+			totalStdout += len(r.Stdout)
 			if opts.Stdout != nil {
 				opts.Stdout.Write(r.Stdout)
 			}
 		case *ExecResponse_Stderr:
+			totalStderr += len(r.Stderr)
 			if opts.Stderr != nil {
 				opts.Stderr.Write(r.Stderr)
 			}
 		case *ExecResponse_ExitCode:
-			return &ExitStatus{Code: int(r.ExitCode)}, nil
+			exitCode := int(r.ExitCode)
+			// Record metrics
+			if ExecMetrics != nil {
+				bytesReceived := int64(totalStdout + totalStderr)
+				ExecMetrics.RecordSession(ctx, start, exitCode, atomic.LoadInt64(&bytesSent), bytesReceived)
+			}
+			return &ExitStatus{Code: exitCode}, nil
 		}
 	}
 }
 
 // dialVsock connects to Cloud Hypervisor's vsock Unix socket and performs the handshake
 func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
-	slog.Debug("connecting to vsock", "socket", vsockSocketPath)
+	slog.DebugContext(ctx, "connecting to vsock", "socket", vsockSocketPath)
 
 	// Use dial timeout, respecting context deadline if shorter
 	dialTimeout := vsockDialTimeout
@@ -152,7 +220,7 @@ func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
 		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
 	}
 
-	slog.Debug("connected to vsock socket, performing handshake", "port", vsockGuestPort)
+	slog.DebugContext(ctx, "connected to vsock socket, performing handshake", "port", vsockGuestPort)
 
 	// Set deadline for handshake
 	if err := conn.SetDeadline(time.Now().Add(vsockHandshakeTimeout)); err != nil {
@@ -187,10 +255,9 @@ func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
 		return nil, fmt.Errorf("vsock handshake failed: %s", response)
 	}
 
-	slog.Debug("vsock handshake successful", "response", response)
+	slog.DebugContext(ctx, "vsock handshake successful", "response", response)
 
 	// Return wrapped connection that uses the bufio.Reader
 	// This ensures any bytes buffered during handshake are not lost
 	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
-

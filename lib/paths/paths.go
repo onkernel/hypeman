@@ -18,6 +18,10 @@
 //	      rootfs.ext4
 //	      metadata.json
 //	    {repository}/{tag} -> {digest} (symlink)
+//	  volumes/
+//	    {id}/
+//	      data.raw
+//	      metadata.json
 //	  guests/
 //	    {id}/
 //	      metadata.json
@@ -26,6 +30,8 @@
 //	      ch.sock
 //	      vsock.sock
 //	      logs/
+//	      vol-overlays/
+//	        {volumeID}.raw
 //	      snapshots/
 //	        snapshot-latest/
 //	          config.json
@@ -159,6 +165,16 @@ func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")
 }
 
+// InstanceVolumeOverlay returns the path to a volume's overlay disk for an instance.
+func (p *Paths) InstanceVolumeOverlay(instanceID, volumeID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays", volumeID+".raw")
+}
+
+// InstanceVolumeOverlaysDir returns the directory for volume overlays.
+func (p *Paths) InstanceVolumeOverlaysDir(instanceID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays")
+}
+
 // InstanceSocket returns the path to instance API socket.
 func (p *Paths) InstanceSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "ch.sock")
@@ -198,4 +214,26 @@ func (p *Paths) InstanceSnapshotConfig(id string) string {
 // GuestsDir returns the root guests directory.
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")
+}
+
+// Volume path methods
+
+// VolumesDir returns the root volumes directory.
+func (p *Paths) VolumesDir() string {
+	return filepath.Join(p.dataDir, "volumes")
+}
+
+// VolumeDir returns the directory for a volume.
+func (p *Paths) VolumeDir(id string) string {
+	return filepath.Join(p.dataDir, "volumes", id)
+}
+
+// VolumeData returns the path to the volume data file.
+func (p *Paths) VolumeData(id string) string {
+	return filepath.Join(p.VolumeDir(id), "data.raw")
+}
+
+// VolumeMetadata returns the path to volume metadata.json.
+func (p *Paths) VolumeMetadata(id string) string {
+	return filepath.Join(p.VolumeDir(id), "metadata.json")
 }

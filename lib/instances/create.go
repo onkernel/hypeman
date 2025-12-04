@@ -3,7 +3,9 @@ package instances
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nrednav/cuid2"
@@ -12,8 +14,62 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
+
+const (
+	// MaxVolumesPerInstance is the maximum number of volumes that can be attached
+	// to a single instance. This limit exists because volume devices are named
+	// /dev/vdd, /dev/vde, ... /dev/vdz (letters d-z = 23 devices).
+	// Devices a-c are reserved for rootfs, overlay, and config disk.
+	MaxVolumesPerInstance = 23
+)
+
+// systemDirectories are paths that cannot be used as volume mount points
+var systemDirectories = []string{
+	"/",
+	"/bin",
+	"/boot",
+	"/dev",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/proc",
+	"/root",
+	"/run",
+	"/sbin",
+	"/sys",
+	"/tmp",
+	"/usr",
+	"/var",
+}
+
+// AggregateUsage represents total resource usage across all instances
+type AggregateUsage struct {
+	TotalVcpus  int
+	TotalMemory int64 // in bytes
+}
+
+// calculateAggregateUsage calculates total resource usage across all running instances
+func (m *manager) calculateAggregateUsage(ctx context.Context) (AggregateUsage, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return AggregateUsage{}, err
+	}
+
+	var usage AggregateUsage
+	for _, inst := range instances {
+		// Only count running/paused instances (those consuming resources)
+		if inst.State == StateRunning || inst.State == StatePaused || inst.State == StateCreated {
+			usage.TotalVcpus += inst.Vcpus
+			usage.TotalMemory += inst.Size + inst.HotplugSize
+		}
+	}
+
+	return usage, nil
+}
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
 // CIDs 0-2 are reserved (hypervisor, loopback, host)
@@ -38,9 +94,17 @@ func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
 ) (*Instance, error) {
+	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating instance", "name", req.Name, "image", req.Image, "vcpus", req.Vcpus)
-	
+
+	// Start tracing span if tracer is available
+	if m.metrics != nil && m.metrics.tracer != nil {
+		var span trace.Span
+		ctx, span = m.metrics.tracer.Start(ctx, "CreateInstance")
+		defer span.End()
+	}
+
 	// 1. Validate request
 	if err := validateCreateRequest(req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
@@ -91,13 +155,38 @@ func (m *manager) createInstance(
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
 	// Validate overlay size against max
-	if overlaySize > m.maxOverlaySize {
-		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.maxOverlaySize)
+	if overlaySize > m.limits.MaxOverlaySize {
+		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
 	}
+
+	// Validate per-instance resource limits
+	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
+		return nil, fmt.Errorf("vcpus %d exceeds maximum allowed %d per instance", vcpus, m.limits.MaxVcpusPerInstance)
+	}
+	totalMemory := size + hotplugSize
+	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
+		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+	}
+
+	// Validate aggregate resource limits
+	if m.limits.MaxTotalVcpus > 0 || m.limits.MaxTotalMemory > 0 {
+		usage, err := m.calculateAggregateUsage(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "failed to calculate aggregate usage, skipping limit check", "error", err)
+		} else {
+			if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
+				return nil, fmt.Errorf("total vcpus would be %d, exceeds aggregate limit of %d", usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
+			}
+			if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+totalMemory > m.limits.MaxTotalMemory {
+				return nil, fmt.Errorf("total memory would be %d, exceeds aggregate limit of %d", usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
+			}
+		}
+	}
+
 	if req.Env == nil {
 		req.Env = make(map[string]string)
 	}
@@ -179,6 +268,46 @@ func (m *manager) createInstance(
 		})
 	}
 
+	// 10.5. Validate and attach volumes
+	if len(req.Volumes) > 0 {
+		log.DebugContext(ctx, "validating volumes", "id", id, "count", len(req.Volumes))
+		for _, volAttach := range req.Volumes {
+			// Check volume exists
+			_, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
+			if err != nil {
+				log.ErrorContext(ctx, "volume not found", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("volume %s: %w", volAttach.VolumeID, err)
+			}
+
+			// Mark volume as attached (AttachVolume handles multi-attach validation)
+			if err := m.volumeManager.AttachVolume(ctx, volAttach.VolumeID, volumes.AttachVolumeRequest{
+				InstanceID: id,
+				MountPath:  volAttach.MountPath,
+				Readonly:   volAttach.Readonly,
+			}); err != nil {
+				log.ErrorContext(ctx, "failed to attach volume", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("attach volume %s: %w", volAttach.VolumeID, err)
+			}
+
+			// Add volume cleanup to stack
+			volumeID := volAttach.VolumeID // capture for closure
+			cu.Add(func() {
+				m.volumeManager.DetachVolume(ctx, volumeID, id)
+			})
+
+			// Create overlay disk for volumes with overlay enabled
+			if volAttach.Overlay {
+				log.DebugContext(ctx, "creating volume overlay disk", "id", id, "volume_id", volAttach.VolumeID, "size", volAttach.OverlaySize)
+				if err := m.createVolumeOverlayDisk(id, volAttach.VolumeID, volAttach.OverlaySize); err != nil {
+					log.ErrorContext(ctx, "failed to create volume overlay disk", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+					return nil, fmt.Errorf("create volume overlay disk %s: %w", volAttach.VolumeID, err)
+				}
+			}
+		}
+		// Store volume attachments in metadata
+		stored.Volumes = req.Volumes
+	}
+
 	// 11. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "id", id)
@@ -216,6 +345,12 @@ func (m *manager) createInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
+	// Record metrics
+	if m.metrics != nil {
+		m.recordDuration(ctx, m.metrics.createDuration, start, "success")
+		m.recordStateTransition(ctx, "stopped", string(StateRunning))
+	}
+
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance created successfully", "id", id, "name", req.Name, "state", finalInst.State)
@@ -251,7 +386,77 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
+
+	// Validate volume attachments
+	if err := validateVolumeAttachments(req.Volumes); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateVolumeAttachments validates volume attachment requests
+func validateVolumeAttachments(volumes []VolumeAttachment) error {
+	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
+	totalDevices := 0
+	for _, vol := range volumes {
+		totalDevices++
+		if vol.Overlay {
+			totalDevices++ // Overlay needs an additional device
+		}
+	}
+	if totalDevices > MaxVolumesPerInstance {
+		return fmt.Errorf("cannot attach more than %d volume devices per instance (overlay volumes count as 2)", MaxVolumesPerInstance)
+	}
+
+	seenPaths := make(map[string]bool)
+	for _, vol := range volumes {
+		// Validate mount path is absolute
+		if !filepath.IsAbs(vol.MountPath) {
+			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
+		}
+
+		// Clean the path to normalize it
+		cleanPath := filepath.Clean(vol.MountPath)
+
+		// Check for system directories
+		if isSystemDirectory(cleanPath) {
+			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
+		}
+
+		// Check for duplicate mount paths
+		if seenPaths[cleanPath] {
+			return fmt.Errorf("duplicate mount path %q", cleanPath)
+		}
+		seenPaths[cleanPath] = true
+
+		// Validate overlay mode requirements
+		if vol.Overlay {
+			if !vol.Readonly {
+				return fmt.Errorf("volume %s: overlay mode requires readonly=true", vol.VolumeID)
+			}
+			if vol.OverlaySize <= 0 {
+				return fmt.Errorf("volume %s: overlay_size is required when overlay=true", vol.VolumeID)
+			}
+		}
+	}
+
+	return nil
+}
+
+// isSystemDirectory checks if a path is or is under a system directory
+func isSystemDirectory(path string) bool {
+	cleanPath := filepath.Clean(path)
+	for _, sysDir := range systemDirectories {
+		if cleanPath == sysDir {
+			return true
+		}
+		// Also block subdirectories of system paths (except / which would block everything)
+		if sysDir != "/" && (strings.HasPrefix(cleanPath, sysDir+"/") || cleanPath == sysDir) {
+			return true
+		}
+	}
+	return false
 }
 
 // startAndBootVM starts the VMM and boots the VM
@@ -262,14 +467,14 @@ func (m *manager) startAndBootVM(
 	netConfig *network.NetworkConfig,
 ) error {
 	log := logger.FromContext(ctx)
-	
+
 	// Start VMM process and capture PID
 	log.DebugContext(ctx, "starting VMM process", "id", stored.Id, "version", stored.CHVersion)
 	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
-	
+
 	// Store the PID for later cleanup
 	stored.CHPID = &pid
 	log.DebugContext(ctx, "VMM process started", "id", stored.Id, "pid", pid)
@@ -349,7 +554,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 		BootVcpus: inst.Vcpus,
 		MaxVcpus:  inst.Vcpus,
 	}
-	
+
 	// Calculate and set guest topology based on host topology
 	if topology := calculateGuestTopology(inst.Vcpus, m.hostTopology); topology != nil {
 		cpus.Topology = topology
@@ -361,7 +566,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 	}
 	if inst.HotplugSize > 0 {
 		memory.HotplugSize = &inst.HotplugSize
-		memory.HotplugMethod = ptr("VirtioMem")  // PascalCase, not kebab-case
+		memory.HotplugMethod = ptr("VirtioMem") // PascalCase, not kebab-case
 	}
 
 	// Disk configuration
@@ -386,6 +591,29 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 			Path:     ptr(m.paths.InstanceConfigDisk(inst.Id)),
 			Readonly: ptr(true),
 		},
+	}
+
+	// Add attached volumes as additional disks
+	// For overlay volumes, add both base (readonly) and overlay disk
+	for _, volAttach := range inst.Volumes {
+		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
+		if volAttach.Overlay {
+			// Base volume is always read-only when overlay is enabled
+			disks = append(disks, vmm.DiskConfig{
+				Path:     &volumePath,
+				Readonly: ptr(true),
+			})
+			// Overlay disk is writable
+			overlayPath := m.paths.InstanceVolumeOverlay(inst.Id, volAttach.VolumeID)
+			disks = append(disks, vmm.DiskConfig{
+				Path: &overlayPath,
+			})
+		} else {
+			disks = append(disks, vmm.DiskConfig{
+				Path:     &volumePath,
+				Readonly: ptr(volAttach.Readonly),
+			})
+		}
 	}
 
 	// Serial console configuration
@@ -431,4 +659,3 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 func ptr[T any](v T) *T {
 	return &v
 }
-

@@ -104,6 +104,39 @@ GUEST_GW="%s"
 GUEST_DNS="%s"
 `, netConfig.IP, cidr, netConfig.Gateway, netConfig.DNS)
 	}
+
+	// Build volume mounts section
+	// Volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
+	// For overlay volumes, two devices are used: base + overlay disk
+	// Format: device:path:mode[:overlay_device]
+	volumeSection := ""
+	if len(inst.Volumes) > 0 {
+		var volumeLines strings.Builder
+		volumeLines.WriteString("\n# Volume mounts (device:path:mode[:overlay_device])\n")
+		volumeLines.WriteString("VOLUME_MOUNTS=\"")
+		deviceIdx := 0 // Track device index (starts at 'd' = vdd)
+		for i, vol := range inst.Volumes {
+			device := fmt.Sprintf("/dev/vd%c", 'd'+deviceIdx)
+			if i > 0 {
+				volumeLines.WriteString(" ")
+			}
+			if vol.Overlay {
+				// Overlay mode: base device + overlay device
+				overlayDevice := fmt.Sprintf("/dev/vd%c", 'd'+deviceIdx+1)
+				volumeLines.WriteString(fmt.Sprintf("%s:%s:overlay:%s", device, vol.MountPath, overlayDevice))
+				deviceIdx += 2 // Overlay uses 2 devices
+			} else {
+				mode := "rw"
+				if vol.Readonly {
+					mode = "ro"
+				}
+				volumeLines.WriteString(fmt.Sprintf("%s:%s:%s", device, vol.MountPath, mode))
+				deviceIdx++ // Regular volume uses 1 device
+			}
+		}
+		volumeLines.WriteString("\"\n")
+		volumeSection = volumeLines.String()
+	}
 	
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
@@ -116,13 +149,14 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s`, 
+%s%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
 		workdir,
 		envLines.String(),
 		networkSection,
+		volumeSection,
 	)
 	
 	return script

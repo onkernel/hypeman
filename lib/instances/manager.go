@@ -9,12 +9,16 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
+	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Manager interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
 	GetInstance(ctx context.Context, id string) (*Instance, error)
+	GetInstanceByName(ctx context.Context, name string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
@@ -24,27 +28,50 @@ type Manager interface {
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 }
 
+// ResourceLimits contains configurable resource limits for instances
+type ResourceLimits struct {
+	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
+	MaxVcpusPerInstance  int   // Maximum vCPUs per instance (0 = unlimited)
+	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
+	MaxTotalVcpus        int   // Maximum total vCPUs across all instances (0 = unlimited)
+	MaxTotalMemory       int64 // Maximum total memory in bytes across all instances (0 = unlimited)
+}
+
 type manager struct {
 	paths          *paths.Paths
 	imageManager   images.Manager
 	systemManager  system.Manager
 	networkManager network.Manager
-	maxOverlaySize int64           // Maximum overlay disk size in bytes
-	instanceLocks  sync.Map        // map[string]*sync.RWMutex - per-instance locks
-	hostTopology   *HostTopology   // Cached host CPU topology
+	volumeManager  volumes.Manager
+	limits         ResourceLimits
+	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
+	hostTopology   *HostTopology // Cached host CPU topology
+	metrics        *Metrics
 }
 
-// NewManager creates a new instances manager
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, maxOverlaySize int64) Manager {
-	return &manager{
+// NewManager creates a new instances manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		networkManager: networkManager,
-		maxOverlaySize: maxOverlaySize,
+		volumeManager:  volumeManager,
+		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newInstanceMetrics(meter, tracer, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -68,7 +95,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	
+
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
 		// Clean up the lock after successful deletion
@@ -106,6 +133,31 @@ func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error)
 	lock.RLock()
 	defer lock.RUnlock()
 	return m.getInstance(ctx, id)
+}
+
+// GetInstanceByName returns an instance by name
+// Returns ErrNotFound if no instance matches, ErrAmbiguousName if multiple match
+func (m *manager) GetInstanceByName(ctx context.Context, name string) (*Instance, error) {
+	instances, err := m.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []Instance
+	for _, inst := range instances {
+		if inst.Name == name {
+			matches = append(matches, inst)
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(matches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return &matches[0], nil
 }
 
 // StreamInstanceLogs streams instance console logs
