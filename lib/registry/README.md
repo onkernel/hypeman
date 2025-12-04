@@ -18,13 +18,14 @@ sequenceDiagram
 
     Client->>Registry: PUT /v2/.../manifests/{ref}
     Registry->>BlobStore: Store manifest blob
-    Registry->>Registry: Update index.json
     Registry-->>Client: 201 Created
     
-    Registry--)ImageMgr: ImportLocalImage() (async)
+    Registry->>Registry: Convert Docker v2 → OCI (if needed)
+    Registry->>Registry: Append to OCI layout
+    Registry--)ImageMgr: ImportLocalImage(ociDigest) (async)
     ImageMgr->>ImageMgr: Queue conversion
-    ImageMgr->>ImageMgr: Unpack layers
-    ImageMgr->>ImageMgr: Create disk image
+    ImageMgr->>ImageMgr: Unpack layers (umoci)
+    ImageMgr->>ImageMgr: Create ext4 disk image
 ```
 
 ## How It Works
@@ -61,19 +62,20 @@ When a client pushes:
 go-containerregistry stores manifests in-memory, but we need them on disk for conversion. The registry intercepts manifest PUTs:
 
 ```go
-// Read manifest body before passing to underlying handler
+// Read manifest body and compute digest
 body, _ := io.ReadAll(req.Body)
+digest := computeDigest(body)
 
-// Store in blob store (for image manager to read later)
-r.storeManifestBlob(reference, body)
+// Store in blob store by digest
+r.storeManifestBlob(digest, body)
 
 // Reconstruct body for underlying handler
 req.Body = io.NopCloser(bytes.NewReader(body))
 r.handler.ServeHTTP(wrapper, req)
 
-// Trigger async conversion
+// Trigger async conversion with computed digest
 if wrapper.statusCode == http.StatusCreated {
-    go r.triggerConversion(repo, reference)
+    go r.triggerConversion(repo, reference, digest)
 }
 ```
 
@@ -81,14 +83,44 @@ if wrapper.statusCode == http.StatusCreated {
 
 After a successful manifest push:
 
-1. Updates `index.json` with manifest entry (correct mediaType detected from content)
-2. Calls `ImageManager.ImportLocalImage()` to queue conversion
-3. Image manager reads from shared OCI cache and creates disk image
+1. Creates a `blobStoreImage` wrapper that reads from the blob store
+2. If manifest is Docker v2 format, converts it to OCI format (different digest)
+3. Appends to OCI layout via `layout.AppendImage()` which updates `index.json`
+4. Calls `ImageManager.ImportLocalImage()` with the OCI digest to queue conversion
+
+### Docker v2 to OCI Conversion
+
+Images from the local Docker daemon use Docker v2 manifest format, but umoci (used for unpacking layers) only accepts OCI format. The registry handles this transparently:
+
+```go
+// blobStoreImage detects Docker v2 and converts media types
+func (img *blobStoreImage) MediaType() (types.MediaType, error) {
+    if isOCIMediaType(manifest.MediaType) {
+        return types.MediaType(manifest.MediaType), nil
+    }
+    return types.OCIManifestSchema1, nil  // Convert Docker v2 → OCI
+}
+
+// Digest returns OCI digest (differs from Docker v2 input digest)
+func (img *blobStoreImage) Digest() (v1.Hash, error) {
+    if isOCIMediaType(manifest.MediaType) {
+        return v1.NewHash(img.digest)  // Preserve original
+    }
+    // Compute digest of converted OCI manifest
+    rawManifest, _ := img.RawManifest()
+    return sha256Hash(rawManifest)
+}
+```
+
+Media type conversions:
+- `vnd.docker.distribution.manifest.v2+json` → `vnd.oci.image.manifest.v1+json`
+- `vnd.docker.container.image.v1+json` → `vnd.oci.image.config.v1+json`
+- `vnd.docker.image.rootfs.diff.tar.gzip` → `vnd.oci.image.layer.v1.tar+gzip`
 
 ## Files
 
 - **`blob_store.go`** - Filesystem-backed blob storage implementing `registry.BlobHandler`
-- **`registry.go`** - Registry handler wrapping go-containerregistry with manifest interception
+- **`registry.go`** - Registry handler wrapping go-containerregistry with manifest interception and Docker v2 → OCI conversion (`blobStoreImage`, `blobStoreLayer`)
 
 ## Storage Layout
 
@@ -142,13 +174,14 @@ The registry endpoints use JWT bearer token authentication. The hypeman CLI read
 - Our image manager needs to read manifests from disk
 - Enables content-addressable manifest storage consistent with layers
 
-### Why detect mediaType from manifest content?
+### Why convert Docker v2 manifests to OCI?
 
-**What:** Parse manifest JSON to extract actual mediaType rather than hardcoding.
+**What:** Detect Docker v2 manifests and convert to OCI format before passing to umoci.
 
 **Why:**
-- Docker v2 (`application/vnd.docker.distribution.manifest.v2+json`) vs OCI (`application/vnd.oci.image.manifest.v1+json`)
-- Wrong mediaType in index.json causes "malicious manifest" errors during conversion
-- Content-based detection ensures compatibility with all sources
+- `daemon.Image()` (local Docker) returns Docker v2 manifests
+- umoci only accepts OCI format (`v1.Manifest`) - Docker v2 causes "manifest data is not v1.Manifest" errors
+- go-containerregistry does NOT automatically convert formats
+- The converted OCI manifest has a different digest than the input Docker v2 manifest
 
-**Note:** Both Docker v2 and OCI manifest formats work. go-containerregistry normalizes Docker v2 manifests to OCI format when storing to the OCI layout, so umoci always sees OCI manifests regardless of the source format.
+**Implementation:** The `blobStoreImage` wrapper transparently converts Docker v2 to OCI when the manifest is read, and computes the correct OCI digest for registration.
