@@ -17,8 +17,10 @@ import (
 type Manager interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
-	GetInstance(ctx context.Context, id string) (*Instance, error)
-	GetInstanceByName(ctx context.Context, name string) (*Instance, error)
+	// GetInstance returns an instance by ID, name, or ID prefix.
+	// Lookup order: exact ID match -> exact name match -> ID prefix match.
+	// Returns ErrAmbiguousName if prefix matches multiple instances.
+	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
@@ -127,37 +129,54 @@ func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
 	return m.listInstances(ctx)
 }
 
-// GetInstance returns a single instance
-func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error) {
-	lock := m.getInstanceLock(id)
+// GetInstance returns an instance by ID, name, or ID prefix.
+// Lookup order: exact ID match -> exact name match -> ID prefix match.
+// Returns ErrAmbiguousName if prefix matches multiple instances.
+func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, error) {
+	// 1. Try exact ID match first (most common case)
+	lock := m.getInstanceLock(idOrName)
 	lock.RLock()
-	defer lock.RUnlock()
-	return m.getInstance(ctx, id)
-}
+	inst, err := m.getInstance(ctx, idOrName)
+	lock.RUnlock()
+	if err == nil {
+		return inst, nil
+	}
 
-// GetInstanceByName returns an instance by name
-// Returns ErrNotFound if no instance matches, ErrAmbiguousName if multiple match
-func (m *manager) GetInstanceByName(ctx context.Context, name string) (*Instance, error) {
+	// 2. List all instances for name and prefix matching
 	instances, err := m.ListInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var matches []Instance
+	// 3. Try exact name match
+	var nameMatches []Instance
 	for _, inst := range instances {
-		if inst.Name == name {
-			matches = append(matches, inst)
+		if inst.Name == idOrName {
+			nameMatches = append(nameMatches, inst)
 		}
 	}
-
-	if len(matches) == 0 {
-		return nil, ErrNotFound
+	if len(nameMatches) == 1 {
+		return &nameMatches[0], nil
 	}
-	if len(matches) > 1 {
+	if len(nameMatches) > 1 {
 		return nil, ErrAmbiguousName
 	}
 
-	return &matches[0], nil
+	// 4. Try ID prefix match
+	var prefixMatches []Instance
+	for _, inst := range instances {
+		if len(idOrName) > 0 && len(inst.Id) >= len(idOrName) && inst.Id[:len(idOrName)] == idOrName {
+			prefixMatches = append(prefixMatches, inst)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return &prefixMatches[0], nil
+	}
+	if len(prefixMatches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return nil, ErrNotFound
 }
 
 // StreamInstanceLogs streams instance console logs

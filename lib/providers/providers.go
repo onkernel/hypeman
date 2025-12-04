@@ -126,16 +126,11 @@ type instanceResolverAdapter struct {
 	instanceManager instances.Manager
 }
 
-// ResolveInstanceIP resolves an instance name or ID to its IP address.
+// ResolveInstanceIP resolves an instance name, ID, or ID prefix to its IP address.
 func (a *instanceResolverAdapter) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
-	// Try by ID first
 	inst, err := a.instanceManager.GetInstance(ctx, nameOrID)
 	if err != nil {
-		// Try by name
-		inst, err = a.instanceManager.GetInstanceByName(ctx, nameOrID)
-		if err != nil {
-			return "", fmt.Errorf("instance not found: %s", nameOrID)
-		}
+		return "", fmt.Errorf("instance not found: %s", nameOrID)
 	}
 
 	// Check if instance has network enabled
@@ -151,30 +146,20 @@ func (a *instanceResolverAdapter) ResolveInstanceIP(ctx context.Context, nameOrI
 	return inst.IP, nil
 }
 
-// InstanceExists checks if an instance with the given name or ID exists.
+// InstanceExists checks if an instance with the given name, ID, or ID prefix exists.
 func (a *instanceResolverAdapter) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
-	// Try by ID first
 	_, err := a.instanceManager.GetInstance(ctx, nameOrID)
-	if err == nil {
-		return true, nil
-	}
-
-	// Try by name
-	_, err = a.instanceManager.GetInstanceByName(ctx, nameOrID)
-	if err == nil {
-		return true, nil
-	}
-
-	return false, nil
+	return err == nil, nil
 }
 
 // ProvideIngressManager provides the ingress manager
 func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
 	ingressConfig := ingress.Config{
-		ListenAddress: cfg.EnvoyListenAddress,
-		ListenPort:    cfg.EnvoyListenPort,
-		AdminAddress:  cfg.EnvoyAdminAddress,
-		AdminPort:     cfg.EnvoyAdminPort,
+		ListenAddress:  cfg.EnvoyListenAddress,
+		ListenPort:     cfg.EnvoyListenPort,
+		AdminAddress:   cfg.EnvoyAdminAddress,
+		AdminPort:      cfg.EnvoyAdminPort,
+		StopOnShutdown: cfg.EnvoyStopOnShutdown,
 	}
 
 	resolver := &instanceResolverAdapter{instanceManager: instanceManager}

@@ -93,9 +93,12 @@ DELETE /ingresses/{id} - Delete ingress
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ENVOY_LISTEN_ADDRESS` | Address for ingress listeners | `0.0.0.0` |
-| `ENVOY_LISTEN_PORT` | Port for ingress listeners | `80` |
+| `ENVOY_LISTEN_PORT` | Default HTTP port (all ingresses share this port, routing by hostname) | `80` |
 | `ENVOY_ADMIN_ADDRESS` | Address for Envoy admin API | `127.0.0.1` |
 | `ENVOY_ADMIN_PORT` | Port for Envoy admin API | `9901` |
+| `ENVOY_STOP_ON_SHUTDOWN` | Stop Envoy when hypeman shuts down | `false` |
+
+**Note on Listen Port:** All HTTP ingresses share a single listen port and route by hostname (Host header). This is the standard pattern used by ingress controllers like Nginx Ingress and Traefik. If different ports are needed for non-HTTP protocols, that could be added as a future enhancement to IngressMatch.
 
 ## Security
 
@@ -118,8 +121,9 @@ DELETE /ingresses/{id} - Delete ingress
 3. Envoy hot-reloads configuration
 
 ### Shutdown
-- Hypeman does not stop Envoy on exit (daemon persists)
-- Envoy can be manually stopped via admin API or SIGTERM
+- By default (`ENVOY_STOP_ON_SHUTDOWN=false`), Envoy continues running when hypeman exits
+- Set `ENVOY_STOP_ON_SHUTDOWN=true` to stop Envoy with hypeman
+- Envoy can be manually stopped via admin API (`/quitquitquit`) or SIGTERM
 
 ## Testing
 

@@ -17,19 +17,26 @@ import (
 
 // EnvoyDaemon manages the Envoy proxy daemon lifecycle.
 type EnvoyDaemon struct {
-	paths        *paths.Paths
-	adminAddress string
-	adminPort    int
-	pid          int
+	paths          *paths.Paths
+	adminAddress   string
+	adminPort      int
+	pid            int
+	stopOnShutdown bool // If true, stop Envoy when hypeman shuts down
 }
 
 // NewEnvoyDaemon creates a new EnvoyDaemon manager.
-func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int) *EnvoyDaemon {
+func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *EnvoyDaemon {
 	return &EnvoyDaemon{
-		paths:        p,
-		adminAddress: adminAddress,
-		adminPort:    adminPort,
+		paths:          p,
+		adminAddress:   adminAddress,
+		adminPort:      adminPort,
+		stopOnShutdown: stopOnShutdown,
 	}
+}
+
+// StopOnShutdown returns whether Envoy should be stopped when hypeman shuts down.
+func (d *EnvoyDaemon) StopOnShutdown() bool {
+	return d.stopOnShutdown
 }
 
 // Start starts the Envoy daemon. If Envoy is already running (discovered via PID file

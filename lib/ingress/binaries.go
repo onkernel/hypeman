@@ -10,12 +10,12 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-//go:embed binaries/envoy/v1.33/x86_64/envoy
-//go:embed binaries/envoy/v1.33/aarch64/envoy
+//go:embed binaries/envoy/v1.36/x86_64/envoy
+//go:embed binaries/envoy/v1.36/aarch64/envoy
 var envoyBinaryFS embed.FS
 
 // EnvoyVersion is the version of Envoy embedded in this build.
-const EnvoyVersion = "v1.33"
+const EnvoyVersion = "v1.36"
 
 // ExtractEnvoyBinary extracts the embedded Envoy binary to the data directory.
 // Returns the path to the extracted binary.

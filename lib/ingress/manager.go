@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/segmentio/ksuid"
 )
 
 // InstanceResolver provides instance resolution capabilities.
@@ -50,7 +50,8 @@ type Config struct {
 	// ListenAddress is the address Envoy should listen on (default: 0.0.0.0).
 	ListenAddress string
 
-	// ListenPort is the port Envoy should listen on (default: 80).
+	// ListenPort is the default port Envoy should listen on for HTTP ingresses (default: 80).
+	// All ingresses share this port, routing by hostname.
 	ListenPort int
 
 	// AdminAddress is the address for Envoy admin API (default: 127.0.0.1).
@@ -58,15 +59,20 @@ type Config struct {
 
 	// AdminPort is the port for Envoy admin API (default: 9901).
 	AdminPort int
+
+	// StopOnShutdown determines whether to stop Envoy when hypeman shuts down (default: false).
+	// When false, Envoy continues running independently.
+	StopOnShutdown bool
 }
 
 // DefaultConfig returns the default ingress configuration.
 func DefaultConfig() Config {
 	return Config{
-		ListenAddress: "0.0.0.0",
-		ListenPort:    80,
-		AdminAddress:  "127.0.0.1",
-		AdminPort:     9901,
+		ListenAddress:  "0.0.0.0",
+		ListenPort:     80,
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      9901,
+		StopOnShutdown: false,
 	}
 }
 
@@ -85,7 +91,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		paths:            p,
 		config:           config,
 		instanceResolver: instanceResolver,
-		daemon:           NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort),
+		daemon:           NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown),
 		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.ListenPort, config.AdminAddress, config.AdminPort),
 	}
 }
@@ -163,7 +169,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	}
 
 	// Generate ID
-	id := ksuid.New().String()
+	id := cuid2.Generate()
 
 	// Create ingress
 	ingress := Ingress{
@@ -282,8 +288,11 @@ func (m *manager) Shutdown() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Note: We don't stop Envoy on hypeman shutdown because it should
-	// continue running independently. Only stop if explicitly requested.
+	// Only stop Envoy if configured to do so
+	if m.daemon.StopOnShutdown() {
+		return m.daemon.Stop()
+	}
+
 	return nil
 }
 
