@@ -317,7 +317,7 @@ func (m *manager) regenerateConfig(ctx context.Context, ingresses []Ingress) err
 		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
 	}
 
-	return m.configGenerator.WriteConfig(ingresses, ipResolver)
+	return m.configGenerator.WriteConfig(ctx, ingresses, ipResolver)
 }
 
 // storedToIngress converts a storedIngress to an Ingress.

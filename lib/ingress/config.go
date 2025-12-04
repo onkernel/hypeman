@@ -1,12 +1,13 @@
 package ingress
 
 import (
+	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 	"gopkg.in/yaml.v3"
 )
@@ -31,14 +32,14 @@ func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress 
 
 // GenerateConfig generates Envoy configuration from the given ingresses and their resolved IP addresses.
 // The ipResolver function takes an instance name/ID and returns (ip, error).
-func (g *EnvoyConfigGenerator) GenerateConfig(ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
-	config := g.buildConfig(ingresses, ipResolver)
+func (g *EnvoyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
+	config := g.buildConfig(ctx, ingresses, ipResolver)
 	return yaml.Marshal(config)
 }
 
 // WriteConfig generates and writes the Envoy configuration file.
-func (g *EnvoyConfigGenerator) WriteConfig(ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
-	data, err := g.GenerateConfig(ingresses, ipResolver)
+func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+	data, err := g.GenerateConfig(ctx, ingresses, ipResolver)
 	if err != nil {
 		return fmt.Errorf("generate config: %w", err)
 	}
@@ -58,7 +59,7 @@ func (g *EnvoyConfigGenerator) WriteConfig(ingresses []Ingress, ipResolver func(
 }
 
 // buildConfig builds the Envoy configuration structure.
-func (g *EnvoyConfigGenerator) buildConfig(ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
+func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
 	config := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"address": map[string]interface{}{
@@ -69,8 +70,8 @@ func (g *EnvoyConfigGenerator) buildConfig(ingresses []Ingress, ipResolver func(
 			},
 		},
 		"static_resources": map[string]interface{}{
-			"listeners": g.buildListeners(ingresses, ipResolver),
-			"clusters":  g.buildClusters(ingresses, ipResolver),
+			"listeners": g.buildListeners(ctx, ingresses, ipResolver),
+			"clusters":  g.buildClusters(ctx, ingresses, ipResolver),
 		},
 	}
 
@@ -78,13 +79,13 @@ func (g *EnvoyConfigGenerator) buildConfig(ingresses []Ingress, ipResolver func(
 }
 
 // buildListeners builds the listeners configuration - one per unique port.
-func (g *EnvoyConfigGenerator) buildListeners(ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
+func (g *EnvoyConfigGenerator) buildListeners(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
 	if len(ingresses) == 0 {
 		return []interface{}{}
 	}
 
 	// Group rules by port
-	portToFilterChains := g.buildFilterChainsByPort(ingresses, ipResolver)
+	portToFilterChains := g.buildFilterChainsByPort(ctx, ingresses, ipResolver)
 	if len(portToFilterChains) == 0 {
 		return []interface{}{}
 	}
@@ -111,7 +112,9 @@ func (g *EnvoyConfigGenerator) buildListeners(ingresses []Ingress, ipResolver fu
 // buildFilterChainsByPort builds filter chains grouped by port for hostname-based routing.
 // For plain HTTP, we use virtual hosts with domain matching (Host header) instead of
 // filter_chain_match with server_names (which only works for TLS/SNI).
-func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipResolver func(instance string) (string, error)) map[int][]interface{} {
+func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[int][]interface{} {
+	log := logger.FromContext(ctx)
+
 	// Group virtual hosts by port
 	portToVirtualHosts := make(map[int][]interface{})
 
@@ -120,7 +123,7 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipRe
 			// Resolve instance IP - skip rules where we can't resolve
 			_, err := ipResolver(rule.Target.Instance)
 			if err != nil {
-				slog.Warn("skipping ingress rule: cannot resolve instance IP",
+				log.WarnContext(ctx, "skipping ingress rule: cannot resolve instance IP",
 					"ingress_id", ingress.ID,
 					"ingress_name", ingress.Name,
 					"hostname", rule.Match.Hostname,
@@ -212,7 +215,9 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipRe
 }
 
 // buildClusters builds the clusters configuration.
-func (g *EnvoyConfigGenerator) buildClusters(ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
+func (g *EnvoyConfigGenerator) buildClusters(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
+	log := logger.FromContext(ctx)
+
 	var clusters []interface{}
 	seen := make(map[string]bool)
 
@@ -228,7 +233,7 @@ func (g *EnvoyConfigGenerator) buildClusters(ingresses []Ingress, ipResolver fun
 			ip, err := ipResolver(rule.Target.Instance)
 			if err != nil {
 				// Skip clusters where we can't resolve the instance
-				slog.Warn("skipping cluster: cannot resolve instance IP",
+				log.WarnContext(ctx, "skipping cluster: cannot resolve instance IP",
 					"ingress_id", ingress.ID,
 					"instance", rule.Target.Instance,
 					"error", err)

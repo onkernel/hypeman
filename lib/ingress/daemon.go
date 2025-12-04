@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
@@ -139,7 +139,8 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 	pidPath := d.paths.EnvoyPIDFile()
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
 		// Non-fatal, log but continue
-		slog.Warn("failed to write PID file", "error", err)
+		log := logger.FromContext(ctx)
+		log.WarnContext(ctx, "failed to write PID file", "error", err)
 	}
 
 	// Save epoch

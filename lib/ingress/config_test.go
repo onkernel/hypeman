@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -36,12 +37,13 @@ func TestGenerateConfig_EmptyIngresses(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{}
 	ipResolver := func(instance string) (string, error) {
 		return "10.100.0.10", nil
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	// Parse YAML to verify structure
@@ -85,6 +87,7 @@ func TestGenerateConfig_SingleIngress(t *testing.T) {
 		},
 	}
 
+	ctx := context.Background()
 	ipResolver := func(instance string) (string, error) {
 		if instance == "my-api" {
 			return "10.100.0.10", nil
@@ -92,7 +95,7 @@ func TestGenerateConfig_SingleIngress(t *testing.T) {
 		return "", ErrInstanceNotFound
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -108,6 +111,7 @@ func TestGenerateConfig_MultipleRules(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:   "ing-123",
@@ -135,7 +139,7 @@ func TestGenerateConfig_MultipleRules(t *testing.T) {
 		return "", ErrInstanceNotFound
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -151,6 +155,7 @@ func TestGenerateConfig_MultipleIngresses(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:    "ing-1",
@@ -174,7 +179,7 @@ func TestGenerateConfig_MultipleIngresses(t *testing.T) {
 		return "", ErrInstanceNotFound
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -190,6 +195,7 @@ func TestGenerateConfig_MultiplePorts(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:   "ing-1",
@@ -226,7 +232,7 @@ func TestGenerateConfig_MultiplePorts(t *testing.T) {
 		return "", ErrInstanceNotFound
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -251,6 +257,7 @@ func TestGenerateConfig_DefaultPort(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	// Test that Port=0 defaults to 80
 	ingresses := []Ingress{
 		{
@@ -266,7 +273,7 @@ func TestGenerateConfig_DefaultPort(t *testing.T) {
 		return "10.100.0.10", nil
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -280,6 +287,7 @@ func TestGenerateConfig_SkipsUnresolvedInstances(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:   "ing-123",
@@ -304,7 +312,7 @@ func TestGenerateConfig_SkipsUnresolvedInstances(t *testing.T) {
 		return "", ErrInstanceNotFound
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -321,6 +329,7 @@ func TestWriteConfig(t *testing.T) {
 	generator, p, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:    "ing-123",
@@ -333,7 +342,7 @@ func TestWriteConfig(t *testing.T) {
 		return "10.100.0.10", nil
 	}
 
-	err := generator.WriteConfig(ingresses, ipResolver)
+	err := generator.WriteConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	// Verify file was written
@@ -367,6 +376,7 @@ func TestConfigIsValidYAML(t *testing.T) {
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
+	ctx := context.Background()
 	ingresses := []Ingress{
 		{
 			ID:   "ing-123",
@@ -384,7 +394,7 @@ func TestConfigIsValidYAML(t *testing.T) {
 		return "10.100.0.10", nil
 	}
 
-	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
 	// Verify it's valid YAML by parsing it
