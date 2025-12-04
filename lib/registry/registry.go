@@ -455,28 +455,37 @@ type blobStoreLayer struct {
 	mediaType string
 }
 
+// Digest returns the layer's content hash.
 func (l *blobStoreLayer) Digest() (v1.Hash, error) {
 	return v1.NewHash(l.digest)
 }
 
+// DiffID returns an empty hash. Computing the actual DiffID requires decompressing
+// the layer which is expensive; callers that need DiffID should compute it themselves.
 func (l *blobStoreLayer) DiffID() (v1.Hash, error) {
 	return v1.Hash{}, nil
 }
 
+// Compressed returns a reader for the compressed layer blob from disk.
 func (l *blobStoreLayer) Compressed() (io.ReadCloser, error) {
 	digestHex := strings.TrimPrefix(l.digest, "sha256:")
 	blobPath := l.paths.OCICacheBlob(digestHex)
 	return os.Open(blobPath)
 }
 
+// Uncompressed returns a reader for the layer content. Since layers are stored
+// compressed, this returns the compressed stream and relies on the caller
+// (go-containerregistry) to handle decompression based on MediaType.
 func (l *blobStoreLayer) Uncompressed() (io.ReadCloser, error) {
 	return l.Compressed()
 }
 
+// Size returns the compressed size of the layer in bytes.
 func (l *blobStoreLayer) Size() (int64, error) {
 	return l.size, nil
 }
 
+// MediaType returns the layer's media type, converting Docker v2 types to OCI.
 func (l *blobStoreLayer) MediaType() (types.MediaType, error) {
 	return convertToOCIMediaType(l.mediaType), nil
 }
