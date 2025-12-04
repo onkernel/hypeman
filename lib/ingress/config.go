@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,12 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipRe
 			// Resolve instance IP - skip rules where we can't resolve
 			_, err := ipResolver(rule.Target.Instance)
 			if err != nil {
+				slog.Warn("skipping ingress rule: cannot resolve instance IP",
+					"ingress_id", ingress.ID,
+					"ingress_name", ingress.Name,
+					"hostname", rule.Match.Hostname,
+					"instance", rule.Target.Instance,
+					"error", err)
 				continue
 			}
 
@@ -221,6 +228,10 @@ func (g *EnvoyConfigGenerator) buildClusters(ingresses []Ingress, ipResolver fun
 			ip, err := ipResolver(rule.Target.Instance)
 			if err != nil {
 				// Skip clusters where we can't resolve the instance
+				slog.Warn("skipping cluster: cannot resolve instance IP",
+					"ingress_id", ingress.ID,
+					"instance", rule.Target.Instance,
+					"error", err)
 				continue
 			}
 

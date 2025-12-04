@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"strconv"
 	"time"
 )
 
@@ -74,17 +75,17 @@ func (r *CreateIngressRequest) Validate() error {
 
 	for i, rule := range r.Rules {
 		if rule.Match.Hostname == "" {
-			return &ValidationError{Field: "rules", Message: "hostname is required in rule " + string(rune('0'+i))}
+			return &ValidationError{Field: "rules", Message: "hostname is required in rule " + strconv.Itoa(i)}
 		}
 		// Port is optional (defaults to 80), but if specified must be valid
 		if rule.Match.Port != 0 && (rule.Match.Port < 1 || rule.Match.Port > 65535) {
-			return &ValidationError{Field: "rules", Message: "match.port must be between 1 and 65535 in rule " + string(rune('0'+i))}
+			return &ValidationError{Field: "rules", Message: "match.port must be between 1 and 65535 in rule " + strconv.Itoa(i)}
 		}
 		if rule.Target.Instance == "" {
-			return &ValidationError{Field: "rules", Message: "instance is required in rule " + string(rune('0'+i))}
+			return &ValidationError{Field: "rules", Message: "instance is required in rule " + strconv.Itoa(i)}
 		}
 		if rule.Target.Port <= 0 || rule.Target.Port > 65535 {
-			return &ValidationError{Field: "rules", Message: "target.port must be between 1 and 65535 in rule " + string(rune('0'+i))}
+			return &ValidationError{Field: "rules", Message: "target.port must be between 1 and 65535 in rule " + strconv.Itoa(i)}
 		}
 	}
 

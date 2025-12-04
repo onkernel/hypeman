@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -138,7 +139,7 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 	pidPath := d.paths.EnvoyPIDFile()
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
 		// Non-fatal, log but continue
-		fmt.Printf("warning: failed to write PID file: %v\n", err)
+		slog.Warn("failed to write PID file", "error", err)
 	}
 
 	// Save epoch

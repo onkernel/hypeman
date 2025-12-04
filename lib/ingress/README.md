@@ -52,7 +52,7 @@ An Ingress is a configuration object that defines how external traffic should be
 2. Manager validates the ingress (name, instance exists, hostname unique)
 3. Ingress is persisted to `/var/lib/hypeman/ingresses/{id}.json`
 4. Envoy config is regenerated from all ingresses
-5. SIGHUP sent to Envoy to reload config
+5. Envoy performs a hot restart to pick up the new config
 
 ### Hostname Routing
 
@@ -68,7 +68,7 @@ An Ingress is a configuration object that defines how external traffic should be
   system/
     binaries/
       envoy/
-        v1.33/
+        v1.36/
           x86_64/envoy
           aarch64/envoy
   envoy/
@@ -117,8 +117,8 @@ DELETE /ingresses/{id} - Delete ingress
 
 ### Config Updates
 1. Regenerate `config.yaml` from all ingresses
-2. Send SIGHUP to Envoy process
-3. Envoy hot-reloads configuration
+2. Perform hot restart by starting a new Envoy process with an incremented restart epoch
+3. New Envoy process coordinates with the old one to take over without dropping connections
 
 ### Shutdown
 - By default (`ENVOY_STOP_ON_SHUTDOWN=false`), Envoy continues running when hypeman exits

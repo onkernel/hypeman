@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nrednav/cuid2"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
@@ -147,17 +148,19 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		}
 	}
 
-	// Check for hostname conflicts
+	// Check for hostname conflicts (hostname + port must be unique)
 	existingIngresses, err := m.loadAllIngresses()
 	if err != nil {
 		return nil, fmt.Errorf("load existing ingresses: %w", err)
 	}
 
 	for _, rule := range req.Rules {
+		newPort := rule.Match.GetPort()
 		for _, existing := range existingIngresses {
 			for _, existingRule := range existing.Rules {
-				if existingRule.Match.Hostname == rule.Match.Hostname {
-					return nil, fmt.Errorf("%w: hostname %q is already used by ingress %q", ErrHostnameInUse, rule.Match.Hostname, existing.Name)
+				existingPort := existingRule.Match.GetPort()
+				if existingRule.Match.Hostname == rule.Match.Hostname && existingPort == newPort {
+					return nil, fmt.Errorf("%w: hostname %q on port %d is already used by ingress %q", ErrHostnameInUse, rule.Match.Hostname, newPort, existing.Name)
 				}
 			}
 		}
@@ -198,7 +201,8 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	if m.daemon.IsRunning() {
 		if err := m.daemon.ReloadConfig(); err != nil {
 			// Non-fatal, config will be picked up on next reload
-			fmt.Printf("warning: failed to reload envoy config: %v\n", err)
+			log := logger.FromContext(ctx)
+			log.WarnContext(ctx, "failed to reload envoy config", "error", err)
 		}
 	}
 
@@ -271,7 +275,8 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	if m.daemon.IsRunning() {
 		if err := m.daemon.ReloadConfig(); err != nil {
 			// Non-fatal
-			fmt.Printf("warning: failed to reload envoy config: %v\n", err)
+			log := logger.FromContext(ctx)
+			log.WarnContext(ctx, "failed to reload envoy config", "error", err)
 		}
 	}
 
