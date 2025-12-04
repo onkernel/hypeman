@@ -34,7 +34,8 @@ An Ingress is a configuration object that defines how external traffic should be
   "rules": [
     {
       "match": {
-        "hostname": "api.example.com"
+        "hostname": "api.example.com",
+        "port": 80
       },
       "target": {
         "instance": "my-api",
@@ -93,12 +94,11 @@ DELETE /ingresses/{id} - Delete ingress
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ENVOY_LISTEN_ADDRESS` | Address for ingress listeners | `0.0.0.0` |
-| `ENVOY_LISTEN_PORT` | Default HTTP port (all ingresses share this port, routing by hostname) | `80` |
 | `ENVOY_ADMIN_ADDRESS` | Address for Envoy admin API | `127.0.0.1` |
 | `ENVOY_ADMIN_PORT` | Port for Envoy admin API | `9901` |
 | `ENVOY_STOP_ON_SHUTDOWN` | Stop Envoy when hypeman shuts down | `false` |
 
-**Note on Listen Port:** All HTTP ingresses share a single listen port and route by hostname (Host header). This is the standard pattern used by ingress controllers like Nginx Ingress and Traefik. If different ports are needed for non-HTTP protocols, that could be added as a future enhancement to IngressMatch.
+**Note on Ports:** Each ingress rule can specify a `port` in the match criteria to listen on a specific host port. If not specified, defaults to port 80. Envoy dynamically creates listeners for each unique port across all ingresses.
 
 ## Security
 

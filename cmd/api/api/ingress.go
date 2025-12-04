@@ -41,9 +41,14 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 	}
 
 	for i, rule := range request.Body.Rules {
+		matchPort := 80
+		if rule.Match.Port != nil {
+			matchPort = *rule.Match.Port
+		}
 		domainReq.Rules[i] = ingress.IngressRule{
 			Match: ingress.IngressMatch{
 				Hostname: rule.Match.Hostname,
+				Port:     matchPort,
 			},
 			Target: ingress.IngressTarget{
 				Instance: rule.Target.Instance,
@@ -135,9 +140,11 @@ func (s *ApiService) DeleteIngress(ctx context.Context, request oapi.DeleteIngre
 func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 	rules := make([]oapi.IngressRule, len(ing.Rules))
 	for i, rule := range ing.Rules {
+		port := rule.Match.GetPort()
 		rules[i] = oapi.IngressRule{
 			Match: oapi.IngressMatch{
 				Hostname: rule.Match.Hostname,
+				Port:     &port,
 			},
 			Target: oapi.IngressTarget{
 				Instance: rule.Target.Instance,

@@ -150,7 +150,7 @@ func run() error {
 		logger.Error("failed to initialize ingress manager", "error", err)
 		return fmt.Errorf("initialize ingress manager: %w", err)
 	}
-	logger.Info("Ingress manager initialized", "listen", fmt.Sprintf("%s:%d", cfg.EnvoyListenAddress, cfg.EnvoyListenPort))
+	logger.Info("Ingress manager initialized", "listen_addr", cfg.EnvoyListenAddress, "admin", fmt.Sprintf("%s:%d", cfg.EnvoyAdminAddress, cfg.EnvoyAdminPort))
 
 	// Create router
 	r := chi.NewRouter()

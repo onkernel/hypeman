@@ -13,17 +13,15 @@ import (
 type EnvoyConfigGenerator struct {
 	paths         *paths.Paths
 	listenAddress string
-	listenPort    int
 	adminAddress  string
 	adminPort     int
 }
 
 // NewEnvoyConfigGenerator creates a new config generator.
-func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, listenPort int, adminAddress string, adminPort int) *EnvoyConfigGenerator {
+func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int) *EnvoyConfigGenerator {
 	return &EnvoyConfigGenerator{
 		paths:         p,
 		listenAddress: listenAddress,
-		listenPort:    listenPort,
 		adminAddress:  adminAddress,
 		adminPort:     adminPort,
 	}
@@ -71,35 +69,40 @@ func (g *EnvoyConfigGenerator) buildConfig(ingresses []Ingress, ipResolver func(
 	return config
 }
 
-// buildListeners builds the listeners configuration.
+// buildListeners builds the listeners configuration - one per unique port.
 func (g *EnvoyConfigGenerator) buildListeners(ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
 	if len(ingresses) == 0 {
 		return []interface{}{}
 	}
 
-	// Build filter chains for each hostname
-	filterChains := g.buildFilterChains(ingresses, ipResolver)
-	if len(filterChains) == 0 {
+	// Group rules by port
+	portToFilterChains := g.buildFilterChainsByPort(ingresses, ipResolver)
+	if len(portToFilterChains) == 0 {
 		return []interface{}{}
 	}
 
-	listener := map[string]interface{}{
-		"name": "ingress_listener",
-		"address": map[string]interface{}{
-			"socket_address": map[string]interface{}{
-				"address":    g.listenAddress,
-				"port_value": g.listenPort,
+	// Create one listener per port
+	var listeners []interface{}
+	for port, filterChains := range portToFilterChains {
+		listener := map[string]interface{}{
+			"name": fmt.Sprintf("ingress_listener_%d", port),
+			"address": map[string]interface{}{
+				"socket_address": map[string]interface{}{
+					"address":    g.listenAddress,
+					"port_value": port,
+				},
 			},
-		},
-		"filter_chains": filterChains,
+			"filter_chains": filterChains,
+		}
+		listeners = append(listeners, listener)
 	}
 
-	return []interface{}{listener}
+	return listeners
 }
 
-// buildFilterChains builds filter chains for hostname-based routing.
-func (g *EnvoyConfigGenerator) buildFilterChains(ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
-	var filterChains []interface{}
+// buildFilterChainsByPort builds filter chains grouped by port for hostname-based routing.
+func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipResolver func(instance string) (string, error)) map[int][]interface{} {
+	portToFilterChains := make(map[int][]interface{})
 
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
@@ -110,6 +113,7 @@ func (g *EnvoyConfigGenerator) buildFilterChains(ingresses []Ingress, ipResolver
 				continue
 			}
 
+			port := rule.Match.GetPort()
 			clusterName := g.clusterName(ingress.ID, rule.Target.Instance, rule.Target.Port)
 
 			// Build route configuration for this hostname
@@ -165,14 +169,14 @@ func (g *EnvoyConfigGenerator) buildFilterChains(ingresses []Ingress, ipResolver
 			// Include resolved IP for documentation purposes in comments
 			_ = ip
 
-			filterChains = append(filterChains, filterChain)
+			portToFilterChains[port] = append(portToFilterChains[port], filterChain)
 		}
 	}
 
-	// Add a default filter chain for non-matching requests (returns 404)
-	if len(filterChains) > 0 {
+	// Add a default filter chain for non-matching requests (returns 404) to each port
+	for port, filterChains := range portToFilterChains {
 		defaultRouteConfig := map[string]interface{}{
-			"name": "default_route",
+			"name": fmt.Sprintf("default_route_%d", port),
 			"virtual_hosts": []interface{}{
 				map[string]interface{}{
 					"name":    "default",
@@ -196,7 +200,7 @@ func (g *EnvoyConfigGenerator) buildFilterChains(ingresses []Ingress, ipResolver
 
 		defaultHttpConnectionManager := map[string]interface{}{
 			"@type":        "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-			"stat_prefix":  "ingress_default",
+			"stat_prefix":  fmt.Sprintf("ingress_default_%d", port),
 			"codec_type":   "AUTO",
 			"route_config": defaultRouteConfig,
 			"http_filters": []interface{}{
@@ -218,10 +222,10 @@ func (g *EnvoyConfigGenerator) buildFilterChains(ingresses []Ingress, ipResolver
 			},
 		}
 
-		filterChains = append(filterChains, defaultFilterChain)
+		portToFilterChains[port] = append(filterChains, defaultFilterChain)
 	}
 
-	return filterChains
+	return portToFilterChains
 }
 
 // buildClusters builds the clusters configuration.

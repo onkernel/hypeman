@@ -58,7 +58,6 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 
 	config := Config{
 		ListenAddress: "0.0.0.0",
-		ListenPort:    8080, // Use non-privileged port for testing
 		AdminAddress:  "127.0.0.1",
 		AdminPort:     19901, // Use different port for testing
 	}
@@ -118,6 +117,48 @@ func TestCreateIngress_MultipleRules(t *testing.T) {
 	ing, err := manager.Create(ctx, req)
 	require.NoError(t, err)
 	assert.Len(t, ing.Rules, 2)
+}
+
+func TestCreateIngress_CustomPort(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "custom-port-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "api.example.com", Port: 8080},
+				Target: IngressTarget{Instance: "my-api", Port: 3000},
+			},
+		},
+	}
+
+	ing, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 8080, ing.Rules[0].Match.Port)
+	assert.Equal(t, 8080, ing.Rules[0].Match.GetPort())
+}
+
+func TestCreateIngress_DefaultPort(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "default-port-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "api.example.com"}, // Port not specified
+				Target: IngressTarget{Instance: "my-api", Port: 3000},
+			},
+		},
+	}
+
+	ing, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 0, ing.Rules[0].Match.Port)       // Stored as 0
+	assert.Equal(t, 80, ing.Rules[0].Match.GetPort()) // But GetPort returns 80
 }
 
 func TestCreateIngress_InvalidName(t *testing.T) {
@@ -511,6 +552,36 @@ func TestCreateIngressRequest_Validate(t *testing.T) {
 				},
 			},
 			wantErr: true,
+		},
+		{
+			name: "invalid match port too high",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com", Port: 70000}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid match port negative",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com", Port: -1}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid with custom match port",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com", Port: 8080}, Target: IngressTarget{Instance: "my-api", Port: 3000}},
+				},
+			},
+			wantErr: false,
 		},
 	}
 

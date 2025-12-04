@@ -23,7 +23,7 @@ func setupTestGenerator(t *testing.T) (*EnvoyConfigGenerator, *paths.Paths, func
 	// Create required directories
 	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
 
-	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", 80, "127.0.0.1", 9901)
+	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 9901)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -184,6 +184,96 @@ func TestGenerateConfig_MultipleIngresses(t *testing.T) {
 	assert.Contains(t, configStr, "app2.example.com")
 	assert.Contains(t, configStr, "10.100.0.10")
 	assert.Contains(t, configStr, "10.100.0.20")
+}
+
+func TestGenerateConfig_MultiplePorts(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	ingresses := []Ingress{
+		{
+			ID:   "ing-1",
+			Name: "port-80-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "api.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}},
+			},
+		},
+		{
+			ID:   "ing-2",
+			Name: "port-8080-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "internal.example.com", Port: 8080}, Target: IngressTarget{Instance: "internal", Port: 3000}},
+			},
+		},
+		{
+			ID:   "ing-3",
+			Name: "port-9000-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "metrics.example.com", Port: 9000}, Target: IngressTarget{Instance: "metrics", Port: 9090}},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		switch instance {
+		case "api":
+			return "10.100.0.10", nil
+		case "internal":
+			return "10.100.0.20", nil
+		case "metrics":
+			return "10.100.0.30", nil
+		}
+		return "", ErrInstanceNotFound
+	}
+
+	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify listeners for each port
+	assert.Contains(t, configStr, "ingress_listener_80")
+	assert.Contains(t, configStr, "ingress_listener_8080")
+	assert.Contains(t, configStr, "ingress_listener_9000")
+
+	// Verify all hostnames are present
+	assert.Contains(t, configStr, "api.example.com")
+	assert.Contains(t, configStr, "internal.example.com")
+	assert.Contains(t, configStr, "metrics.example.com")
+
+	// Verify all IPs are present
+	assert.Contains(t, configStr, "10.100.0.10")
+	assert.Contains(t, configStr, "10.100.0.20")
+	assert.Contains(t, configStr, "10.100.0.30")
+}
+
+func TestGenerateConfig_DefaultPort(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	// Test that Port=0 defaults to 80
+	ingresses := []Ingress{
+		{
+			ID:   "ing-1",
+			Name: "default-port-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "api.example.com", Port: 0}, Target: IngressTarget{Instance: "api", Port: 8080}},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		return "10.100.0.10", nil
+	}
+
+	data, err := generator.GenerateConfig(ingresses, ipResolver)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Should create listener on port 80 (default)
+	assert.Contains(t, configStr, "ingress_listener_80")
+	assert.Contains(t, configStr, "port_value: 80")
 }
 
 func TestGenerateConfig_SkipsUnresolvedInstances(t *testing.T) {

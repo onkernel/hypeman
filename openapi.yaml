@@ -408,6 +408,11 @@ components:
           type: string
           description: Hostname to match (exact match on Host header)
           example: api.example.com
+        port:
+          type: integer
+          description: Host port to listen on for this rule (default 80)
+          default: 80
+          example: 8080
     
     IngressTarget:
       type: object

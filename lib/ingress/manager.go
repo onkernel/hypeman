@@ -50,10 +50,6 @@ type Config struct {
 	// ListenAddress is the address Envoy should listen on (default: 0.0.0.0).
 	ListenAddress string
 
-	// ListenPort is the default port Envoy should listen on for HTTP ingresses (default: 80).
-	// All ingresses share this port, routing by hostname.
-	ListenPort int
-
 	// AdminAddress is the address for Envoy admin API (default: 127.0.0.1).
 	AdminAddress string
 
@@ -69,7 +65,6 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddress:  "0.0.0.0",
-		ListenPort:     80,
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      9901,
 		StopOnShutdown: false,
@@ -92,7 +87,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		config:           config,
 		instanceResolver: instanceResolver,
 		daemon:           NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown),
-		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.ListenPort, config.AdminAddress, config.AdminPort),
+		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort),
 	}
 }
 

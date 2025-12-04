@@ -156,7 +156,6 @@ func (a *instanceResolverAdapter) InstanceExists(ctx context.Context, nameOrID s
 func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
 	ingressConfig := ingress.Config{
 		ListenAddress:  cfg.EnvoyListenAddress,
-		ListenPort:     cfg.EnvoyListenPort,
 		AdminAddress:   cfg.EnvoyAdminAddress,
 		AdminPort:      cfg.EnvoyAdminPort,
 		StopOnShutdown: cfg.EnvoyStopOnShutdown,

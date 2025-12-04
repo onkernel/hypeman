@@ -35,6 +35,10 @@ type IngressMatch struct {
 	// This is required.
 	Hostname string `json:"hostname"`
 
+	// Port is the host port to listen on for this rule.
+	// If not specified, defaults to 80.
+	Port int `json:"port,omitempty"`
+
 	// PathPrefix is the path prefix to match (optional, for future L7 routing).
 	// If empty, matches all paths.
 	// PathPrefix string `json:"path_prefix,omitempty"`
@@ -72,15 +76,27 @@ func (r *CreateIngressRequest) Validate() error {
 		if rule.Match.Hostname == "" {
 			return &ValidationError{Field: "rules", Message: "hostname is required in rule " + string(rune('0'+i))}
 		}
+		// Port is optional (defaults to 80), but if specified must be valid
+		if rule.Match.Port != 0 && (rule.Match.Port < 1 || rule.Match.Port > 65535) {
+			return &ValidationError{Field: "rules", Message: "match.port must be between 1 and 65535 in rule " + string(rune('0'+i))}
+		}
 		if rule.Target.Instance == "" {
 			return &ValidationError{Field: "rules", Message: "instance is required in rule " + string(rune('0'+i))}
 		}
 		if rule.Target.Port <= 0 || rule.Target.Port > 65535 {
-			return &ValidationError{Field: "rules", Message: "port must be between 1 and 65535 in rule " + string(rune('0'+i))}
+			return &ValidationError{Field: "rules", Message: "target.port must be between 1 and 65535 in rule " + string(rune('0'+i))}
 		}
 	}
 
 	return nil
+}
+
+// GetPort returns the port for this match, defaulting to 80 if not specified.
+func (m *IngressMatch) GetPort() int {
+	if m.Port == 0 {
+		return 80
+	}
+	return m.Port
 }
 
 // ValidationError represents a validation error.

@@ -86,7 +86,6 @@ type Config struct {
 
 	// Envoy / Ingress configuration
 	EnvoyListenAddress  string // Address for Envoy to listen on (default: 0.0.0.0)
-	EnvoyListenPort     int    // Port for Envoy to listen on (default: 80)
 	EnvoyAdminAddress   string // Address for Envoy admin API (default: 127.0.0.1)
 	EnvoyAdminPort      int    // Port for Envoy admin API (default: 9901)
 	EnvoyStopOnShutdown bool   // Stop Envoy when hypeman shuts down (default: false)
@@ -136,7 +135,6 @@ func Load() *Config {
 
 		// Envoy / Ingress configuration
 		EnvoyListenAddress:  getEnv("ENVOY_LISTEN_ADDRESS", "0.0.0.0"),
-		EnvoyListenPort:     getEnvInt("ENVOY_LISTEN_PORT", 80),
 		EnvoyAdminAddress:   getEnv("ENVOY_ADMIN_ADDRESS", "127.0.0.1"),
 		EnvoyAdminPort:      getEnvInt("ENVOY_ADMIN_PORT", 9901),
 		EnvoyStopOnShutdown: getEnvBool("ENVOY_STOP_ON_SHUTDOWN", false),

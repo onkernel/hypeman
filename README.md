@@ -82,7 +82,6 @@ Hypeman can be configured using the following environment variables:
 | `LOG_LEVEL` | Default log level (debug, info, warn, error) | `info` |
 | `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC) | inherits default |
 | `ENVOY_LISTEN_ADDRESS` | Address for Envoy ingress listeners | `0.0.0.0` |
-| `ENVOY_LISTEN_PORT` | Default port for HTTP ingress (all ingresses share this port, routing by hostname) | `80` |
 | `ENVOY_ADMIN_ADDRESS` | Address for Envoy admin API | `127.0.0.1` |
 | `ENVOY_ADMIN_PORT` | Port for Envoy admin API | `9901` |
 | `ENVOY_STOP_ON_SHUTDOWN` | Stop Envoy when hypeman shuts down (if false, Envoy continues running) | `false` |
