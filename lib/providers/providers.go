@@ -13,6 +13,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	hypemanotel "github.com/onkernel/hypeman/lib/otel"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel"
@@ -112,4 +113,9 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return volumes.NewManager(p, maxTotalVolumeStorage, meter), nil
+}
+
+// ProvideRegistry provides the OCI registry for image push
+func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
+	return registry.New(p, imageManager)
 }

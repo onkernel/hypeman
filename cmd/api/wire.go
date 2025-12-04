@@ -1,4 +1,4 @@
-// +build wireinject
+//go:build wireinject
 
 package main
 
@@ -13,6 +13,7 @@ import (
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/providers"
+	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
@@ -27,6 +28,7 @@ type application struct {
 	NetworkManager  network.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
+	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }
 
@@ -42,8 +44,8 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideNetworkManager,
 		providers.ProvideInstanceManager,
 		providers.ProvideVolumeManager,
+		providers.ProvideRegistry,
 		api.New,
 		wire.Struct(new(application), "*"),
 	))
 }
-
