@@ -460,9 +460,11 @@ func TestGenerateConfig_WithOTEL(t *testing.T) {
 	assert.Contains(t, configStr, "envoy.tracers.opentelemetry", "config should contain OTEL tracer")
 	assert.Contains(t, configStr, "test-service", "config should contain service name")
 
-	// Verify resource attributes are present
+	// Verify resource attributes are present (plain string values)
 	assert.Contains(t, configStr, "deployment.environment.name", "config should contain environment attribute")
 	assert.Contains(t, configStr, "service.instance.id", "config should contain instance ID attribute")
+	assert.Contains(t, configStr, "test", "config should contain environment value")
+	assert.Contains(t, configStr, "instance-123", "config should contain instance ID value")
 }
 
 func TestGenerateConfig_WithOTELDisabled(t *testing.T) {

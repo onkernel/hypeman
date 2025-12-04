@@ -414,23 +414,13 @@ func (g *EnvoyConfigGenerator) buildTracingConfig() map[string]interface{} {
 		},
 	}
 
-	// Add resource attributes for common labels
-	resourceAttrs := []interface{}{}
+	// Add resource attributes for common labels (attributes is a map of string -> string)
+	resourceAttrs := map[string]interface{}{}
 	if g.otel.Environment != "" {
-		resourceAttrs = append(resourceAttrs, map[string]interface{}{
-			"key": "deployment.environment.name",
-			"value": map[string]interface{}{
-				"string_value": g.otel.Environment,
-			},
-		})
+		resourceAttrs["deployment.environment.name"] = g.otel.Environment
 	}
 	if g.otel.ServiceInstanceID != "" {
-		resourceAttrs = append(resourceAttrs, map[string]interface{}{
-			"key": "service.instance.id",
-			"value": map[string]interface{}{
-				"string_value": g.otel.ServiceInstanceID,
-			},
-		})
+		resourceAttrs["service.instance.id"] = g.otel.ServiceInstanceID
 	}
 
 	if len(resourceAttrs) > 0 {
