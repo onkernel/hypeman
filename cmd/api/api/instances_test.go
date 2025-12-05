@@ -2,6 +2,7 @@ package api
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,7 +173,12 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	// Verify instance reaches Running state
 	waitForState(t, svc, instanceID, "Running", 30*time.Second)
 
+	// Wait for exec-agent to be ready (needed for graceful vsock shutdown)
+	p := paths.New(svc.Config.DataDir)
+	waitForExecAgent(t, p, instanceID, 15*time.Second)
+
 	// 2. Stop the instance
+	// The stop flow: vsock signal → graceful wait → cleanup VMM
 	t.Log("Stopping instance...")
 	stopResp, err := svc.StopInstance(ctx(), oapi.StopInstanceRequestObject{Id: instanceID})
 	require.NoError(t, err)
@@ -181,6 +187,18 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	require.True(t, ok, "expected 200 response for stop, got %T", stopResp)
 	assert.Equal(t, oapi.InstanceState("Stopped"), stopped.State)
 	t.Log("Instance stopped successfully")
+
+	// Verify graceful shutdown by checking console logs for the shutdown signal message
+	// The init script logs "overlay-init: received shutdown signal" when SIGTERM is received
+	logPath := p.InstanceConsoleLog(instanceID)
+	logData, err := os.ReadFile(logPath)
+	require.NoError(t, err, "should be able to read console log")
+	logContent := string(logData)
+
+	// Check for graceful shutdown evidence in logs
+	assert.True(t,
+		strings.Contains(logContent, "overlay-init: received shutdown signal"),
+		"console log should contain graceful shutdown message, got: %s", logContent)
 
 	// 3. Start the instance
 	t.Log("Starting instance...")
@@ -231,4 +249,20 @@ func waitForState(t *testing.T, svc *ApiService, instanceID string, expectedStat
 		time.Sleep(1 * time.Second)
 	}
 	t.Fatalf("Timeout waiting for instance to reach %s state", expectedState)
+}
+
+// waitForExecAgent polls console log until exec-agent is ready
+func waitForExecAgent(t *testing.T, p *paths.Paths, instanceID string, timeout time.Duration) {
+	t.Helper()
+	logPath := p.InstanceConsoleLog(instanceID)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		logData, err := os.ReadFile(logPath)
+		if err == nil && strings.Contains(string(logData), "[exec-agent] listening on vsock port 2222") {
+			t.Log("exec-agent is ready")
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("Timeout waiting for exec-agent to be ready")
 }

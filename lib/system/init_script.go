@@ -172,6 +172,24 @@ echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
 
 set +e
 
+# Track if we're shutting down
+SHUTTING_DOWN=0
+
+# Signal handler: forward SIGTERM to app for graceful shutdown
+# This is triggered by ACPI shutdown from the VMM
+handle_shutdown() {
+  if [ "$SHUTTING_DOWN" = "1" ]; then
+    return
+  fi
+  SHUTTING_DOWN=1
+  echo "overlay-init: received shutdown signal, forwarding to app (PID $APP_PID)"
+  kill -TERM $APP_PID 2>/dev/null
+  # Also signal exec-agent to stop
+  killall exec-agent 2>/dev/null || true
+}
+
+trap handle_shutdown TERM INT
+
 # Construct the command string carefully
 # ENTRYPOINT and CMD are shell-safe quoted strings from config.sh
 eval "chroot /overlay/newroot /bin/sh -c \"cd ${WORKDIR:-/} && exec ${ENTRYPOINT} ${CMD}\"" &
@@ -179,13 +197,20 @@ APP_PID=$!
 
 echo "overlay-init: container app started (PID $APP_PID)"
 
-# Wait for app to exit
-wait $APP_PID
+# Wait for app to exit - loop to handle signal interrupts
+# When a signal arrives during wait, the trap runs and wait returns
+# We keep waiting until the app actually exits
+while kill -0 $APP_PID 2>/dev/null; do
+  wait $APP_PID 2>/dev/null
+done
+
+# Get final exit status
+wait $APP_PID 2>/dev/null
 APP_EXIT=$?
 
 echo "overlay-init: app exited with code $APP_EXIT"
 
-# Wait for all background jobs (exec-agent runs forever, keeping init alive)
-# This prevents kernel panic from killing init (PID 1)
-wait`
+# Shutdown complete - allow kernel to halt
+echo "overlay-init: shutdown complete"
+exit 0`
 }

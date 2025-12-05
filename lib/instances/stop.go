@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/vmm"
@@ -55,23 +56,52 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 4. Create VMM client and send shutdown to guest
-	client, err := vmm.NewVMM(inst.SocketPath)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to create VMM client", "id", id, "error", err)
-		return nil, fmt.Errorf("create vmm client: %w", err)
+	// 4. Send graceful shutdown signal via vsock
+	// This signals init (PID 1) to shut down, which forwards SIGTERM to the app
+	log.DebugContext(ctx, "sending shutdown signal via vsock", "id", id)
+	_, execErr := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+		Command: []string{"kill", "-TERM", "1"},
+		Timeout: 2, // 2 second timeout for the kill command
+	})
+	if execErr != nil {
+		// Log but continue - exec-agent might not be available, fall back to VMM shutdown
+		log.WarnContext(ctx, "failed to send shutdown via vsock, will force stop", "id", id, "error", execErr)
+	} else {
+		log.DebugContext(ctx, "shutdown signal sent via vsock", "id", id)
 	}
 
-	// 5. Transition: Running → Shutdown (graceful guest shutdown via ACPI)
-	log.DebugContext(ctx, "sending shutdown to VM", "id", id)
-	shutdownResp, err := client.ShutdownVMWithResponse(ctx)
+	// 5. Wait for VM to shut down gracefully
+	// Poll VMM state to detect when the guest has shut down
+	gracefulTimeout := 2 * time.Second
+	pollInterval := 50 * time.Millisecond
+	deadline := time.Now().Add(gracefulTimeout)
+
+	client, err := vmm.NewVMM(inst.SocketPath)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to send shutdown to VM", "id", id, "error", err)
-		return nil, fmt.Errorf("shutdown vm: %w", err)
+		log.WarnContext(ctx, "failed to create VMM client for polling", "id", id, "error", err)
 	}
-	if shutdownResp.StatusCode() != 204 {
-		log.ErrorContext(ctx, "shutdown VM returned error", "id", id, "status", shutdownResp.StatusCode())
-		return nil, fmt.Errorf("shutdown vm failed with status %d", shutdownResp.StatusCode())
+
+	gracefulShutdown := false
+	for client != nil && time.Now().Before(deadline) {
+		infoResp, err := client.GetVmInfoWithResponse(ctx)
+		if err != nil {
+			// VMM not responding - guest has shut down
+			gracefulShutdown = true
+			log.DebugContext(ctx, "VMM not responding, guest has shut down", "id", id)
+			break
+		}
+		if infoResp.StatusCode() == 200 && infoResp.JSON200 != nil {
+			if infoResp.JSON200.State == vmm.Shutdown {
+				gracefulShutdown = true
+				log.DebugContext(ctx, "VM shut down gracefully", "id", id)
+				break
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	if !gracefulShutdown {
+		log.DebugContext(ctx, "graceful shutdown timeout, stopping VMM directly", "id", id)
 	}
 
 	// 6. Transition: Shutdown → Stopped (shutdown VMM process)
