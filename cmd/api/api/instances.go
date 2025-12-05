@@ -426,53 +426,6 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 	return oapi.StartInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// RebootInstance reboots a running instance
-// The id parameter can be an instance ID, name, or ID prefix
-func (s *ApiService) RebootInstance(ctx context.Context, request oapi.RebootInstanceRequestObject) (oapi.RebootInstanceResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.RebootInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.RebootInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.RebootInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	inst, err := s.InstanceManager.RebootInstance(ctx, resolved.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrInvalidState):
-			return oapi.RebootInstance409JSONResponse{
-				Code:    "invalid_state",
-				Message: err.Error(),
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to reboot instance", "error", err, "id", resolved.Id)
-			return oapi.RebootInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to reboot instance",
-			}, nil
-		}
-	}
-	return oapi.RebootInstance200JSONResponse(instanceToOAPI(*inst)), nil
-}
-
 // logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
 type logsStreamResponse struct {
 	logChan <-chan string

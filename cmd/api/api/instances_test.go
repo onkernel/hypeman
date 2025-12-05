@@ -128,7 +128,7 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	assert.Contains(t, badReq.Message, "invalid size format")
 }
 
-func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
+func TestInstanceLifecycle_StopStart(t *testing.T) {
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available - skipping lifecycle test")
@@ -194,17 +194,7 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	// Wait for Running state after start
 	waitForState(t, svc, instanceID, "Running", 30*time.Second)
 
-	// 4. Reboot the instance
-	t.Log("Rebooting instance...")
-	rebootResp, err := svc.RebootInstance(ctx(), oapi.RebootInstanceRequestObject{Id: instanceID})
-	require.NoError(t, err)
-
-	rebooted, ok := rebootResp.(oapi.RebootInstance200JSONResponse)
-	require.True(t, ok, "expected 200 response for reboot, got %T", rebootResp)
-	assert.Equal(t, oapi.InstanceState("Running"), rebooted.State)
-	t.Log("Instance rebooted successfully")
-
-	// 5. Cleanup - delete the instance
+	// 4. Cleanup - delete the instance
 	t.Log("Deleting instance...")
 	deleteResp, err := svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{Id: instanceID})
 	require.NoError(t, err)

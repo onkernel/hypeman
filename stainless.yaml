@@ -82,6 +82,8 @@ resources:
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
+      start: post /instances/{id}/start
+      stop: post /instances/{id}/stop
       logs: get /instances/{id}/logs
     # Subresources define resources that are nested within another for more powerful
     # logical groupings, e.g. `cards.payments`.

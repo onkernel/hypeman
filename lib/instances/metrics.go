@@ -16,7 +16,6 @@ type Metrics struct {
 	standbyDuration  metric.Float64Histogram
 	stopDuration     metric.Float64Histogram
 	startDuration    metric.Float64Histogram
-	rebootDuration   metric.Float64Histogram
 	stateTransitions metric.Int64Counter
 	tracer           trace.Tracer
 }
@@ -68,15 +67,6 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
-	rebootDuration, err := meter.Float64Histogram(
-		"hypeman_instances_reboot_duration_seconds",
-		metric.WithDescription("Time to reboot an instance"),
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	stateTransitions, err := meter.Int64Counter(
 		"hypeman_instances_state_transitions_total",
 		metric.WithDescription("Total number of instance state transitions"),
@@ -122,7 +112,6 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		standbyDuration:  standbyDuration,
 		stopDuration:     stopDuration,
 		startDuration:    startDuration,
-		rebootDuration:   rebootDuration,
 		stateTransitions: stateTransitions,
 		tracer:           tracer,
 	}, nil
