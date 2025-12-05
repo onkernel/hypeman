@@ -403,10 +403,10 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Envoy watches the xDS files and reloads automatically, but we retry to handle timing
 	// Envoy may take a few seconds to detect file changes and start the new listener
 	t.Log("Making HTTP request through Envoy to nginx...")
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 1 * time.Second}
 	var resp *http.Response
 	var lastErr error
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", ingressPort), nil)
 		require.NoError(t, err)
@@ -421,7 +421,7 @@ func TestBasicEndToEnd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	require.NoError(t, lastErr, "HTTP request through Envoy should succeed within 30 seconds")
+	require.NoError(t, lastErr, "HTTP request through Envoy should succeed within deadline")
 	require.NotNil(t, resp)
 	defer resp.Body.Close()
 

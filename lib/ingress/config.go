@@ -117,12 +117,14 @@ func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 	}
 
 	// Validation passed (or skipped) - write to production paths
-	if err := g.atomicWrite(g.paths.EnvoyLDS(), ldsData); err != nil {
-		return fmt.Errorf("write LDS config: %w", err)
-	}
-
+	// IMPORTANT: Write CDS first, then LDS. Envoy requires clusters to exist
+	// before listeners can reference them (xDS ordering requirement).
 	if err := g.atomicWrite(g.paths.EnvoyCDS(), cdsData); err != nil {
 		return fmt.Errorf("write CDS config: %w", err)
+	}
+
+	if err := g.atomicWrite(g.paths.EnvoyLDS(), ldsData); err != nil {
+		return fmt.Errorf("write LDS config: %w", err)
 	}
 
 	// Write bootstrap config (only if it doesn't exist - Envoy watches the xDS files)
