@@ -347,12 +347,24 @@ func TestWriteConfig(t *testing.T) {
 	err := generator.WriteConfig(ctx, ingresses, ipResolver)
 	require.NoError(t, err)
 
-	// Verify file was written
+	// Verify bootstrap file was written
 	configPath := p.EnvoyConfig()
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.True(t, len(data) > 0, "config file should not be empty")
-	assert.Contains(t, string(data), "test.example.com")
+	assert.True(t, len(data) > 0, "bootstrap config file should not be empty")
+	assert.Contains(t, string(data), "dynamic_resources")
+
+	// Verify LDS file contains the hostname (xDS format)
+	ldsPath := p.EnvoyLDS()
+	ldsData, err := os.ReadFile(ldsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(ldsData), "test.example.com")
+
+	// Verify CDS file contains the cluster
+	cdsPath := p.EnvoyCDS()
+	cdsData, err := os.ReadFile(cdsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(cdsData), "10.100.0.10")
 }
 
 func TestSanitizeHostname(t *testing.T) {

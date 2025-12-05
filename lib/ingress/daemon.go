@@ -3,7 +3,6 @@ package ingress
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,39 +16,25 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-// EnvoyDaemon manages the Envoy proxy daemon lifecycle with hot restart support.
-// See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/hot_restart
-// Supports multiple hypeman instances on the same host via unique baseID derived from data directory.
+// EnvoyDaemon manages the Envoy proxy daemon lifecycle.
+// Envoy uses file-based xDS for dynamic configuration - it watches LDS/CDS files
+// and automatically reloads when they change. No hot restart needed.
 type EnvoyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string
 	adminPort      int
-	baseID         int // Unique identifier derived from data directory, allows multiple instances per host
 	pid            int
-	epoch          int  // Current restart epoch
 	stopOnShutdown bool // If true, stop Envoy when hypeman shuts down
 }
 
 // NewEnvoyDaemon creates a new EnvoyDaemon manager.
-// The baseID is derived from the data directory path to allow multiple hypeman instances
-// on the same host without shared memory conflicts.
 func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *EnvoyDaemon {
 	return &EnvoyDaemon{
 		paths:          p,
 		adminAddress:   adminAddress,
 		adminPort:      adminPort,
-		baseID:         deriveBaseID(p.DataDir()),
 		stopOnShutdown: stopOnShutdown,
 	}
-}
-
-// deriveBaseID generates a unique base ID from the data directory path.
-// This ensures multiple hypeman instances on the same host don't conflict.
-func deriveBaseID(dataDir string) int {
-	h := fnv.New32a()
-	h.Write([]byte(dataDir))
-	// Use modulo to keep in reasonable range (1-999), add 1 to avoid 0
-	return int(h.Sum32()%999) + 1
 }
 
 // StopOnShutdown returns whether Envoy should be stopped when hypeman shuts down.
@@ -63,20 +48,14 @@ func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
 	// Check if already running
 	if pid, running := d.DiscoverRunning(); running {
 		d.pid = pid
-		// Load current epoch from file
-		d.epoch = d.loadEpoch()
 		return pid, nil
 	}
 
-	// Clean up any stale shared memory from previous crashed instances
-	d.cleanupStaleSharedMemory()
-
-	// Start fresh with epoch 0
-	return d.startEnvoy(ctx, 0)
+	return d.startEnvoy(ctx)
 }
 
-// startEnvoy starts a new Envoy process with the given restart epoch.
-func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
+// startEnvoy starts a new Envoy process.
+func (d *EnvoyDaemon) startEnvoy(ctx context.Context) (int, error) {
 	// Get binary path (extracts if needed)
 	binaryPath, err := GetEnvoyBinaryPath(d.paths)
 	if err != nil {
@@ -89,22 +68,12 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 		return 0, fmt.Errorf("create envoy directory: %w", err)
 	}
 
-	// Ensure config exists (create empty bootstrap if not)
+	// Build command arguments - Envoy uses file-based xDS for dynamic config
 	configPath := d.paths.EnvoyConfig()
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Write minimal bootstrap config
-		if err := d.writeMinimalConfig(); err != nil {
-			return 0, fmt.Errorf("write minimal config: %w", err)
-		}
-	}
-
-	// Build command arguments with hot restart support
 	args := []string{
 		"--config-path", configPath,
 		"--log-path", d.paths.EnvoyLogFile(),
 		"--log-level", "info",
-		"--base-id", strconv.Itoa(d.baseID),
-		"--restart-epoch", strconv.Itoa(epoch),
 	}
 
 	// Use Command (not CommandContext) so process survives parent context cancellation
@@ -143,9 +112,6 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 		log.WarnContext(ctx, "failed to write PID file", "error", err)
 	}
 
-	// Save epoch
-	d.saveEpoch(epoch)
-
 	// Wait for admin API to be ready
 	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -159,7 +125,6 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 	}
 
 	d.pid = pid
-	d.epoch = epoch
 	return pid, nil
 }
 
@@ -197,34 +162,18 @@ func (d *EnvoyDaemon) Stop() error {
 		}
 	}
 
-	// Clean up PID file and epoch file
+	// Clean up PID file
 	os.Remove(d.paths.EnvoyPIDFile())
-	os.Remove(d.epochFilePath())
 	d.pid = 0
-	d.epoch = 0
-
-	// Clean up shared memory
-	d.cleanupStaleSharedMemory()
 
 	return nil
 }
 
-// ReloadConfig performs a hot restart to reload Envoy's configuration.
-// This spawns a new Envoy process that coordinates with the old one to take over
-// without dropping connections during the drain period.
+// ReloadConfig is a no-op - Envoy watches the xDS config files and reloads automatically.
+// This method is kept for API compatibility but does nothing since file-based xDS
+// handles configuration updates automatically when files change.
 func (d *EnvoyDaemon) ReloadConfig() error {
-	if !d.IsRunning() {
-		return fmt.Errorf("envoy is not running")
-	}
-
-	// Increment epoch and start new Envoy process
-	// The new process will coordinate with the old one via shared memory
-	newEpoch := d.epoch + 1
-	_, err := d.startEnvoy(context.Background(), newEpoch)
-	if err != nil {
-		return fmt.Errorf("hot restart failed: %w", err)
-	}
-
+	// No-op: Envoy watches the LDS/CDS files and reloads automatically
 	return nil
 }
 
@@ -303,59 +252,6 @@ func (d *EnvoyDaemon) ValidateConfig(configPath string) error {
 	return nil
 }
 
-// epochFilePath returns the path to the epoch file.
-func (d *EnvoyDaemon) epochFilePath() string {
-	return filepath.Join(d.paths.EnvoyDir(), "epoch")
-}
-
-// loadEpoch loads the current epoch from file.
-func (d *EnvoyDaemon) loadEpoch() int {
-	data, err := os.ReadFile(d.epochFilePath())
-	if err != nil {
-		return 0
-	}
-	epoch, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0
-	}
-	return epoch
-}
-
-// saveEpoch saves the current epoch to file.
-func (d *EnvoyDaemon) saveEpoch(epoch int) {
-	os.WriteFile(d.epochFilePath(), []byte(strconv.Itoa(epoch)), 0644)
-}
-
-// cleanupStaleSharedMemory removes any stale shared memory regions from crashed Envoy instances.
-func (d *EnvoyDaemon) cleanupStaleSharedMemory() {
-	// Envoy uses /dev/shm/envoy_shared_memory_{base_id * 10 + epoch} for hot restart coordination
-	// Clean up all possible epochs (0-9) for our base ID
-	for epoch := 0; epoch < 10; epoch++ {
-		shmPath := fmt.Sprintf("/dev/shm/envoy_shared_memory_%d", d.baseID*10+epoch)
-		os.Remove(shmPath)
-	}
-}
-
-// writeMinimalConfig writes a minimal Envoy bootstrap config.
-// This is used when starting Envoy for the first time before any ingresses are created.
-func (d *EnvoyDaemon) writeMinimalConfig() error {
-	config := fmt.Sprintf(`# Envoy bootstrap configuration
-# This file is auto-generated by hypeman
-
-admin:
-  address:
-    socket_address:
-      address: %s
-      port_value: %d
-
-static_resources:
-  listeners: []
-  clusters: []
-`, d.adminAddress, d.adminPort)
-
-	return os.WriteFile(d.paths.EnvoyConfig(), []byte(config), 0644)
-}
-
 // waitForAdmin waits for the admin API to become responsive.
 func (d *EnvoyDaemon) waitForAdmin(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -403,6 +299,7 @@ func (d *EnvoyDaemon) findEnvoyPID() int {
 		return 0
 	}
 
+	configPath := d.paths.EnvoyConfig()
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -418,9 +315,9 @@ func (d *EnvoyDaemon) findEnvoyPID() int {
 			continue
 		}
 
-		// Check if it's envoy with our base-id
+		// Check if it's envoy with our config path
 		cmdStr := string(cmdline)
-		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, fmt.Sprintf("--base-id\x00%d", d.baseID)) {
+		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, configPath) {
 			return pid
 		}
 	}

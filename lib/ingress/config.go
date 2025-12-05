@@ -40,73 +40,16 @@ func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress 
 	}
 }
 
-// GenerateConfig generates Envoy configuration from the given ingresses and their resolved IP addresses.
-// The ipResolver function takes an instance name/ID and returns (ip, error).
+// GenerateConfig generates the full Envoy configuration for testing purposes.
+// In production, use WriteConfig which writes separate xDS files.
 func (g *EnvoyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
-	config := g.buildConfig(ctx, ingresses, ipResolver)
+	// For testing, generate a static config (not xDS format)
+	config := g.buildStaticConfig(ctx, ingresses, ipResolver)
 	return yaml.Marshal(config)
 }
 
-// WriteConfig generates, validates, and writes the Envoy configuration file.
-// The config is written to a temp file first, validated, then atomically moved to the final path.
-func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
-	data, err := g.GenerateConfig(ctx, ingresses, ipResolver)
-	if err != nil {
-		return fmt.Errorf("generate config: %w", err)
-	}
-
-	configPath := g.paths.EnvoyConfig()
-	configDir := filepath.Dir(configPath)
-
-	// Ensure the directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-
-	// Write to a temp file first
-	tempFile, err := os.CreateTemp(configDir, "envoy-config-*.yaml")
-	if err != nil {
-		return fmt.Errorf("create temp config file: %w", err)
-	}
-	tempPath := tempFile.Name()
-
-	// Clean up temp file on any error
-	defer func() {
-		if tempPath != "" {
-			os.Remove(tempPath)
-		}
-	}()
-
-	if _, err := tempFile.Write(data); err != nil {
-		tempFile.Close()
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("close temp config: %w", err)
-	}
-
-	// Validate the config if validator is available
-	if g.validator != nil {
-		if err := g.validator.ValidateConfig(tempPath); err != nil {
-			log := logger.FromContext(ctx)
-			log.ErrorContext(ctx, "envoy config validation failed", "error", err)
-			return ErrConfigValidationFailed
-		}
-	}
-
-	// Atomically move temp file to final path
-	if err := os.Rename(tempPath, configPath); err != nil {
-		return fmt.Errorf("rename config file: %w", err)
-	}
-
-	// Clear tempPath so defer doesn't try to remove the renamed file
-	tempPath = ""
-
-	return nil
-}
-
-// buildConfig builds the Envoy configuration structure.
-func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
+// buildStaticConfig builds a static Envoy config (for testing/validation).
+func (g *EnvoyConfigGenerator) buildStaticConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
 	clusters := g.buildClusters(ctx, ingresses, ipResolver)
 
 	// Add OTEL collector cluster if enabled (for metrics export)
@@ -127,6 +70,164 @@ func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		"static_resources": map[string]interface{}{
 			"listeners": g.buildListeners(ctx, ingresses, ipResolver),
 			"clusters":  clusters,
+		},
+	}
+
+	// Add stats sink to push metrics to OTEL collector
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		config["stats_sinks"] = g.buildStatsSinks()
+	}
+
+	return config
+}
+
+// WriteConfig generates and writes the Envoy xDS configuration files.
+// This writes three files:
+// - bootstrap.yaml: Main Envoy bootstrap config with dynamic_resources pointing to xDS files
+// - lds.yaml: Listener Discovery Service config (watched by Envoy for changes)
+// - cds.yaml: Cluster Discovery Service config (watched by Envoy for changes)
+func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+	configDir := filepath.Dir(g.paths.EnvoyConfig())
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	// Write LDS config (listeners)
+	if err := g.writeLDSConfig(ctx, ingresses, ipResolver); err != nil {
+		return fmt.Errorf("write LDS config: %w", err)
+	}
+
+	// Write CDS config (clusters)
+	if err := g.writeCDSConfig(ctx, ingresses, ipResolver); err != nil {
+		return fmt.Errorf("write CDS config: %w", err)
+	}
+
+	// Write bootstrap config (only if it doesn't exist - Envoy watches the xDS files)
+	bootstrapPath := g.paths.EnvoyConfig()
+	if _, err := os.Stat(bootstrapPath); os.IsNotExist(err) {
+		if err := g.writeBootstrapConfig(); err != nil {
+			return fmt.Errorf("write bootstrap config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// writeBootstrapConfig writes the Envoy bootstrap configuration with dynamic xDS.
+func (g *EnvoyConfigGenerator) writeBootstrapConfig() error {
+	bootstrap := g.buildBootstrapConfig()
+	data, err := yaml.Marshal(bootstrap)
+	if err != nil {
+		return fmt.Errorf("marshal bootstrap config: %w", err)
+	}
+	return g.atomicWrite(g.paths.EnvoyConfig(), data)
+}
+
+// writeLDSConfig writes the Listener Discovery Service configuration.
+func (g *EnvoyConfigGenerator) writeLDSConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+	listeners := g.buildListeners(ctx, ingresses, ipResolver)
+	ldsConfig := map[string]interface{}{
+		"resources": g.wrapResources(listeners, "type.googleapis.com/envoy.config.listener.v3.Listener"),
+	}
+	data, err := yaml.Marshal(ldsConfig)
+	if err != nil {
+		return fmt.Errorf("marshal LDS config: %w", err)
+	}
+	return g.atomicWrite(g.paths.EnvoyLDS(), data)
+}
+
+// writeCDSConfig writes the Cluster Discovery Service configuration.
+func (g *EnvoyConfigGenerator) writeCDSConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+	clusters := g.buildClusters(ctx, ingresses, ipResolver)
+
+	// Add OTEL collector cluster if enabled
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		otelCluster := g.buildOTELCollectorCluster()
+		clusters = append(clusters, otelCluster)
+	}
+
+	cdsConfig := map[string]interface{}{
+		"resources": g.wrapResources(clusters, "type.googleapis.com/envoy.config.cluster.v3.Cluster"),
+	}
+	data, err := yaml.Marshal(cdsConfig)
+	if err != nil {
+		return fmt.Errorf("marshal CDS config: %w", err)
+	}
+	return g.atomicWrite(g.paths.EnvoyCDS(), data)
+}
+
+// wrapResources wraps resources with their @type for xDS format.
+func (g *EnvoyConfigGenerator) wrapResources(resources []interface{}, resourceType string) []interface{} {
+	wrapped := make([]interface{}, len(resources))
+	for i, r := range resources {
+		if m, ok := r.(map[string]interface{}); ok {
+			m["@type"] = resourceType
+			wrapped[i] = m
+		} else {
+			wrapped[i] = r
+		}
+	}
+	return wrapped
+}
+
+// atomicWrite writes data to a file atomically using a temp file and rename.
+func (g *EnvoyConfigGenerator) atomicWrite(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tempFile, err := os.CreateTemp(dir, "envoy-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Clean up temp file on any error
+	defer func() {
+		if tempPath != "" {
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	tempPath = "" // Prevent cleanup of renamed file
+	return nil
+}
+
+// buildBootstrapConfig builds the Envoy bootstrap configuration with dynamic xDS.
+func (g *EnvoyConfigGenerator) buildBootstrapConfig() map[string]interface{} {
+	config := map[string]interface{}{
+		"admin": map[string]interface{}{
+			"address": map[string]interface{}{
+				"socket_address": map[string]interface{}{
+					"address":    g.adminAddress,
+					"port_value": g.adminPort,
+				},
+			},
+		},
+		"dynamic_resources": map[string]interface{}{
+			"lds_config": map[string]interface{}{
+				"path_config_source": map[string]interface{}{
+					"path":              g.paths.EnvoyLDS(),
+					"watched_directory": map[string]interface{}{"path": filepath.Dir(g.paths.EnvoyLDS())},
+				},
+			},
+			"cds_config": map[string]interface{}{
+				"path_config_source": map[string]interface{}{
+					"path":              g.paths.EnvoyCDS(),
+					"watched_directory": map[string]interface{}{"path": filepath.Dir(g.paths.EnvoyCDS())},
+				},
+			},
 		},
 	}
 

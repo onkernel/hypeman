@@ -255,9 +255,19 @@ func (p *Paths) EnvoyBinary(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "binaries", "envoy", version, arch, "envoy")
 }
 
-// EnvoyConfig returns the path to the envoy config file.
+// EnvoyConfig returns the path to the envoy bootstrap config file.
 func (p *Paths) EnvoyConfig() string {
-	return filepath.Join(p.EnvoyDir(), "config.yaml")
+	return filepath.Join(p.EnvoyDir(), "bootstrap.yaml")
+}
+
+// EnvoyLDS returns the path to the Listener Discovery Service config file.
+func (p *Paths) EnvoyLDS() string {
+	return filepath.Join(p.EnvoyDir(), "lds.yaml")
+}
+
+// EnvoyCDS returns the path to the Cluster Discovery Service config file.
+func (p *Paths) EnvoyCDS() string {
+	return filepath.Join(p.EnvoyDir(), "cds.yaml")
 }
 
 // EnvoyPIDFile returns the path to the envoy PID file.

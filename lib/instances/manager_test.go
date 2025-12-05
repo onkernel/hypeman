@@ -164,7 +164,7 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 	}
 }
 
-func TestCreateAndDeleteInstance(t *testing.T) {
+func TestBasicEndToEnd(t *testing.T) {
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")

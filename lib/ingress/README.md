@@ -51,8 +51,8 @@ An Ingress is a configuration object that defines how external traffic should be
 1. User creates an ingress via API
 2. Manager validates the ingress (name, instance exists, hostname unique)
 3. Ingress is persisted to `/var/lib/hypeman/ingresses/{id}.json`
-4. Envoy config is regenerated from all ingresses
-5. Envoy performs a hot restart to pick up the new config
+4. Envoy xDS config files (LDS/CDS) are regenerated from all ingresses
+5. Envoy automatically detects the file changes and reloads (no restart needed)
 
 ### Hostname Routing
 
@@ -72,7 +72,9 @@ An Ingress is a configuration object that defines how external traffic should be
           x86_64/envoy
           aarch64/envoy
   envoy/
-    config.yaml      # Auto-generated Envoy config
+    bootstrap.yaml   # Envoy bootstrap config (points to xDS files)
+    lds.yaml         # Listener Discovery Service config (watched by Envoy)
+    cds.yaml         # Cluster Discovery Service config (watched by Envoy)
     envoy.pid        # PID file for daemon discovery
     envoy.log        # Envoy access logs
     envoy-stdout.log # Envoy process output
@@ -133,13 +135,15 @@ When OTEL is enabled in hypeman (`OTEL_ENABLED=true`), Envoy is automatically co
 4. Wait for admin API to become ready
 
 ### Config Updates
-1. Regenerate config to a temporary file
-2. Validate the config using `envoy --mode validate`
-3. If valid, atomically move the temp file to `config.yaml`
-4. Perform hot restart by starting a new Envoy process with an incremented restart epoch
-5. New Envoy process coordinates with the old one to take over without dropping connections
 
-**Note:** Config validation ensures that invalid configurations are never applied. If validation fails, the operation returns an internal server error (500) and the original config remains in place.
+Envoy uses file-based xDS (dynamic configuration) which eliminates the need for process restarts:
+
+1. Regenerate LDS/CDS config files to temporary files
+2. Atomically move temp files to `lds.yaml` and `cds.yaml`
+3. Envoy watches these files and automatically reloads within seconds
+4. Active connections are preserved during reload
+
+This approach is simpler and more reliable than hot restart, with no process coordination needed.
 
 ### Shutdown
 - By default (`ENVOY_STOP_ON_SHUTDOWN=false`), Envoy continues running when hypeman exits
