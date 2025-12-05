@@ -1,0 +1,612 @@
+package ingress
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/paths"
+	"gopkg.in/yaml.v3"
+)
+
+// ConfigValidator validates Envoy configuration files.
+type ConfigValidator interface {
+	ValidateConfig(configPath string) error
+}
+
+// EnvoyConfigGenerator generates Envoy configuration from ingress resources.
+type EnvoyConfigGenerator struct {
+	paths         *paths.Paths
+	listenAddress string
+	adminAddress  string
+	adminPort     int
+	validator     ConfigValidator
+	otel          OTELConfig
+}
+
+// NewEnvoyConfigGenerator creates a new config generator.
+func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, validator ConfigValidator, otel OTELConfig) *EnvoyConfigGenerator {
+	return &EnvoyConfigGenerator{
+		paths:         p,
+		listenAddress: listenAddress,
+		adminAddress:  adminAddress,
+		adminPort:     adminPort,
+		validator:     validator,
+		otel:          otel,
+	}
+}
+
+// GenerateConfig generates the full Envoy configuration for testing purposes.
+// In production, use WriteConfig which writes separate xDS files.
+func (g *EnvoyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
+	// For testing, generate a static config (not xDS format)
+	config := g.buildStaticConfig(ctx, ingresses, ipResolver)
+	return yaml.Marshal(config)
+}
+
+// buildStaticConfig builds a static Envoy config (for testing/validation).
+func (g *EnvoyConfigGenerator) buildStaticConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
+	clusters := g.buildClusters(ctx, ingresses, ipResolver)
+
+	// Add OTEL collector cluster if enabled (for metrics export)
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		otelCluster := g.buildOTELCollectorCluster()
+		clusters = append(clusters, otelCluster)
+	}
+
+	config := map[string]interface{}{
+		"admin": map[string]interface{}{
+			"address": map[string]interface{}{
+				"socket_address": map[string]interface{}{
+					"address":    g.adminAddress,
+					"port_value": g.adminPort,
+				},
+			},
+		},
+		"static_resources": map[string]interface{}{
+			"listeners": g.buildListeners(ctx, ingresses, ipResolver),
+			"clusters":  clusters,
+		},
+	}
+
+	// Add stats sink to push metrics to OTEL collector
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		config["stats_sinks"] = g.buildStatsSinks()
+	}
+
+	return config
+}
+
+// WriteConfig generates, validates, and writes the Envoy xDS configuration files.
+// This writes three files:
+// - bootstrap.yaml: Main Envoy bootstrap config with dynamic_resources pointing to xDS files
+// - lds.yaml: Listener Discovery Service config (watched by Envoy for changes)
+// - cds.yaml: Cluster Discovery Service config (watched by Envoy for changes)
+//
+// Validation is performed by writing all files to a temp directory first, then running
+// envoy --mode validate on the temp bootstrap (which references temp LDS/CDS files).
+// Only if validation passes are the files moved to production paths.
+func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+	configDir := filepath.Dir(g.paths.EnvoyConfig())
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	// Build LDS and CDS content
+	ldsData, err := g.buildLDSData(ctx, ingresses, ipResolver)
+	if err != nil {
+		return fmt.Errorf("build LDS config: %w", err)
+	}
+
+	cdsData, err := g.buildCDSData(ctx, ingresses, ipResolver)
+	if err != nil {
+		return fmt.Errorf("build CDS config: %w", err)
+	}
+
+	// Validate configuration if validator is available
+	if g.validator != nil {
+		if err := g.validateXDSConfig(ldsData, cdsData); err != nil {
+			return err
+		}
+	}
+
+	// Validation passed (or skipped) - write to production paths
+	// IMPORTANT: Write CDS first, then LDS. Envoy requires clusters to exist
+	// before listeners can reference them (xDS ordering requirement).
+	if err := g.atomicWrite(g.paths.EnvoyCDS(), cdsData); err != nil {
+		return fmt.Errorf("write CDS config: %w", err)
+	}
+
+	if err := g.atomicWrite(g.paths.EnvoyLDS(), ldsData); err != nil {
+		return fmt.Errorf("write LDS config: %w", err)
+	}
+
+	// Write bootstrap config (only if it doesn't exist - Envoy watches the xDS files)
+	bootstrapPath := g.paths.EnvoyConfig()
+	if _, err := os.Stat(bootstrapPath); os.IsNotExist(err) {
+		if err := g.writeBootstrapConfig(); err != nil {
+			return fmt.Errorf("write bootstrap config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validateXDSConfig validates the xDS configuration by writing to a temp directory
+// and running envoy --mode validate on a bootstrap that references the temp files.
+func (g *EnvoyConfigGenerator) validateXDSConfig(ldsData, cdsData []byte) error {
+	// Create temp directory for validation
+	tempDir, err := os.MkdirTemp("", "envoy-validate-")
+	if err != nil {
+		return fmt.Errorf("create temp dir for validation: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Write LDS to temp
+	tempLDSPath := filepath.Join(tempDir, "lds.yaml")
+	if err := os.WriteFile(tempLDSPath, ldsData, 0644); err != nil {
+		return fmt.Errorf("write temp LDS: %w", err)
+	}
+
+	// Write CDS to temp
+	tempCDSPath := filepath.Join(tempDir, "cds.yaml")
+	if err := os.WriteFile(tempCDSPath, cdsData, 0644); err != nil {
+		return fmt.Errorf("write temp CDS: %w", err)
+	}
+
+	// Build and write bootstrap that references temp paths
+	tempBootstrap := g.buildBootstrapConfigWithPaths(tempLDSPath, tempCDSPath, tempDir)
+	bootstrapData, err := yaml.Marshal(tempBootstrap)
+	if err != nil {
+		return fmt.Errorf("marshal temp bootstrap: %w", err)
+	}
+
+	tempBootstrapPath := filepath.Join(tempDir, "bootstrap.yaml")
+	if err := os.WriteFile(tempBootstrapPath, bootstrapData, 0644); err != nil {
+		return fmt.Errorf("write temp bootstrap: %w", err)
+	}
+
+	// Validate using envoy --mode validate
+	if err := g.validator.ValidateConfig(tempBootstrapPath); err != nil {
+		return fmt.Errorf("%w: %v", ErrConfigValidationFailed, err)
+	}
+
+	return nil
+}
+
+// buildLDSData builds the LDS configuration data.
+func (g *EnvoyConfigGenerator) buildLDSData(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
+	listeners := g.buildListeners(ctx, ingresses, ipResolver)
+	ldsConfig := map[string]interface{}{
+		"resources": g.wrapResources(listeners, "type.googleapis.com/envoy.config.listener.v3.Listener"),
+	}
+	return yaml.Marshal(ldsConfig)
+}
+
+// buildCDSData builds the CDS configuration data.
+// Note: OTEL collector cluster is NOT included here - it's added as a static cluster
+// in the bootstrap config because stats_sinks needs it available at bootstrap time.
+func (g *EnvoyConfigGenerator) buildCDSData(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
+	clusters := g.buildClusters(ctx, ingresses, ipResolver)
+
+	cdsConfig := map[string]interface{}{
+		"resources": g.wrapResources(clusters, "type.googleapis.com/envoy.config.cluster.v3.Cluster"),
+	}
+	return yaml.Marshal(cdsConfig)
+}
+
+// writeBootstrapConfig writes the Envoy bootstrap configuration with dynamic xDS.
+func (g *EnvoyConfigGenerator) writeBootstrapConfig() error {
+	bootstrap := g.buildBootstrapConfig()
+	data, err := yaml.Marshal(bootstrap)
+	if err != nil {
+		return fmt.Errorf("marshal bootstrap config: %w", err)
+	}
+	return g.atomicWrite(g.paths.EnvoyConfig(), data)
+}
+
+// wrapResources wraps resources with their @type for xDS format.
+func (g *EnvoyConfigGenerator) wrapResources(resources []interface{}, resourceType string) []interface{} {
+	wrapped := make([]interface{}, len(resources))
+	for i, r := range resources {
+		if m, ok := r.(map[string]interface{}); ok {
+			m["@type"] = resourceType
+			wrapped[i] = m
+		} else {
+			wrapped[i] = r
+		}
+	}
+	return wrapped
+}
+
+// atomicWrite writes data to a file atomically using a temp file and rename.
+func (g *EnvoyConfigGenerator) atomicWrite(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tempFile, err := os.CreateTemp(dir, "envoy-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Clean up temp file on any error
+	defer func() {
+		if tempPath != "" {
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	tempPath = "" // Prevent cleanup of renamed file
+	return nil
+}
+
+// buildBootstrapConfig builds the Envoy bootstrap configuration with dynamic xDS.
+func (g *EnvoyConfigGenerator) buildBootstrapConfig() map[string]interface{} {
+	return g.buildBootstrapConfigWithPaths(g.paths.EnvoyLDS(), g.paths.EnvoyCDS(), filepath.Dir(g.paths.EnvoyLDS()))
+}
+
+// buildBootstrapConfigWithPaths builds an Envoy bootstrap configuration with custom xDS paths.
+// This is used for validation (with temp paths) and production (with real paths).
+func (g *EnvoyConfigGenerator) buildBootstrapConfigWithPaths(ldsPath, cdsPath, watchDir string) map[string]interface{} {
+	config := map[string]interface{}{
+		// Node identification required for xDS
+		"node": map[string]interface{}{
+			"id":      "hypeman-envoy",
+			"cluster": "hypeman",
+		},
+		"admin": map[string]interface{}{
+			"address": map[string]interface{}{
+				"socket_address": map[string]interface{}{
+					"address":    g.adminAddress,
+					"port_value": g.adminPort,
+				},
+			},
+		},
+		"dynamic_resources": map[string]interface{}{
+			"lds_config": map[string]interface{}{
+				"path_config_source": map[string]interface{}{
+					"path":              ldsPath,
+					"watched_directory": map[string]interface{}{"path": watchDir},
+				},
+			},
+			"cds_config": map[string]interface{}{
+				"path_config_source": map[string]interface{}{
+					"path":              cdsPath,
+					"watched_directory": map[string]interface{}{"path": watchDir},
+				},
+			},
+		},
+	}
+
+	// Add OTEL stats sink and collector cluster if enabled
+	// The OTEL collector cluster must be a static resource (not in CDS) because
+	// stats_sinks needs it available at bootstrap time before CDS is loaded
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		config["stats_sinks"] = g.buildStatsSinks()
+		config["static_resources"] = map[string]interface{}{
+			"clusters": []interface{}{g.buildOTELCollectorCluster()},
+		}
+	}
+
+	return config
+}
+
+// buildListeners builds the listeners configuration - one per unique port.
+func (g *EnvoyConfigGenerator) buildListeners(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
+	if len(ingresses) == 0 {
+		return []interface{}{}
+	}
+
+	// Group rules by port
+	portToFilterChains := g.buildFilterChainsByPort(ctx, ingresses, ipResolver)
+	if len(portToFilterChains) == 0 {
+		return []interface{}{}
+	}
+
+	// Create one listener per port
+	var listeners []interface{}
+	for port, filterChains := range portToFilterChains {
+		listener := map[string]interface{}{
+			"name": fmt.Sprintf("ingress_listener_%d", port),
+			"address": map[string]interface{}{
+				"socket_address": map[string]interface{}{
+					"address":    g.listenAddress,
+					"port_value": port,
+				},
+			},
+			"filter_chains": filterChains,
+		}
+		listeners = append(listeners, listener)
+	}
+
+	return listeners
+}
+
+// buildFilterChainsByPort builds filter chains grouped by port for hostname-based routing.
+// For plain HTTP, we use virtual hosts with domain matching (Host header) instead of
+// filter_chain_match with server_names (which only works for TLS/SNI).
+func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[int][]interface{} {
+	log := logger.FromContext(ctx)
+
+	// Group virtual hosts by port
+	portToVirtualHosts := make(map[int][]interface{})
+
+	for _, ingress := range ingresses {
+		for _, rule := range ingress.Rules {
+			// Resolve instance IP - skip rules where we can't resolve
+			_, err := ipResolver(rule.Target.Instance)
+			if err != nil {
+				log.WarnContext(ctx, "skipping ingress rule: cannot resolve instance IP",
+					"ingress_id", ingress.ID,
+					"ingress_name", ingress.Name,
+					"hostname", rule.Match.Hostname,
+					"instance", rule.Target.Instance,
+					"error", err)
+				continue
+			}
+
+			port := rule.Match.GetPort()
+			clusterName := g.clusterName(ingress.ID, rule.Target.Instance, rule.Target.Port)
+
+			// Build virtual host for this hostname
+			virtualHost := map[string]interface{}{
+				"name":    fmt.Sprintf("vh_%s_%s", ingress.ID, sanitizeHostname(rule.Match.Hostname)),
+				"domains": []string{rule.Match.Hostname},
+				"routes": []interface{}{
+					map[string]interface{}{
+						"match": map[string]interface{}{
+							"prefix": "/",
+						},
+						"route": map[string]interface{}{
+							"cluster": clusterName,
+						},
+					},
+				},
+			}
+
+			portToVirtualHosts[port] = append(portToVirtualHosts[port], virtualHost)
+		}
+	}
+
+	// Build filter chains - one per port with all virtual hosts combined
+	portToFilterChains := make(map[int][]interface{})
+
+	for port, virtualHosts := range portToVirtualHosts {
+		// Add default virtual host for unmatched hostnames (returns 404)
+		defaultVirtualHost := map[string]interface{}{
+			"name":    "default",
+			"domains": []string{"*"},
+			"routes": []interface{}{
+				map[string]interface{}{
+					"match": map[string]interface{}{
+						"prefix": "/",
+					},
+					"direct_response": map[string]interface{}{
+						"status": 404,
+						"body": map[string]interface{}{
+							"inline_string": "No ingress found for this hostname",
+						},
+					},
+				},
+			},
+		}
+		allVirtualHosts := append(virtualHosts, defaultVirtualHost)
+
+		routeConfig := map[string]interface{}{
+			"name":          fmt.Sprintf("ingress_routes_%d", port),
+			"virtual_hosts": allVirtualHosts,
+		}
+
+		httpConnectionManager := map[string]interface{}{
+			"@type":        "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+			"stat_prefix":  fmt.Sprintf("ingress_%d", port),
+			"codec_type":   "AUTO",
+			"route_config": routeConfig,
+			"http_filters": []interface{}{
+				map[string]interface{}{
+					"name": "envoy.filters.http.router",
+					"typed_config": map[string]interface{}{
+						"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+					},
+				},
+			},
+		}
+
+		filterChain := map[string]interface{}{
+			"filters": []interface{}{
+				map[string]interface{}{
+					"name":         "envoy.filters.network.http_connection_manager",
+					"typed_config": httpConnectionManager,
+				},
+			},
+		}
+
+		portToFilterChains[port] = []interface{}{filterChain}
+	}
+
+	return portToFilterChains
+}
+
+// buildClusters builds the clusters configuration.
+func (g *EnvoyConfigGenerator) buildClusters(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) []interface{} {
+	log := logger.FromContext(ctx)
+
+	var clusters []interface{}
+	seen := make(map[string]bool)
+
+	for _, ingress := range ingresses {
+		for _, rule := range ingress.Rules {
+			clusterName := g.clusterName(ingress.ID, rule.Target.Instance, rule.Target.Port)
+			if seen[clusterName] {
+				continue
+			}
+			seen[clusterName] = true
+
+			// Resolve instance IP
+			ip, err := ipResolver(rule.Target.Instance)
+			if err != nil {
+				// Skip clusters where we can't resolve the instance
+				log.WarnContext(ctx, "skipping cluster: cannot resolve instance IP",
+					"ingress_id", ingress.ID,
+					"instance", rule.Target.Instance,
+					"error", err)
+				continue
+			}
+
+			cluster := map[string]interface{}{
+				"name":            clusterName,
+				"connect_timeout": "5s",
+				"type":            "STATIC",
+				"lb_policy":       "ROUND_ROBIN",
+				"load_assignment": map[string]interface{}{
+					"cluster_name": clusterName,
+					"endpoints": []interface{}{
+						map[string]interface{}{
+							"lb_endpoints": []interface{}{
+								map[string]interface{}{
+									"endpoint": map[string]interface{}{
+										"address": map[string]interface{}{
+											"socket_address": map[string]interface{}{
+												"address":    ip,
+												"port_value": rule.Target.Port,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			clusters = append(clusters, cluster)
+		}
+	}
+
+	return clusters
+}
+
+// clusterName generates a unique cluster name for an ingress target.
+func (g *EnvoyConfigGenerator) clusterName(ingressID, instance string, port int) string {
+	return fmt.Sprintf("ingress_%s_%s_%d", ingressID, sanitizeName(instance), port)
+}
+
+// sanitizeHostname converts a hostname to a safe string for use in names.
+func sanitizeHostname(hostname string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(hostname, ".", "_"), "-", "_")
+}
+
+// sanitizeName converts a name to a safe string for use in Envoy config names.
+func sanitizeName(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, ".", "_"), "-", "_")
+}
+
+// otelCollectorClusterName is the cluster name for the OTEL collector.
+const otelCollectorClusterName = "opentelemetry_collector"
+
+// buildOTELCollectorCluster builds the cluster configuration for the OTEL collector.
+func (g *EnvoyConfigGenerator) buildOTELCollectorCluster() map[string]interface{} {
+	// Parse endpoint (host:port)
+	host, port := parseEndpoint(g.otel.Endpoint)
+
+	return map[string]interface{}{
+		"name":            otelCollectorClusterName,
+		"type":            "STRICT_DNS",
+		"connect_timeout": "5s",
+		"lb_policy":       "ROUND_ROBIN",
+		"typed_extension_protocol_options": map[string]interface{}{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": map[string]interface{}{
+				"@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+				"explicit_http_config": map[string]interface{}{
+					"http2_protocol_options": map[string]interface{}{},
+				},
+			},
+		},
+		"load_assignment": map[string]interface{}{
+			"cluster_name": otelCollectorClusterName,
+			"endpoints": []interface{}{
+				map[string]interface{}{
+					"lb_endpoints": []interface{}{
+						map[string]interface{}{
+							"endpoint": map[string]interface{}{
+								"address": map[string]interface{}{
+									"socket_address": map[string]interface{}{
+										"address":    host,
+										"port_value": port,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildStatsSinks builds the stats sinks configuration for metrics export to OTEL.
+func (g *EnvoyConfigGenerator) buildStatsSinks() []interface{} {
+	serviceName := g.otel.ServiceName
+	if serviceName == "" {
+		serviceName = "hypeman-envoy"
+	}
+
+	// Build resource attributes for metrics
+	resourceAttrs := map[string]interface{}{
+		"service.name": serviceName,
+	}
+	if g.otel.Environment != "" {
+		resourceAttrs["deployment.environment.name"] = g.otel.Environment
+	}
+	if g.otel.ServiceInstanceID != "" {
+		resourceAttrs["service.instance.id"] = g.otel.ServiceInstanceID
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"name": "envoy.stat_sinks.open_telemetry",
+			"typed_config": map[string]interface{}{
+				"@type": "type.googleapis.com/envoy.extensions.stat_sinks.open_telemetry.v3.SinkConfig",
+				"grpc_service": map[string]interface{}{
+					"envoy_grpc": map[string]interface{}{
+						"cluster_name": otelCollectorClusterName,
+					},
+					"timeout": "5s",
+				},
+				"emit_tags_as_attributes": true,
+				"prefix":                  "envoy",
+			},
+		},
+	}
+}
+
+// parseEndpoint parses a host:port string. Defaults to port 4317 if not specified.
+func parseEndpoint(endpoint string) (string, int) {
+	parts := strings.Split(endpoint, ":")
+	if len(parts) == 2 {
+		port := 4317
+		if p, err := strconv.Atoi(parts[1]); err == nil {
+			port = p
+		}
+		return parts[0], port
+	}
+	// Default OTLP gRPC port
+	return endpoint, 4317
+}

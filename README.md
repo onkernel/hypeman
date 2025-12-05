@@ -58,6 +58,24 @@ getcap ./bin/hypeman
 
 **Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 
+**File Descriptor Limits:**
+
+Envoy (used for ingress) requires a higher file descriptor limit than the default on some systems (root defaults to 1024 on many systems). If you see "Too many open files" errors, increase the limit:
+
+```bash
+# Check current limit (also check with: sudo bash -c 'ulimit -n')
+ulimit -n
+
+# Increase temporarily (current session)
+ulimit -n 65536
+
+# For persistent changes, add to /etc/security/limits.conf:
+*  soft  nofile  65536
+*  hard  nofile  65536
+root  soft  nofile  65536
+root  hard  nofile  65536
+```
+
 ### Configuration
 
 #### Environment variables
@@ -81,6 +99,10 @@ Hypeman can be configured using the following environment variables:
 | `OTEL_SERVICE_INSTANCE_ID` | Instance ID for telemetry (differentiates multiple servers) | hostname |
 | `LOG_LEVEL` | Default log level (debug, info, warn, error) | `info` |
 | `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC) | inherits default |
+| `ENVOY_LISTEN_ADDRESS` | Address for Envoy ingress listeners | `0.0.0.0` |
+| `ENVOY_ADMIN_ADDRESS` | Address for Envoy admin API | `127.0.0.1` |
+| `ENVOY_ADMIN_PORT` | Port for Envoy admin API | `9901` |
+| `ENVOY_STOP_ON_SHUTDOWN` | Stop Envoy when hypeman shuts down (if false, Envoy continues running) | `false` |
 
 **Important: Subnet Configuration**
 

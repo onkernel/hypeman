@@ -18,19 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// waitForExecAgent polls until exec-agent is ready
-func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		logs, err := collectLogs(ctx, mgr, instanceID, 100)
-		if err == nil && strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return context.DeadlineExceeded
-}
-
 // execWithRetry runs a command with retries until exec-agent is ready
 func execWithRetry(ctx context.Context, vsockSocket string, command []string) (string, int, error) {
 	var output string

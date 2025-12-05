@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -164,7 +168,7 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 	}
 }
 
-func TestCreateAndDeleteInstance(t *testing.T) {
+func TestBasicEndToEnd(t *testing.T) {
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -224,6 +228,18 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.FileExists(t, p.VolumeData(vol.Id))
 	assert.Empty(t, vol.Attachments, "Volume should not be attached yet")
 
+	// Initialize network for ingress testing
+	networkManager := network.NewManager(p, &config.Config{
+		DataDir:    tmpDir,
+		BridgeName: "vmbr0",
+		SubnetCIDR: "10.100.0.0/16",
+		DNSServer:  "1.1.1.1",
+	}, nil)
+	t.Log("Initializing network...")
+	err = networkManager.Initialize(ctx, nil)
+	require.NoError(t, err)
+	t.Log("Network initialized")
+
 	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
 		Name:           "test-nginx",
@@ -232,7 +248,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,       // 512MB
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:          1,
-		NetworkEnabled: false, // No network for tests
+		NetworkEnabled: true, // Enable network for ingress test
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
 		},
@@ -311,6 +327,117 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+
+	// Test ingress - route external traffic to nginx through Envoy
+	t.Log("Testing ingress routing to nginx...")
+
+	// Get random free ports for Envoy
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	ingressPort := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	adminListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	adminPort := adminListener.Addr().(*net.TCPAddr).Port
+	adminListener.Close()
+
+	t.Logf("Using random ports: ingress=%d, admin=%d", ingressPort, adminPort)
+
+	// Create ingress manager with random ports
+	ingressConfig := ingress.Config{
+		ListenAddress:  "127.0.0.1",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      adminPort,
+		StopOnShutdown: true,
+	}
+
+	// Create a simple instance resolver that returns the instance IP
+	instanceIP := inst.IP
+	require.NotEmpty(t, instanceIP, "Instance should have an IP address")
+	t.Logf("Instance IP: %s", instanceIP)
+
+	resolver := &testInstanceResolver{
+		ip:     instanceIP,
+		exists: true,
+	}
+
+	ingressManager := ingress.NewManager(p, ingressConfig, resolver)
+
+	// Initialize ingress manager (starts Envoy)
+	t.Log("Starting Envoy...")
+	err = ingressManager.Initialize(ctx)
+	require.NoError(t, err, "Ingress manager should initialize successfully")
+
+	// Ensure we clean up Envoy
+	defer func() {
+		t.Log("Shutting down Envoy...")
+		if err := ingressManager.Shutdown(); err != nil {
+			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
+		}
+	}()
+
+	// Create an ingress rule
+	t.Log("Creating ingress rule...")
+	ingressReq := ingress.CreateIngressRequest{
+		Name: "test-nginx-ingress",
+		Rules: []ingress.IngressRule{
+			{
+				Match: ingress.IngressMatch{
+					Hostname: "test.local",
+					Port:     ingressPort,
+				},
+				Target: ingress.IngressTarget{
+					Instance: "test-nginx",
+					Port:     80,
+				},
+			},
+		},
+	}
+	ing, err := ingressManager.Create(ctx, ingressReq)
+	require.NoError(t, err)
+	require.NotNil(t, ing)
+	t.Logf("Ingress created: %s", ing.ID)
+
+	// Make HTTP request through Envoy to nginx with retry
+	// Envoy watches the xDS files and reloads automatically, but we retry to handle timing
+	// Envoy may take a few seconds to detect file changes and start the new listener
+	t.Log("Making HTTP request through Envoy to nginx...")
+	client := &http.Client{Timeout: 1 * time.Second}
+	var resp *http.Response
+	var lastErr error
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", ingressPort), nil)
+		require.NoError(t, err)
+		req.Host = "test.local" // Set Host header to match ingress rule
+
+		resp, lastErr = client.Do(req)
+		if lastErr == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.NoError(t, lastErr, "HTTP request through Envoy should succeed within deadline")
+	require.NotNil(t, resp)
+	defer resp.Body.Close()
+
+	// Verify we got a successful response from nginx
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
+	t.Logf("Got response from nginx through Envoy: %d bytes", len(body))
+
+	// Clean up ingress
+	err = ingressManager.Delete(ctx, ing.ID)
+	require.NoError(t, err)
+	t.Log("Ingress deleted")
 
 	// Test volume is accessible from inside the guest via exec
 	t.Log("Testing volume from inside guest via exec...")
@@ -686,3 +813,20 @@ func TestStateTransitions(t *testing.T) {
 }
 
 // No mock image manager needed - tests use real images!
+
+// testInstanceResolver is a simple implementation of ingress.InstanceResolver for testing.
+type testInstanceResolver struct {
+	ip     string
+	exists bool
+}
+
+func (r *testInstanceResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
+	if r.ip == "" {
+		return "", fmt.Errorf("instance not found: %s", nameOrID)
+	}
+	return r.ip, nil
+}
+
+func (r *testInstanceResolver) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
+	return r.exists, nil
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
@@ -118,4 +119,26 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 // ProvideRegistry provides the OCI registry for image push
 func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
 	return registry.New(p, imageManager)
+}
+
+// ProvideIngressManager provides the ingress manager
+func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
+	ingressConfig := ingress.Config{
+		ListenAddress:  cfg.EnvoyListenAddress,
+		AdminAddress:   cfg.EnvoyAdminAddress,
+		AdminPort:      cfg.EnvoyAdminPort,
+		StopOnShutdown: cfg.EnvoyStopOnShutdown,
+		OTEL: ingress.OTELConfig{
+			Enabled:           cfg.OtelEnabled,
+			Endpoint:          cfg.OtelEndpoint,
+			ServiceName:       cfg.OtelServiceName + "-envoy",
+			ServiceInstanceID: cfg.OtelServiceInstanceID,
+			Insecure:          cfg.OtelInsecure,
+			Environment:       cfg.Env,
+		},
+	}
+
+	// IngressResolver from instances package implements ingress.InstanceResolver
+	resolver := instances.NewIngressResolver(instanceManager)
+	return ingress.NewManager(p, ingressConfig, resolver)
 }

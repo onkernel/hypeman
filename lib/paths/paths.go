@@ -1,40 +1,5 @@
 // Package paths provides centralized path construction for hypeman data directory.
-//
-// Directory Structure:
-//
-//	{dataDir}/
-//	  system/
-//	    kernel/{version}/{arch}/vmlinux
-//	    initrd/{arch}/{timestamp}/initrd
-//	    initrd/{arch}/latest -> {timestamp}
-//	    binaries/{version}/{arch}/cloud-hypervisor
-//	    oci-cache/
-//	      oci-layout
-//	      index.json
-//	      blobs/sha256/{digestHex}
-//	    builds/{ref}/
-//	  images/
-//	    {repository}/{digest}/
-//	      rootfs.ext4
-//	      metadata.json
-//	    {repository}/{tag} -> {digest} (symlink)
-//	  volumes/
-//	    {id}/
-//	      data.raw
-//	      metadata.json
-//	  guests/
-//	    {id}/
-//	      metadata.json
-//	      overlay.raw
-//	      config.ext4
-//	      ch.sock
-//	      vsock.sock
-//	      logs/
-//	      vol-overlays/
-//	        {volumeID}.raw
-//	      snapshots/
-//	        snapshot-latest/
-//	          config.json
+
 package paths
 
 import "path/filepath"
@@ -47,6 +12,11 @@ type Paths struct {
 // New creates a new Paths instance for the given data directory.
 func New(dataDir string) *Paths {
 	return &Paths{dataDir: dataDir}
+}
+
+// DataDir returns the root data directory.
+func (p *Paths) DataDir() string {
+	return p.dataDir
 }
 
 // System path methods
@@ -236,4 +206,53 @@ func (p *Paths) VolumeData(id string) string {
 // VolumeMetadata returns the path to volume metadata.json.
 func (p *Paths) VolumeMetadata(id string) string {
 	return filepath.Join(p.VolumeDir(id), "metadata.json")
+}
+
+// Envoy path methods
+
+// EnvoyDir returns the envoy data directory.
+func (p *Paths) EnvoyDir() string {
+	return filepath.Join(p.dataDir, "envoy")
+}
+
+// EnvoyBinary returns the path to the envoy binary.
+func (p *Paths) EnvoyBinary(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "envoy", version, arch, "envoy")
+}
+
+// EnvoyConfig returns the path to the envoy bootstrap config file.
+func (p *Paths) EnvoyConfig() string {
+	return filepath.Join(p.EnvoyDir(), "bootstrap.yaml")
+}
+
+// EnvoyLDS returns the path to the Listener Discovery Service config file.
+func (p *Paths) EnvoyLDS() string {
+	return filepath.Join(p.EnvoyDir(), "lds.yaml")
+}
+
+// EnvoyCDS returns the path to the Cluster Discovery Service config file.
+func (p *Paths) EnvoyCDS() string {
+	return filepath.Join(p.EnvoyDir(), "cds.yaml")
+}
+
+// EnvoyPIDFile returns the path to the envoy PID file.
+func (p *Paths) EnvoyPIDFile() string {
+	return filepath.Join(p.EnvoyDir(), "envoy.pid")
+}
+
+// EnvoyLogFile returns the path to the envoy log file.
+func (p *Paths) EnvoyLogFile() string {
+	return filepath.Join(p.EnvoyDir(), "envoy.log")
+}
+
+// Ingress path methods
+
+// IngressesDir returns the root ingresses directory.
+func (p *Paths) IngressesDir() string {
+	return filepath.Join(p.dataDir, "ingresses")
+}
+
+// IngressMetadata returns the path to ingress metadata.json.
+func (p *Paths) IngressMetadata(id string) string {
+	return filepath.Join(p.IngressesDir(), id+".json")
 }
