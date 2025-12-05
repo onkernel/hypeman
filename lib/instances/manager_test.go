@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -329,21 +331,25 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Test ingress - route external traffic to nginx through Envoy
 	t.Log("Testing ingress routing to nginx...")
 
-	// Get a random free port for Envoy to listen on
+	// Get random free ports for Envoy
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	ingressPort := listener.Addr().(*net.TCPAddr).Port
-	listener.Close() // Close so Envoy can use it
-	t.Logf("Using random port %d for ingress test", ingressPort)
+	listener.Close()
+
+	adminListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	adminPort := adminListener.Addr().(*net.TCPAddr).Port
+	adminListener.Close()
+
+	t.Logf("Using random ports: ingress=%d, admin=%d", ingressPort, adminPort)
 
 	// Create ingress manager with random ports
-	adminPort := ingressPort + 1 // Use next port for admin
 	ingressConfig := ingress.Config{
-		ListenAddress:     "127.0.0.1",
-		AdminAddress:      "127.0.0.1",
-		AdminPort:         adminPort,
-		StopOnShutdown:    true,
-		DisableValidation: true, // No envoy binary in test
+		ListenAddress:  "127.0.0.1",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      adminPort,
+		StopOnShutdown: true,
 	}
 
 	// Create a simple instance resolver that returns the instance IP
@@ -357,6 +363,19 @@ func TestBasicEndToEnd(t *testing.T) {
 	}
 
 	ingressManager := ingress.NewManager(p, ingressConfig, resolver)
+
+	// Initialize ingress manager (starts Envoy)
+	t.Log("Starting Envoy...")
+	err = ingressManager.Initialize(ctx)
+	require.NoError(t, err, "Ingress manager should initialize successfully")
+
+	// Ensure we clean up Envoy
+	defer func() {
+		t.Log("Shutting down Envoy...")
+		if err := ingressManager.Shutdown(); err != nil {
+			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
+		}
+	}()
 
 	// Create an ingress rule
 	t.Log("Creating ingress rule...")
@@ -380,21 +399,38 @@ func TestBasicEndToEnd(t *testing.T) {
 	require.NotNil(t, ing)
 	t.Logf("Ingress created: %s", ing.ID)
 
-	// Verify ingress config files were written
-	assert.FileExists(t, p.EnvoyLDS(), "LDS config should be written")
-	assert.FileExists(t, p.EnvoyCDS(), "CDS config should be written")
+	// Make HTTP request through Envoy to nginx with retry
+	// Envoy watches the xDS files and reloads automatically, but we retry to handle timing
+	t.Log("Making HTTP request through Envoy to nginx...")
+	client := &http.Client{Timeout: 2 * time.Second}
+	var resp *http.Response
+	var lastErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", ingressPort), nil)
+		require.NoError(t, err)
+		req.Host = "test.local" // Set Host header to match ingress rule
 
-	// Read LDS config and verify it contains our hostname
-	ldsData, err := os.ReadFile(p.EnvoyLDS())
+		resp, lastErr = client.Do(req)
+		if lastErr == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.NoError(t, lastErr, "HTTP request through Envoy should succeed")
+	require.NotNil(t, resp)
+	defer resp.Body.Close()
+
+	// Verify we got a successful response from nginx
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(ldsData), "test.local", "LDS should contain our hostname")
-
-	// Read CDS config and verify it contains the instance IP
-	cdsData, err := os.ReadFile(p.EnvoyCDS())
-	require.NoError(t, err)
-	assert.Contains(t, string(cdsData), instanceIP, "CDS should contain instance IP")
-
-	t.Log("Ingress config files verified")
+	assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
+	t.Logf("Got response from nginx through Envoy: %d bytes", len(body))
 
 	// Clean up ingress
 	err = ingressManager.Delete(ctx, ing.ID)
