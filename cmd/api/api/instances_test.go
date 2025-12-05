@@ -177,6 +177,10 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	p := paths.New(svc.Config.DataDir)
 	waitForExecAgent(t, p, instanceID, 15*time.Second)
 
+	// Wait for nginx to be fully running (workers started)
+	waitForLogMessage(t, p, instanceID, "start worker process", 10*time.Second)
+	t.Log("nginx is fully running")
+
 	// 2. Stop the instance
 	// The stop flow: vsock signal → graceful wait → cleanup VMM
 	t.Log("Stopping instance...")
@@ -188,17 +192,23 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	assert.Equal(t, oapi.InstanceState("Stopped"), stopped.State)
 	t.Log("Instance stopped successfully")
 
-	// Verify graceful shutdown by checking console logs for the shutdown signal message
-	// The init script logs "overlay-init: received shutdown signal" when SIGTERM is received
+	// Verify graceful shutdown by checking console logs
 	logPath := p.InstanceConsoleLog(instanceID)
 	logData, err := os.ReadFile(logPath)
 	require.NoError(t, err, "should be able to read console log")
 	logContent := string(logData)
 
-	// Check for graceful shutdown evidence in logs
+	// Check that init script received the shutdown signal
 	assert.True(t,
 		strings.Contains(logContent, "overlay-init: received shutdown signal"),
-		"console log should contain graceful shutdown message, got: %s", logContent)
+		"console log should contain graceful shutdown message")
+
+	// Check that nginx workers exited gracefully (code 0)
+	// nginx logs: "worker process <pid> exited with code 0"
+	assert.Regexp(t,
+		`worker process \d+ exited with code 0`,
+		logContent,
+		"nginx workers should exit with code 0 (graceful shutdown)")
 
 	// 3. Start the instance
 	t.Log("Starting instance...")
@@ -254,15 +264,21 @@ func waitForState(t *testing.T, svc *ApiService, instanceID string, expectedStat
 // waitForExecAgent polls console log until exec-agent is ready
 func waitForExecAgent(t *testing.T, p *paths.Paths, instanceID string, timeout time.Duration) {
 	t.Helper()
+	waitForLogMessage(t, p, instanceID, "[exec-agent] listening on vsock port 2222", timeout)
+	t.Log("exec-agent is ready")
+}
+
+// waitForLogMessage polls console log until the specified message appears
+func waitForLogMessage(t *testing.T, p *paths.Paths, instanceID string, message string, timeout time.Duration) {
+	t.Helper()
 	logPath := p.InstanceConsoleLog(instanceID)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		logData, err := os.ReadFile(logPath)
-		if err == nil && strings.Contains(string(logData), "[exec-agent] listening on vsock port 2222") {
-			t.Log("exec-agent is ready")
+		if err == nil && strings.Contains(string(logData), message) {
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatal("Timeout waiting for exec-agent to be ready")
+	t.Fatalf("Timeout waiting for log message: %s", message)
 }

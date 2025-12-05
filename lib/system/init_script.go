@@ -176,23 +176,28 @@ set +e
 SHUTTING_DOWN=0
 
 # Signal handler: forward SIGTERM to app for graceful shutdown
-# This is triggered by ACPI shutdown from the VMM
 handle_shutdown() {
   if [ "$SHUTTING_DOWN" = "1" ]; then
     return
   fi
   SHUTTING_DOWN=1
   echo "overlay-init: received shutdown signal, forwarding to app (PID $APP_PID)"
-  kill -TERM $APP_PID 2>/dev/null
-  # Also signal exec-agent to stop
-  killall exec-agent 2>/dev/null || true
+  # Signal the process group to ensure all child processes receive SIGTERM
+  kill -TERM -$APP_PID 2>/dev/null || kill -TERM $APP_PID 2>/dev/null
 }
 
 trap handle_shutdown TERM INT
 
-# Construct the command string carefully
-# ENTRYPOINT and CMD are shell-safe quoted strings from config.sh
-eval "chroot /overlay/newroot /bin/sh -c \"cd ${WORKDIR:-/} && exec ${ENTRYPOINT} ${CMD}\"" &
+# Start the app
+# Check if container has a shell - scratch containers may not have one
+if [ -x /overlay/newroot/bin/sh ]; then
+  # Container has a shell - use it for WORKDIR support
+  # Use exec in subshell to minimize process chain
+  (cd /overlay/newroot && eval "exec chroot . /bin/sh -c \"cd ${WORKDIR:-/} && exec ${ENTRYPOINT} ${CMD}\"") &
+else
+  # Scratch container - exec directly (WORKDIR not supported)
+  (cd /overlay/newroot && eval "exec chroot . ${ENTRYPOINT} ${CMD}") &
+fi
 APP_PID=$!
 
 echo "overlay-init: container app started (PID $APP_PID)"
