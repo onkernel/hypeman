@@ -1,40 +1,5 @@
 // Package paths provides centralized path construction for hypeman data directory.
-//
-// Directory Structure:
-//
-//	{dataDir}/
-//	  system/
-//	    kernel/{version}/{arch}/vmlinux
-//	    initrd/{arch}/{timestamp}/initrd
-//	    initrd/{arch}/latest -> {timestamp}
-//	    binaries/{version}/{arch}/cloud-hypervisor
-//	    oci-cache/
-//	      oci-layout
-//	      index.json
-//	      blobs/sha256/{digestHex}
-//	    builds/{ref}/
-//	  images/
-//	    {repository}/{digest}/
-//	      rootfs.ext4
-//	      metadata.json
-//	    {repository}/{tag} -> {digest} (symlink)
-//	  volumes/
-//	    {id}/
-//	      data.raw
-//	      metadata.json
-//	  guests/
-//	    {id}/
-//	      metadata.json
-//	      overlay.raw
-//	      config.ext4
-//	      ch.sock
-//	      vsock.sock
-//	      logs/
-//	      vol-overlays/
-//	        {volumeID}.raw
-//	      snapshots/
-//	        snapshot-latest/
-//	          config.json
+
 package paths
 
 import "path/filepath"
