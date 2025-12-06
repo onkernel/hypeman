@@ -332,6 +332,100 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
+// StopInstance gracefully stops a running instance
+// The id parameter can be an instance ID, name, or ID prefix
+func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstanceRequestObject) (oapi.StopInstanceResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	// Resolve to get the actual instance ID
+	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.StopInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrAmbiguousName):
+			return oapi.StopInstance404JSONResponse{
+				Code:    "ambiguous",
+				Message: "multiple instances match, use full instance ID",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
+			return oapi.StopInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to get instance",
+			}, nil
+		}
+	}
+
+	inst, err := s.InstanceManager.StopInstance(ctx, resolved.Id)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.StopInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to stop instance", "error", err, "id", resolved.Id)
+			return oapi.StopInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to stop instance",
+			}, nil
+		}
+	}
+	return oapi.StopInstance200JSONResponse(instanceToOAPI(*inst)), nil
+}
+
+// StartInstance starts a stopped instance
+// The id parameter can be an instance ID, name, or ID prefix
+func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstanceRequestObject) (oapi.StartInstanceResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	// Resolve to get the actual instance ID
+	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.StartInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrAmbiguousName):
+			return oapi.StartInstance404JSONResponse{
+				Code:    "ambiguous",
+				Message: "multiple instances match, use full instance ID",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
+			return oapi.StartInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to get instance",
+			}, nil
+		}
+	}
+
+	inst, err := s.InstanceManager.StartInstance(ctx, resolved.Id)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.StartInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to start instance", "error", err, "id", resolved.Id)
+			return oapi.StartInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to start instance",
+			}, nil
+		}
+	}
+	return oapi.StartInstance200JSONResponse(instanceToOAPI(*inst)), nil
+}
+
 // logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
 type logsStreamResponse struct {
 	logChan <-chan string

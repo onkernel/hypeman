@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -53,7 +54,7 @@ func TestRegistryPushAndConvert(t *testing.T) {
 	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
 
-	img, err := remote.Image(srcRef)
+	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	digest, err := img.Digest()
@@ -108,7 +109,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
 
-	img, err := remote.Image(srcRef)
+	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	digest, err := img.Digest()
@@ -258,7 +259,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 	t.Log("Pulling alpine:latest...")
 	alpineRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
-	alpineImg, err := remote.Image(alpineRef)
+	alpineImg, err := remote.Image(alpineRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	// Get alpine layers for comparison
@@ -290,7 +291,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 	t.Log("Pulling alpine:3.18 (shares base layer)...")
 	alpine318Ref, err := name.ParseReference("docker.io/library/alpine:3.18")
 	require.NoError(t, err)
-	alpine318Img, err := remote.Image(alpine318Ref)
+	alpine318Img, err := remote.Image(alpine318Ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	alpine318Digest, _ := alpine318Img.Digest()
@@ -340,7 +341,7 @@ func TestRegistryTagPush(t *testing.T) {
 	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
 
-	img, err := remote.Image(srcRef)
+	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	digest, err := img.Digest()
@@ -392,7 +393,7 @@ func TestRegistryDockerV2ManifestConversion(t *testing.T) {
 	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
 
-	img, err := remote.Image(srcRef)
+	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	// Wrap the image to simulate Docker v2 format (Docker daemon returns this format)
