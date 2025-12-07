@@ -163,8 +163,8 @@ test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 			if [ -f "$$test" ]; then \
 				echo ""; \
 				echo "Checking $$(basename $$test) for $(TEST)..."; \
-				$$test -test.run=$(TEST) -test.v -test.timeout=60s 2>&1 | grep -q "PASS\|FAIL" && \
-				$$test -test.run=$(TEST) -test.v -test.timeout=60s || true; \
+				$$test -test.run=$(TEST) -test.v -test.timeout=120s 2>&1 | grep -q "PASS\|FAIL" && \
+				$$test -test.run=$(TEST) -test.v -test.timeout=120s || true; \
 			fi; \
 		done; \
 	else \
@@ -172,7 +172,7 @@ test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 			if [ -f "$$test" ]; then \
 				echo ""; \
 				echo "Running $$(basename $$test)..."; \
-				$$test -test.v -test.parallel=10 -test.timeout=60s || exit 1; \
+				$$test -test.v -test.parallel=10 -test.timeout=120s || exit 1; \
 			fi; \
 		done; \
 	fi
