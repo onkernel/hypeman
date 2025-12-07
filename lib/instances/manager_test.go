@@ -328,10 +328,10 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
 
-	// Test ingress - route external traffic to nginx through Envoy
+	// Test ingress - route external traffic to nginx through Caddy
 	t.Log("Testing ingress routing to nginx...")
 
-	// Get random free ports for Envoy
+	// Get random free ports for Caddy
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	ingressPort := listener.Addr().(*net.TCPAddr).Port
@@ -362,16 +362,17 @@ func TestBasicEndToEnd(t *testing.T) {
 		exists: true,
 	}
 
-	ingressManager := ingress.NewManager(p, ingressConfig, resolver)
+	// Pass nil for otelLogger - no log forwarding in tests
+	ingressManager := ingress.NewManager(p, ingressConfig, resolver, nil)
 
-	// Initialize ingress manager (starts Envoy)
-	t.Log("Starting Envoy...")
+	// Initialize ingress manager (starts Caddy)
+	t.Log("Starting Caddy...")
 	err = ingressManager.Initialize(ctx)
 	require.NoError(t, err, "Ingress manager should initialize successfully")
 
-	// Ensure we clean up Envoy
+	// Ensure we clean up Caddy
 	defer func() {
-		t.Log("Shutting down Envoy...")
+		t.Log("Shutting down Caddy...")
 		if err := ingressManager.Shutdown(); err != nil {
 			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
 		}
@@ -399,14 +400,13 @@ func TestBasicEndToEnd(t *testing.T) {
 	require.NotNil(t, ing)
 	t.Logf("Ingress created: %s", ing.ID)
 
-	// Make HTTP request through Envoy to nginx with retry
-	// Envoy watches the xDS files and reloads automatically, but we retry to handle timing
-	// Envoy may take a few seconds to detect file changes and start the new listener
-	t.Log("Making HTTP request through Envoy to nginx...")
-	client := &http.Client{Timeout: 1 * time.Second}
+	// Make HTTP request through Caddy to nginx with retry
+	// Caddy reloads config dynamically via the admin API
+	t.Log("Making HTTP request through Caddy to nginx...")
+	client := &http.Client{Timeout: 2 * time.Second}
 	var resp *http.Response
 	var lastErr error
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", ingressPort), nil)
 		require.NoError(t, err)
@@ -418,24 +418,22 @@ func TestBasicEndToEnd(t *testing.T) {
 		}
 		if resp != nil {
 			resp.Body.Close()
+			resp = nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
-	// TODO: Fix test flake or ingress bug
-	if lastErr != nil || resp == nil {
-		t.Logf("Warning: HTTP request through Envoy did not succeed within deadline: %v", lastErr)
-	} else {
-		defer resp.Body.Close()
+	require.NoError(t, lastErr, "HTTP request through Caddy should succeed")
+	require.NotNil(t, resp, "HTTP response should not be nil")
+	defer resp.Body.Close()
 
-		// Verify we got a successful response from nginx
-		assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
+	// Verify we got a successful response from nginx
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
 
-		// Read response body
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
-		t.Logf("Got response from nginx through Envoy: %d bytes", len(body))
-	}
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
+	t.Logf("Got response from nginx through Caddy: %d bytes", len(body))
 	err = ingressManager.Delete(ctx, ing.ID)
 	require.NoError(t, err)
 	t.Log("Ingress deleted")

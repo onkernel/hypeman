@@ -57,11 +57,14 @@ func TestGenerateConfig_EmptyIngresses(t *testing.T) {
 	require.True(t, ok, "config should have admin section")
 	assert.Equal(t, "127.0.0.1:2019", admin["listen"])
 
-	// Should have apps.http.servers
-	apps := config["apps"].(map[string]interface{})
-	http := apps["http"].(map[string]interface{})
-	servers := http["servers"].(map[string]interface{})
-	assert.Contains(t, servers, "ingress")
+	// Should have logging section
+	_, ok = config["logging"].(map[string]interface{})
+	require.True(t, ok, "config should have logging section")
+
+	// Should NOT have apps section when no ingresses exist
+	// (no HTTP server started until ingresses are created)
+	_, hasApps := config["apps"]
+	assert.False(t, hasApps, "config should not have apps section with no ingresses")
 }
 
 func TestGenerateConfig_SingleIngress(t *testing.T) {

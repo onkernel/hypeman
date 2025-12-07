@@ -161,31 +161,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		listenAddrs = append(listenAddrs, fmt.Sprintf("%s:%d", g.listenAddress, port))
 	}
 
-	// If no ingresses, still create a minimal server
-	if len(listenAddrs) == 0 {
-		listenAddrs = []string{fmt.Sprintf("%s:80", g.listenAddress)}
-	}
-
-	// Build server configuration
-	server := map[string]interface{}{
-		"listen": listenAddrs,
-	}
-
-	// Combine redirect routes (for HTTP) and main routes
-	allRoutes := append(redirectRoutes, routes...)
-	if len(allRoutes) > 0 {
-		server["routes"] = allRoutes
-	}
-
-	// Add automatic HTTPS settings
-	server["automatic_https"] = map[string]interface{}{
-		// Disable automatic HTTPS redirects - we handle them explicitly
-		"disable_redirects": true,
-	}
-
-	// Disable access logs (per-request logs) - we only want system logs
-	server["logs"] = map[string]interface{}{}
-
+	// Build base config (admin API and logging only)
 	config := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": fmt.Sprintf("%s:%d", g.adminAddress, g.adminPort),
@@ -205,17 +181,51 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				},
 			},
 		},
-		"apps": map[string]interface{}{
+	}
+
+	// Only add HTTP server if we have listen addresses (i.e., ingresses exist)
+	if len(listenAddrs) > 0 {
+		// Build server configuration
+		server := map[string]interface{}{
+			"listen": listenAddrs,
+		}
+
+		// Combine redirect routes (for HTTP) and main routes
+		allRoutes := append(redirectRoutes, routes...)
+		if len(allRoutes) > 0 {
+			server["routes"] = allRoutes
+		}
+
+		// Configure automatic HTTPS settings
+		if len(tlsHostnames) > 0 {
+			// When we have TLS hostnames, disable only redirects - we handle them explicitly
+			server["automatic_https"] = map[string]interface{}{
+				"disable_redirects": true,
+			}
+		} else {
+			// No TLS hostnames - disable automatic HTTPS completely
+			server["automatic_https"] = map[string]interface{}{
+				"disable": true,
+			}
+		}
+
+		// Disable access logs (per-request logs) - we only want system logs
+		server["logs"] = map[string]interface{}{}
+
+		config["apps"] = map[string]interface{}{
 			"http": map[string]interface{}{
 				"servers": map[string]interface{}{
 					"ingress": server,
 				},
 			},
-		},
+		}
 	}
 
 	// Add TLS automation if we have TLS hostnames
 	if len(tlsHostnames) > 0 && g.acme.IsTLSConfigured() {
+		if config["apps"] == nil {
+			config["apps"] = map[string]interface{}{}
+		}
 		config["apps"].(map[string]interface{})["tls"] = g.buildTLSConfig(tlsHostnames)
 	}
 
