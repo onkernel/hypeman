@@ -182,7 +182,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 			}
 			// Check if domain is in the allowed list
 			if !m.config.ACME.IsDomainAllowed(rule.Match.Hostname) {
-				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS", ErrDomainNotAllowed, rule.Match.Hostname)
+				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS (allowed: %s)", ErrDomainNotAllowed, rule.Match.Hostname, m.config.ACME.AllowedDomains)
 			}
 		}
 	}
