@@ -55,6 +55,11 @@ type ACMEConfig struct {
 	DNSPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
 	DNSResolvers          string // Comma-separated DNS resolvers to use for checking propagation
 
+	// AllowedDomains is a comma-separated list of domain patterns allowed for TLS ingresses.
+	// Supports wildcards like "*.example.com" and exact matches like "api.example.com".
+	// If empty, no TLS domains are allowed.
+	AllowedDomains string
+
 	// Cloudflare API token (if DNSProvider=cloudflare).
 	CloudflareAPIToken string
 
@@ -69,6 +74,39 @@ type ACMEConfig struct {
 	AWSRegion          string
 	AWSHostedZoneID    string
 	AWSMaxRetries      int // Max retries for Route53 API calls
+}
+
+// IsDomainAllowed checks if a hostname is allowed for TLS based on the AllowedDomains config.
+// Returns true if the hostname matches any of the allowed patterns.
+// Supports exact matches and wildcard patterns (e.g., "*.example.com").
+func (c *ACMEConfig) IsDomainAllowed(hostname string) bool {
+	if c.AllowedDomains == "" {
+		return false // No domains allowed if not configured
+	}
+
+	patterns := strings.Split(c.AllowedDomains, ",")
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+
+		// Exact match
+		if pattern == hostname {
+			return true
+		}
+
+		// Wildcard match (e.g., "*.example.com" matches "foo.example.com")
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := pattern[1:] // Remove the "*", keep ".example.com"
+			if strings.HasSuffix(hostname, suffix) && !strings.Contains(strings.TrimSuffix(hostname, suffix), ".") {
+				// Ensure it only matches one level (foo.example.com, not foo.bar.example.com)
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // IsTLSConfigured returns true if ACME/TLS is properly configured.

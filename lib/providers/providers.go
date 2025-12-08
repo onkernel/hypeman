@@ -140,6 +140,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			CA:                    cfg.AcmeCA,
 			DNSPropagationTimeout: cfg.DnsPropagationTimeout,
 			DNSResolvers:          cfg.DnsResolvers,
+			AllowedDomains:        cfg.TlsAllowedDomains,
 			CloudflareAPIToken:    cfg.CloudflareApiToken,
 			AWSAccessKeyID:        cfg.AwsAccessKeyId,
 			AWSSecretAccessKey:    cfg.AwsSecretAccessKey,

@@ -654,6 +654,90 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 	}
 }
 
+func TestACMEConfig_IsDomainAllowed(t *testing.T) {
+	tests := []struct {
+		name           string
+		allowedDomains string
+		hostname       string
+		expected       bool
+	}{
+		{
+			name:           "empty config - no domains allowed",
+			allowedDomains: "",
+			hostname:       "example.com",
+			expected:       false,
+		},
+		{
+			name:           "exact match",
+			allowedDomains: "api.example.com",
+			hostname:       "api.example.com",
+			expected:       true,
+		},
+		{
+			name:           "exact match with multiple patterns",
+			allowedDomains: "api.example.com, www.example.com, admin.example.com",
+			hostname:       "www.example.com",
+			expected:       true,
+		},
+		{
+			name:           "wildcard match",
+			allowedDomains: "*.example.com",
+			hostname:       "api.example.com",
+			expected:       true,
+		},
+		{
+			name:           "wildcard match - different subdomain",
+			allowedDomains: "*.example.com",
+			hostname:       "www.example.com",
+			expected:       true,
+		},
+		{
+			name:           "wildcard does not match nested subdomains",
+			allowedDomains: "*.example.com",
+			hostname:       "api.v2.example.com",
+			expected:       false,
+		},
+		{
+			name:           "wildcard does not match apex domain",
+			allowedDomains: "*.example.com",
+			hostname:       "example.com",
+			expected:       false,
+		},
+		{
+			name:           "no match - wrong domain",
+			allowedDomains: "*.example.com",
+			hostname:       "api.other.com",
+			expected:       false,
+		},
+		{
+			name:           "no match - similar but different domain",
+			allowedDomains: "*.hypeman-development.com",
+			hostname:       "test.hypeman-developments.com",
+			expected:       false,
+		},
+		{
+			name:           "multiple patterns with wildcard",
+			allowedDomains: "*.example.com, api.other.com",
+			hostname:       "api.other.com",
+			expected:       true,
+		},
+		{
+			name:           "whitespace handling",
+			allowedDomains: "  *.example.com  ,  api.other.com  ",
+			hostname:       "api.other.com",
+			expected:       true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			config := ACMEConfig{AllowedDomains: tc.allowedDomains}
+			result := config.IsDomainAllowed(tc.hostname)
+			assert.Equal(t, tc.expected, result, "hostname=%q, allowed=%q", tc.hostname, tc.allowedDomains)
+		})
+	}
+}
+
 func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 	// Create temp dir
 	tmpDir, err := os.MkdirTemp("", "ingress-config-mixed-tls-test-*")

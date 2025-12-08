@@ -95,6 +95,11 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 				Code:    "instance_not_found",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, ingress.ErrDomainNotAllowed):
+			return oapi.CreateIngress400JSONResponse{
+				Code:    "domain_not_allowed",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, ingress.ErrConfigValidationFailed):
 			log.ErrorContext(ctx, "failed to create ingress", "error", err, "name", request.Body.Name)
 			return oapi.CreateIngress400JSONResponse{

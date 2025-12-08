@@ -33,6 +33,9 @@ var (
 
 	// ErrPortInUse is returned when the requested port is already in use by another process.
 	ErrPortInUse = errors.New("port already in use")
+
+	// ErrDomainNotAllowed is returned when a TLS ingress is requested for a domain not in the allowed list.
+	ErrDomainNotAllowed = errors.New("domain not allowed for TLS")
 )
 
 // portInUseRegex matches Caddy's "address already in use" error messages

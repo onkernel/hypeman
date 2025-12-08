@@ -170,10 +170,16 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		return nil, fmt.Errorf("%w: ingress with name %q already exists", ErrAlreadyExists, req.Name)
 	}
 
-	// Check if TLS is requested but ACME isn't configured
+	// Check if TLS is requested but ACME isn't configured, and validate allowed domains
 	for _, rule := range req.Rules {
-		if rule.TLS && !m.config.ACME.IsTLSConfigured() {
-			return nil, fmt.Errorf("%w: TLS requested but ACME is not configured (set ACME_EMAIL and ACME_DNS_PROVIDER)", ErrInvalidRequest)
+		if rule.TLS {
+			if !m.config.ACME.IsTLSConfigured() {
+				return nil, fmt.Errorf("%w: TLS requested but ACME is not configured (set ACME_EMAIL and ACME_DNS_PROVIDER)", ErrInvalidRequest)
+			}
+			// Check if domain is in the allowed list
+			if !m.config.ACME.IsDomainAllowed(rule.Match.Hostname) {
+				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS", ErrDomainNotAllowed, rule.Match.Hostname)
+			}
 		}
 	}
 

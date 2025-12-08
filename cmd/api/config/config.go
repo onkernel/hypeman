@@ -96,6 +96,7 @@ type Config struct {
 	AcmeCA                string // ACME CA URL (empty = Let's Encrypt production)
 	DnsPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
 	DnsResolvers          string // Comma-separated DNS resolvers for propagation checking
+	TlsAllowedDomains     string // Comma-separated list of allowed domain patterns for TLS (e.g., "*.example.com,api.example.com")
 
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
 	CloudflareApiToken string // Cloudflare API token
@@ -167,6 +168,7 @@ func Load() *Config {
 		AcmeCA:                getEnv("ACME_CA", ""),
 		DnsPropagationTimeout: getEnv("DNS_PROPAGATION_TIMEOUT", ""),
 		DnsResolvers:          getEnv("DNS_RESOLVERS", ""),
+		TlsAllowedDomains:     getEnv("TLS_ALLOWED_DOMAINS", ""), // Empty = no TLS domains allowed
 
 		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
