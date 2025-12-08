@@ -372,13 +372,13 @@ func TestBasicEndToEnd(t *testing.T) {
 	err = ingressManager.Initialize(ctx)
 	require.NoError(t, err, "Ingress manager should initialize successfully")
 
-	// Ensure we clean up Caddy
-	defer func() {
+	// Ensure we clean up Caddy - use t.Cleanup for guaranteed cleanup even on test failures
+	t.Cleanup(func() {
 		t.Log("Shutting down Caddy...")
 		if err := ingressManager.Shutdown(); err != nil {
 			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
 		}
-	}()
+	})
 
 	// Create an ingress rule
 	t.Log("Creating ingress rule...")
@@ -501,12 +501,13 @@ func TestBasicEndToEnd(t *testing.T) {
 		err = tlsIngressManager.Initialize(ctx)
 		require.NoError(t, err, "TLS ingress manager should initialize successfully")
 
-		defer func() {
+		// Use t.Cleanup for guaranteed cleanup even on test failures
+		t.Cleanup(func() {
 			t.Log("Shutting down TLS Caddy...")
 			if err := tlsIngressManager.Shutdown(); err != nil {
 				t.Logf("Warning: failed to shutdown TLS ingress manager: %v", err)
 			}
-		}()
+		})
 
 		// Create TLS ingress rule
 		t.Logf("Creating TLS ingress rule for %s...", tlsTestDomain)
@@ -538,11 +539,15 @@ func TestBasicEndToEnd(t *testing.T) {
 		t.Log("Making HTTPS request (certificate will be obtained on first request)...")
 
 		// Create HTTP client that trusts the staging CA (or skips verification for testing)
+		// ServerName sets the SNI (Server Name Indication) for the TLS handshake.
+		// This is required because we connect to 127.0.0.1 but Caddy needs to know
+		// which certificate to serve based on the hostname.
 		tlsClient := &http.Client{
 			Timeout: 90 * time.Second, // Long timeout for certificate issuance
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, // Accept staging CA certs
+					InsecureSkipVerify: true,          // Accept staging CA certs
+					ServerName:         tlsTestDomain, // Set SNI to match the certificate
 				},
 			},
 		}
