@@ -182,9 +182,9 @@ dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $
 test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 	@if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$PATH" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
 	else \
-		sudo env "PATH=$$PATH" go test -tags containers_image_openpgp -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -v -timeout=180s ./...; \
 	fi
 
 # Generate JWT token for testing

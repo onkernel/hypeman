@@ -36,6 +36,8 @@ jobs:
      
       - name: Run tests
         env:
+          # Docker auth for tests running as root (sudo)
+          DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           ACME_DNS_PROVIDER: "cloudflare"
