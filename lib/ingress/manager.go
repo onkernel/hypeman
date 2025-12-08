@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -217,7 +218,8 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	}
 
 	// Generate config with the new ingress included
-	allIngresses := append(existingIngresses, ingress)
+	// Use slices.Concat to avoid modifying the existingIngresses slice
+	allIngresses := slices.Concat(existingIngresses, []Ingress{ingress})
 	ipResolver := func(instance string) (string, error) {
 		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
 	}

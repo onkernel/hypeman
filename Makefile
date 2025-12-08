@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries download-caddy-binaries ensure-caddy-binaries
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -49,22 +49,47 @@ download-ch-binaries:
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
-# Download Caddy binaries
-download-caddy-binaries:
-	@echo "Downloading Caddy binaries..."
-	@mkdir -p lib/ingress/binaries/caddy/v2.10.2/{x86_64,aarch64}
-	@echo "Downloading Caddy v2.10.2 for x86_64..."
-	@curl -L -o /tmp/caddy_x86_64.tar.gz \
-		https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz
-	@tar -xzf /tmp/caddy_x86_64.tar.gz -C lib/ingress/binaries/caddy/v2.10.2/x86_64 caddy
-	@rm /tmp/caddy_x86_64.tar.gz
-	@echo "Downloading Caddy v2.10.2 for aarch64..."
-	@curl -L -o /tmp/caddy_aarch64.tar.gz \
-		https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_arm64.tar.gz
-	@tar -xzf /tmp/caddy_aarch64.tar.gz -C lib/ingress/binaries/caddy/v2.10.2/aarch64 caddy
-	@rm /tmp/caddy_aarch64.tar.gz
-	@chmod +x lib/ingress/binaries/caddy/v2.10.2/*/caddy
-	@echo "Caddy binaries downloaded successfully"
+# Caddy version and modules
+CADDY_VERSION := v2.10.2
+CADDY_DNS_MODULES := --with github.com/caddy-dns/cloudflare --with github.com/caddy-dns/route53
+
+# Build Caddy with DNS modules using xcaddy
+# xcaddy builds Caddy from source with the specified modules
+build-caddy-binaries:
+	@echo "Building Caddy $(CADDY_VERSION) with DNS modules..."
+	@echo "This requires xcaddy: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
+	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64
+	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64
+	@echo "Building Caddy $(CADDY_VERSION) for x86_64..."
+	GOOS=linux GOARCH=amd64 xcaddy build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64/caddy
+	@echo "Building Caddy $(CADDY_VERSION) for aarch64..."
+	GOOS=linux GOARCH=arm64 xcaddy build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64/caddy
+	@chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/*/caddy
+	@echo "Caddy binaries built successfully with DNS modules"
+
+# Build Caddy for current architecture only (faster for development)
+build-caddy:
+	@echo "Building Caddy $(CADDY_VERSION) with DNS modules for current architecture..."
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CADDY_ARCH=x86_64; \
+		GOARCH=amd64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CADDY_ARCH=aarch64; \
+		GOARCH=arm64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH; \
+	GOOS=linux GOARCH=$$GOARCH xcaddy build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy; \
+	chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy
+	@echo "Caddy binary built successfully"
 
 # Download Cloud Hypervisor API spec
 download-ch-spec:
@@ -111,12 +136,20 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
-# Check if Caddy binaries exist, download if missing
+# Check if Caddy binaries exist, build if missing
 .PHONY: ensure-caddy-binaries
 ensure-caddy-binaries:
-	@if [ ! -f lib/ingress/binaries/caddy/v2.10.2/x86_64/caddy ]; then \
-		echo "Caddy binaries not found, downloading..."; \
-		$(MAKE) download-caddy-binaries; \
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CADDY_ARCH=x86_64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CADDY_ARCH=aarch64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	if [ ! -f lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy ]; then \
+		echo "Caddy binary not found, building with xcaddy..."; \
+		$(MAKE) build-caddy; \
 	fi
 
 # Build exec-agent (guest binary) into its own directory for embedding

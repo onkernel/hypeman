@@ -122,7 +122,7 @@ func (d *CaddyDaemon) startCaddy(ctx context.Context) (int, error) {
 	}
 
 	// Wait for admin API to be ready
-	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := d.waitForAdmin(waitCtx); err != nil {
@@ -306,12 +306,15 @@ func (d *CaddyDaemon) isProcessRunning(pid int) bool {
 }
 
 // findCaddyPID tries to find the Caddy process PID by scanning /proc.
+// It matches both the binary name and our specific config path to avoid
+// colliding with other Caddy instances or other hypeman instances on the same server.
 func (d *CaddyDaemon) findCaddyPID() int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0
 	}
 
+	configPath := d.paths.CaddyConfig()
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -327,7 +330,8 @@ func (d *CaddyDaemon) findCaddyPID() int {
 		}
 
 		cmdStr := string(cmdline)
-		if strings.Contains(cmdStr, "caddy") && strings.Contains(cmdStr, "run") {
+		// Match caddy run command with our specific config path
+		if strings.Contains(cmdStr, "caddy") && strings.Contains(cmdStr, "run") && strings.Contains(cmdStr, configPath) {
 			return pid
 		}
 	}

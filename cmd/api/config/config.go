@@ -85,20 +85,32 @@ type Config struct {
 	LogLevel string // Default log level (debug, info, warn, error)
 
 	// Caddy / Ingress configuration
-	CaddyListenAddress  string // Address for Caddy to listen on (default: 0.0.0.0)
-	CaddyAdminAddress   string // Address for Caddy admin API (default: 127.0.0.1)
-	CaddyAdminPort      int    // Port for Caddy admin API (default: 2019)
-	CaddyStopOnShutdown bool   // Stop Caddy when hypeman shuts down (default: false)
+	CaddyListenAddress  string // Address for Caddy to listen on
+	CaddyAdminAddress   string // Address for Caddy admin API
+	CaddyAdminPort      int    // Port for Caddy admin API
+	CaddyStopOnShutdown bool   // Stop Caddy when hypeman shuts down
 
 	// ACME / TLS configuration
-	AcmeEmail          string // ACME account email (required for TLS ingresses)
-	AcmeDnsProvider    string // DNS provider for ACME challenges: "cloudflare" or "route53"
-	AcmeCA             string // ACME CA URL (default: Let's Encrypt production)
-	CloudflareApiToken string // Cloudflare API token (if AcmeDnsProvider=cloudflare)
-	AwsAccessKeyId     string // AWS access key (if AcmeDnsProvider=route53)
-	AwsSecretAccessKey string // AWS secret key (if AcmeDnsProvider=route53)
-	AwsRegion          string // AWS region (if AcmeDnsProvider=route53)
-	AwsHostedZoneId    string // AWS hosted zone ID (optional, for route53)
+	AcmeEmail             string // ACME account email (required for TLS ingresses)
+	AcmeDnsProvider       string // DNS provider: "cloudflare" or "route53"
+	AcmeCA                string // ACME CA URL (empty = Let's Encrypt production)
+	DnsPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
+	DnsResolvers          string // Comma-separated DNS resolvers for propagation checking
+
+	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
+	CloudflareApiToken string // Cloudflare API token
+
+	// AWS Route53 configuration (if AcmeDnsProvider=route53)
+	// Supports three auth methods:
+	// 1. Explicit credentials: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+	// 2. Named profile: AWS_PROFILE
+	// 3. IAM role/instance profile: leave all empty
+	AwsAccessKeyId     string // AWS access key ID
+	AwsSecretAccessKey string // AWS secret access key
+	AwsProfile         string // AWS profile name (for shared credentials file)
+	AwsRegion          string // AWS region
+	AwsHostedZoneId    string // Route53 hosted zone ID (optional)
+	AwsMaxRetries      int    // Max retries for Route53 API calls
 }
 
 // Load loads configuration from environment variables
@@ -144,22 +156,28 @@ func Load() *Config {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		// Caddy / Ingress configuration
-		CaddyListenAddress: getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
-		CaddyAdminAddress:  getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
-		CaddyAdminPort:     getEnvInt("CADDY_ADMIN_PORT", 2019),
-		// For production, set to false
-		// allows for updating hypeman without restarting caddy
-		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", true),
+		CaddyListenAddress:  getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
+		CaddyAdminAddress:   getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
+		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 2019),
+		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", false),
 
 		// ACME / TLS configuration
-		AcmeEmail:          getEnv("ACME_EMAIL", ""),
-		AcmeDnsProvider:    getEnv("ACME_DNS_PROVIDER", ""),
-		AcmeCA:             getEnv("ACME_CA", ""), // Empty = Let's Encrypt production
+		AcmeEmail:             getEnv("ACME_EMAIL", ""),
+		AcmeDnsProvider:       getEnv("ACME_DNS_PROVIDER", ""),
+		AcmeCA:                getEnv("ACME_CA", ""),
+		DnsPropagationTimeout: getEnv("DNS_PROPAGATION_TIMEOUT", ""),
+		DnsResolvers:          getEnv("DNS_RESOLVERS", ""),
+
+		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
+
+		// AWS Route53 configuration
 		AwsAccessKeyId:     getEnv("AWS_ACCESS_KEY_ID", ""),
 		AwsSecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		AwsProfile:         getEnv("AWS_PROFILE", ""),
 		AwsRegion:          getEnv("AWS_REGION", "us-east-1"),
 		AwsHostedZoneId:    getEnv("AWS_HOSTED_ZONE_ID", ""),
+		AwsMaxRetries:      getEnvInt("AWS_MAX_RETRIES", 0),
 	}
 
 	return cfg

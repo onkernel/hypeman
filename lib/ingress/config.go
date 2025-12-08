@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
+	"strings"
 
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -49,14 +51,24 @@ type ACMEConfig struct {
 	// CA is the ACME CA URL. Empty means Let's Encrypt production.
 	CA string
 
+	// DNS propagation settings (applies to all providers)
+	DNSPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
+	DNSResolvers          string // Comma-separated DNS resolvers to use for checking propagation
+
 	// Cloudflare API token (if DNSProvider=cloudflare).
 	CloudflareAPIToken string
 
-	// AWS credentials (if DNSProvider=route53).
+	// AWS/Route53 configuration (if DNSProvider=route53).
+	// Supports three auth methods:
+	// 1. Explicit credentials: AWSAccessKeyID + AWSSecretAccessKey
+	// 2. Named profile: AWSProfile
+	// 3. IAM role/instance profile: leave all empty
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
+	AWSProfile         string // AWS profile name for shared credentials
 	AWSRegion          string
 	AWSHostedZoneID    string
+	AWSMaxRetries      int // Max retries for Route53 API calls
 }
 
 // IsTLSConfigured returns true if ACME/TLS is properly configured.
@@ -69,7 +81,14 @@ func (c *ACMEConfig) IsTLSConfigured() bool {
 	case DNSProviderCloudflare:
 		return c.CloudflareAPIToken != ""
 	case DNSProviderRoute53:
-		return c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
+		// Route53 supports multiple auth methods:
+		// 1. Explicit credentials
+		// 2. Named profile
+		// 3. IAM role/instance profile (no explicit config needed)
+		hasExplicitCreds := c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
+		hasProfile := c.AWSProfile != ""
+		useIAMRole := !hasExplicitCreds && !hasProfile // Will use instance profile/IAM role
+		return hasExplicitCreds || hasProfile || useIAMRole
 	default:
 		return false
 	}
@@ -182,9 +201,14 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 	}
 
-	// Build listen addresses
-	listenAddrs := []string{}
+	// Build listen addresses (sorted for deterministic config output)
+	ports := make([]int, 0, len(listenPorts))
 	for port := range listenPorts {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	listenAddrs := make([]string, 0, len(ports))
+	for _, port := range ports {
 		listenAddrs = append(listenAddrs, fmt.Sprintf("%s:%d", g.listenAddress, port))
 	}
 
@@ -282,32 +306,62 @@ func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]int
 }
 
 // buildDNSChallengeConfig builds the DNS challenge configuration.
+// Uses the caddy-dns module format: https://github.com/caddy-dns/cloudflare and https://github.com/caddy-dns/route53
 func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} {
+	dnsConfig := map[string]interface{}{}
+
+	// Add provider-specific configuration
 	switch g.acme.DNSProvider {
 	case DNSProviderCloudflare:
-		return map[string]interface{}{
-			"provider": map[string]interface{}{
-				"name":      "cloudflare",
-				"api_token": g.acme.CloudflareAPIToken,
-			},
+		// caddy-dns/cloudflare module format
+		dnsConfig["provider"] = map[string]interface{}{
+			"name":      "cloudflare",
+			"api_token": g.acme.CloudflareAPIToken,
 		}
 	case DNSProviderRoute53:
+		// caddy-dns/route53 module format
+		// Supports multiple auth methods: explicit credentials, profile, or IAM role (empty config)
 		provider := map[string]interface{}{
-			"name":              "route53",
-			"access_key_id":     g.acme.AWSAccessKeyID,
-			"secret_access_key": g.acme.AWSSecretAccessKey,
-			"region":            g.acme.AWSRegion,
+			"name": "route53",
+		}
+		// Only add credentials if explicitly provided
+		// If neither credentials nor profile are set, route53 uses IAM role/instance profile
+		if g.acme.AWSAccessKeyID != "" && g.acme.AWSSecretAccessKey != "" {
+			provider["access_key_id"] = g.acme.AWSAccessKeyID
+			provider["secret_access_key"] = g.acme.AWSSecretAccessKey
+		}
+		if g.acme.AWSProfile != "" {
+			provider["aws_profile"] = g.acme.AWSProfile
+		}
+		if g.acme.AWSRegion != "" {
+			provider["region"] = g.acme.AWSRegion
 		}
 		if g.acme.AWSHostedZoneID != "" {
 			provider["hosted_zone_id"] = g.acme.AWSHostedZoneID
 		}
-		return map[string]interface{}{
-			"provider": provider,
+		if g.acme.AWSMaxRetries > 0 {
+			provider["max_retries"] = g.acme.AWSMaxRetries
 		}
+		dnsConfig["provider"] = provider
 	default:
 		// Should not happen - DNSProvider is validated at startup
 		return map[string]interface{}{}
 	}
+
+	// Add propagation settings (applies to all providers)
+	if g.acme.DNSPropagationTimeout != "" {
+		dnsConfig["propagation_timeout"] = g.acme.DNSPropagationTimeout
+	}
+	if g.acme.DNSResolvers != "" {
+		// Split comma-separated resolvers into array
+		resolvers := strings.Split(g.acme.DNSResolvers, ",")
+		for i := range resolvers {
+			resolvers[i] = strings.TrimSpace(resolvers[i])
+		}
+		dnsConfig["resolvers"] = resolvers
+	}
+
+	return dnsConfig
 }
 
 // WriteConfig writes the Caddy configuration to disk.

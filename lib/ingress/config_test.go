@@ -61,6 +61,46 @@ func TestGenerateConfig_EmptyIngresses(t *testing.T) {
 	// (no HTTP server started until ingresses are created)
 	_, hasApps := config["apps"]
 	assert.False(t, hasApps, "config should not have apps section with no ingresses")
+
+	// Should have storage section pointing to data directory
+	storage, ok := config["storage"].(map[string]interface{})
+	require.True(t, ok, "config should have storage section")
+	assert.Equal(t, "file_system", storage["module"])
+	// Verify storage root is set (path will vary based on temp dir)
+	root, ok := storage["root"].(string)
+	require.True(t, ok, "storage should have root path")
+	assert.Contains(t, root, "caddy/data", "storage root should be caddy data directory")
+}
+
+func TestGenerateConfig_StoragePath(t *testing.T) {
+	// Test that the storage path is correctly configured based on the paths
+	tmpDir, err := os.MkdirTemp("", "ingress-storage-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{})
+
+	ctx := context.Background()
+	data, err := generator.GenerateConfig(ctx, []Ingress{}, func(string) (string, error) { return "", nil })
+	require.NoError(t, err)
+
+	var config map[string]interface{}
+	err = json.Unmarshal(data, &config)
+	require.NoError(t, err)
+
+	// Verify storage configuration
+	storage := config["storage"].(map[string]interface{})
+	assert.Equal(t, "file_system", storage["module"])
+	assert.Equal(t, p.CaddyDataDir(), storage["root"], "storage root should match CaddyDataDir")
+
+	// Verify the path structure is correct
+	// CaddyDataDir should be under CaddyDir
+	expectedDataDir := tmpDir + "/caddy/data"
+	assert.Equal(t, expectedDataDir, p.CaddyDataDir(), "CaddyDataDir should be under data directory")
 }
 
 func TestGenerateConfig_SingleIngress(t *testing.T) {
@@ -243,6 +283,78 @@ func TestGenerateConfig_MultiplePorts(t *testing.T) {
 	assert.Contains(t, configStr, "api.example.com")
 	assert.Contains(t, configStr, "internal.example.com")
 	assert.Contains(t, configStr, "metrics.example.com")
+}
+
+func TestGenerateConfig_DeterministicOrder(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Create ingresses with ports in non-sorted order to verify output is deterministic
+	ingresses := []Ingress{
+		{
+			ID:   "ing-1",
+			Name: "high-port-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "metrics.example.com", Port: 9000}, Target: IngressTarget{Instance: "metrics", Port: 9090}},
+			},
+		},
+		{
+			ID:   "ing-2",
+			Name: "low-port-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "api.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}},
+			},
+		},
+		{
+			ID:   "ing-3",
+			Name: "mid-port-ingress",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "internal.example.com", Port: 443}, Target: IngressTarget{Instance: "internal", Port: 3000}},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		switch instance {
+		case "api":
+			return "10.100.0.10", nil
+		case "internal":
+			return "10.100.0.20", nil
+		case "metrics":
+			return "10.100.0.30", nil
+		}
+		return "", ErrInstanceNotFound
+	}
+
+	// Generate config multiple times and verify output is identical
+	var firstOutput []byte
+	for i := 0; i < 5; i++ {
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err)
+
+		if firstOutput == nil {
+			firstOutput = data
+		} else {
+			assert.Equal(t, string(firstOutput), string(data), "config output should be deterministic on iteration %d", i)
+		}
+	}
+
+	// Also verify the listen addresses are in sorted order (80, 443, 9000)
+	var config map[string]interface{}
+	err := json.Unmarshal(firstOutput, &config)
+	require.NoError(t, err)
+
+	apps := config["apps"].(map[string]interface{})
+	httpApp := apps["http"].(map[string]interface{})
+	servers := httpApp["servers"].(map[string]interface{})
+	ingressServer := servers["ingress"].(map[string]interface{})
+	listenAddrs := ingressServer["listen"].([]interface{})
+
+	require.Len(t, listenAddrs, 3)
+	assert.Equal(t, "0.0.0.0:80", listenAddrs[0].(string))
+	assert.Equal(t, "0.0.0.0:443", listenAddrs[1].(string))
+	assert.Equal(t, "0.0.0.0:9000", listenAddrs[2].(string))
 }
 
 func TestGenerateConfig_DefaultPort(t *testing.T) {
@@ -493,7 +605,7 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "route53 configured",
+			name: "route53 with explicit credentials",
 			config: ACMEConfig{
 				Email:              "admin@example.com",
 				DNSProvider:        DNSProviderRoute53,
@@ -503,12 +615,22 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "route53 missing credentials",
+			name: "route53 with profile",
 			config: ACMEConfig{
 				Email:       "admin@example.com",
 				DNSProvider: DNSProviderRoute53,
+				AWSProfile:  "my-profile",
 			},
-			expected: false,
+			expected: true,
+		},
+		{
+			name: "route53 with IAM role (no explicit credentials)",
+			config: ACMEConfig{
+				Email:       "admin@example.com",
+				DNSProvider: DNSProviderRoute53,
+				// Empty credentials = use IAM role/instance profile
+			},
+			expected: true,
 		},
 		{
 			name: "no provider set",
