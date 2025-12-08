@@ -36,3 +36,6 @@ jobs:
      
       - name: Run tests
         run: make test
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}

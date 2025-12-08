@@ -23,6 +23,38 @@ type ociClient struct {
 	cacheDir string
 }
 
+// envKeychain authenticates to Docker Hub using environment variables.
+// This is useful in CI environments where credentials are passed via env vars
+// rather than stored in ~/.docker/config.json.
+type envKeychain struct {
+	username, password string
+}
+
+func (k *envKeychain) Resolve(resource authn.Resource) (authn.Authenticator, error) {
+	// Only authenticate for Docker Hub
+	registry := resource.RegistryStr()
+	if registry == "index.docker.io" || registry == "registry-1.docker.io" {
+		return authn.FromConfig(authn.AuthConfig{
+			Username: k.username,
+			Password: k.password,
+		}), nil
+	}
+	// Fall back to anonymous for other registries
+	return authn.Anonymous, nil
+}
+
+// GetKeychain returns a keychain that tries env vars first, then default keychain.
+// Set DOCKER_USERNAME and DOCKER_PASSWORD environment variables for Docker Hub auth.
+func GetKeychain() authn.Keychain {
+	username := os.Getenv("DOCKER_USERNAME")
+	password := os.Getenv("DOCKER_PASSWORD")
+
+	if username != "" && password != "" {
+		return &envKeychain{username: username, password: password}
+	}
+	return authn.DefaultKeychain
+}
+
 // digestToLayoutTag converts a digest to a valid OCI layout tag.
 // Uses just the hex portion without the algorithm prefix.
 // Example: "sha256:abc123..." -> "abc123..."
@@ -68,11 +100,11 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	// Use env var authentication if available, otherwise fall back to ~/.docker/config.json
 	// Default retry: only on network errors, max ~1.3s total
 	descriptor, err := remote.Head(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(GetKeychain()))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
@@ -124,11 +156,11 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	// Use env var authentication if available, otherwise fall back to ~/.docker/config.json
 	// Default retry: only on network errors, max ~1.3s total
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(GetKeychain()))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))

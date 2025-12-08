@@ -138,7 +138,7 @@ dev: $(AIR)
 # Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
+test: ensure-ch-binaries ensure-envoy-binaries lib/system/exec_agent/exec-agent
 	@if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		sudo env "PATH=$$PATH" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
