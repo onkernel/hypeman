@@ -213,20 +213,23 @@ func (d *CaddyDaemon) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	log.InfoContext(ctx, "stopping Caddy via admin API", "pid", pid)
-
 	// Try graceful shutdown via admin API first
 	client := &http.Client{Timeout: 5 * time.Second}
 	adminURL := fmt.Sprintf("http://%s:%d/stop", d.adminAddress, d.adminPort)
 	resp, err := client.Post(adminURL, "", nil)
-	if err == nil {
+	if err != nil {
+		log.InfoContext(ctx, "Caddy admin API stop request failed, will try SIGTERM", "error", err)
+	} else {
 		resp.Body.Close()
+		log.InfoContext(ctx, "Caddy admin API stop request sent")
 	}
 
 	// Wait for process to exit after admin API stop (up to 5s)
+	log.InfoContext(ctx, "waiting for Caddy process to exit", "pid", pid)
 	if d.waitForProcessExit(pid, 5*time.Second) {
 		os.Remove(d.paths.CaddyPIDFile())
 		d.pid = 0
+		log.InfoContext(ctx, "Caddy stopped via admin API")
 		return nil
 	}
 
@@ -241,6 +244,7 @@ func (d *CaddyDaemon) Stop(ctx context.Context) error {
 	if d.waitForProcessExit(pid, 2*time.Second) {
 		os.Remove(d.paths.CaddyPIDFile())
 		d.pid = 0
+		log.InfoContext(ctx, "Caddy stopped via SIGTERM")
 		return nil
 	}
 
@@ -258,6 +262,7 @@ func (d *CaddyDaemon) Stop(ctx context.Context) error {
 	os.Remove(d.paths.CaddyPIDFile())
 	d.pid = 0
 
+	log.InfoContext(ctx, "Caddy stopped via SIGKILL")
 	return nil
 }
 
@@ -379,13 +384,38 @@ func (d *CaddyDaemon) isAdminResponding() bool {
 }
 
 // isProcessRunning checks if a process with the given PID is running.
+// Returns false for zombie processes (which have exited but not been reaped).
 func (d *CaddyDaemon) isProcessRunning(pid int) bool {
+	// Check if process exists
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
 	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	if err != nil {
+		return false
+	}
+
+	// Check if it's a zombie process by reading /proc/[pid]/stat
+	// A zombie has state 'Z' and shouldn't be considered "running"
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	data, err := os.ReadFile(statPath)
+	if err != nil {
+		// Can't read stat, process might have exited
+		return false
+	}
+
+	// Format: pid (comm) state ...
+	// Find the state character after the closing parenthesis
+	statStr := string(data)
+	closeParenIdx := strings.LastIndex(statStr, ")")
+	if closeParenIdx == -1 || closeParenIdx+2 >= len(statStr) {
+		return false
+	}
+	state := statStr[closeParenIdx+2] // Skip ") " to get state char
+
+	// Z = zombie, X = dead
+	return state != 'Z' && state != 'X'
 }
 
 // findCaddyPID tries to find the Caddy process PID by scanning /proc.
