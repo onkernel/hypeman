@@ -17,6 +17,7 @@ DATA_DIR="/var/lib/hypeman"
 CONFIG_DIR="/etc/hypeman"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
+SERVICE_USER="hypeman"
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
@@ -113,6 +114,19 @@ if [ -d "$CONFIG_DIR" ]; then
     else
         info "Removing config directory: ${CONFIG_DIR}"
         $SUDO rm -rf "$CONFIG_DIR"
+    fi
+fi
+
+# =============================================================================
+# Remove hypeman user
+# =============================================================================
+
+if id "$SERVICE_USER" &>/dev/null; then
+    if [ "${KEEP_DATA:-true}" = "true" ]; then
+        info "Keeping system user: ${SERVICE_USER} (data is preserved)"
+    else
+        info "Removing system user: ${SERVICE_USER}"
+        $SUDO userdel "$SERVICE_USER" 2>/dev/null || true
     fi
 fi
 

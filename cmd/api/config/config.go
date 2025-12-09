@@ -88,6 +88,7 @@ type Config struct {
 	CaddyListenAddress  string // Address for Caddy to listen on
 	CaddyAdminAddress   string // Address for Caddy admin API
 	CaddyAdminPort      int    // Port for Caddy admin API
+	InternalDNSPort     int    // Port for internal DNS server (used for dynamic upstreams)
 	CaddyStopOnShutdown bool   // Stop Caddy when hypeman shuts down
 
 	// ACME / TLS configuration
@@ -147,7 +148,8 @@ func Load() *Config {
 		// Caddy / Ingress configuration
 		CaddyListenAddress:  getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
 		CaddyAdminAddress:   getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
-		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 0), // 0 = random port to prevent conflicts on shared dev machines
+		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 0),  // 0 = random port to prevent conflicts on shared dev machines
+		InternalDNSPort:     getEnvInt("INTERNAL_DNS_PORT", 0), // 0 = random port; used for dynamic upstream resolution
 		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", false),
 
 		// ACME / TLS configuration

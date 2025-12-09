@@ -23,6 +23,7 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/hypeman}"
 CONFIG_FILE="${CONFIG_DIR}/config"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
+SERVICE_USER="hypeman"
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
@@ -159,11 +160,26 @@ EOF
 $SUDO chmod 755 /usr/local/bin/hypeman-token
 
 # =============================================================================
+# Create hypeman system user
+# =============================================================================
+
+if ! id "$SERVICE_USER" &>/dev/null; then
+    info "Creating system user: ${SERVICE_USER}..."
+    $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+
+# Add hypeman user to kvm group for VM access
+if getent group kvm &>/dev/null; then
+    $SUDO usermod -aG kvm "$SERVICE_USER"
+fi
+
+# =============================================================================
 # Create directories
 # =============================================================================
 
 info "Creating data directory at ${DATA_DIR}..."
 $SUDO mkdir -p "$DATA_DIR"
+$SUDO chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
 
 info "Creating config directory at ${CONFIG_DIR}..."
 $SUDO mkdir -p "$CONFIG_DIR"
@@ -184,12 +200,18 @@ if [ ! -f "$CONFIG_FILE" ]; then
     JWT_SECRET=$(openssl rand -hex 32)
     sed -i "s/^JWT_SECRET=$/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
     
-    info "Installing config file at ${CONFIG_FILE}..."
-    $SUDO install -m 600 "${TMP_DIR}/config" "$CONFIG_FILE"
+    # Set fixed ports for production (instead of random ports used in dev)
+    sed -i "s/^# CADDY_ADMIN_PORT=0/CADDY_ADMIN_PORT=2019/" "${TMP_DIR}/config"
+    sed -i "s/^# INTERNAL_DNS_PORT=0/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
     
-    # Give ownership to the installing user so they can read the config for CLI
+    info "Installing config file at ${CONFIG_FILE}..."
+    $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"
+    
+    # Set ownership: root owns the file, hypeman group can read it
+    # Also add installing user to hypeman group so CLI can read config
     INSTALL_USER="${SUDO_USER:-$(whoami)}"
-    $SUDO chown "$INSTALL_USER" "$CONFIG_FILE"
+    $SUDO chown "root:${SERVICE_USER}" "$CONFIG_FILE"
+    $SUDO usermod -aG "$SERVICE_USER" "$INSTALL_USER" 2>/dev/null || true
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
 fi
@@ -207,17 +229,24 @@ After=network.target
 
 [Service]
 Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+Environment="HOME=${DATA_DIR}"
 EnvironmentFile=${CONFIG_FILE}
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=on-failure
 RestartSec=5
 
 # Security hardening
-NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=${DATA_DIR}
+# Note: NoNewPrivileges=true is omitted because we need capabilities
+
+# Capabilities for network operations
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

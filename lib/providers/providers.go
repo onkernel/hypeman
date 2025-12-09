@@ -137,11 +137,17 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		}
 	}
 
+	// Use config value for internal DNS port, fall back to default (0 = random) if not set
+	internalDNSPort := cfg.InternalDNSPort
+	if internalDNSPort == 0 {
+		internalDNSPort = ingress.DefaultDNSPort
+	}
+
 	ingressConfig := ingress.Config{
 		ListenAddress:  cfg.CaddyListenAddress,
 		AdminAddress:   cfg.CaddyAdminAddress,
 		AdminPort:      cfg.CaddyAdminPort,
-		DNSPort:        ingress.DefaultDNSPort,
+		DNSPort:        internalDNSPort,
 		StopOnShutdown: cfg.CaddyStopOnShutdown,
 		ACME: ingress.ACMEConfig{
 			Email:                 cfg.AcmeEmail,
