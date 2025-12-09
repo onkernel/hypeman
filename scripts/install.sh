@@ -207,11 +207,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
     info "Installing config file at ${CONFIG_FILE}..."
     $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"
     
-    # Set ownership: root owns the file, hypeman group can read it
-    # Also add installing user to hypeman group so CLI can read config
+    # Set ownership: installing user owns the file, hypeman group can read it
+    # This allows CLI (running as user) and service (running as hypeman) to both read
     INSTALL_USER="${SUDO_USER:-$(whoami)}"
-    $SUDO chown "root:${SERVICE_USER}" "$CONFIG_FILE"
-    $SUDO usermod -aG "$SERVICE_USER" "$INSTALL_USER" 2>/dev/null || true
+    $SUDO chown "${INSTALL_USER}:${SERVICE_USER}" "$CONFIG_FILE"
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
 fi
