@@ -52,7 +52,8 @@ checksum:
   name_template: 'checksums.txt'
 
 changelog:
-  sort: asc
+  # Sort chronologically
+  sort: ""
   filters:
     exclude:
       - '^docs:'
