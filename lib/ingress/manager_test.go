@@ -49,7 +49,8 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 	p := paths.New(tmpDir)
 
 	// Create required directories
-	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 	require.NoError(t, os.MkdirAll(p.IngressesDir(), 0755))
 
 	resolver := newMockResolver()
@@ -57,13 +58,16 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 	resolver.AddInstance("web-app", "10.100.0.20")
 
 	config := Config{
-		ListenAddress:     "0.0.0.0",
-		AdminAddress:      "127.0.0.1",
-		AdminPort:         19901, // Use different port for testing
-		DisableValidation: true,  // No Envoy binary available in tests
+		ListenAddress:  "0.0.0.0",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      12019, // Use different port for testing
+		DNSPort:        0,     // Use random port for testing to avoid conflicts
+		StopOnShutdown: true,
+		// Empty ACME config - TLS not configured for basic tests
 	}
 
-	manager := NewManager(p, config, resolver)
+	// Pass nil for otelLogger - no log forwarding in tests
+	manager := NewManager(p, config, resolver, nil)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -584,6 +588,36 @@ func TestCreateIngressRequest_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "wildcard hostname not supported",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "*.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "redirect_http without tls",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}, RedirectHTTP: true, TLS: false},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid tls with redirect",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com", Port: 443}, Target: IngressTarget{Instance: "my-api", Port: 8080}, TLS: true, RedirectHTTP: true},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -596,4 +630,211 @@ func TestCreateIngressRequest_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateIngress_TLSWithoutACME(t *testing.T) {
+	// Setup manager without ACME configured
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Try to create TLS ingress without ACME config
+	req := CreateIngressRequest{
+		Name: "tls-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "secure.example.com", Port: 443},
+				Target: IngressTarget{Instance: "my-api", Port: 8080},
+				TLS:    true,
+			},
+		},
+	}
+
+	_, err := manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "ACME is not configured")
+}
+
+func TestGetIngress_Resolution(t *testing.T) {
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-resolution-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.IngressesDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	ctx := context.Background()
+
+	// Directly save some test ingresses to storage
+	ingress1 := &storedIngress{
+		ID:        "abc123def456",
+		Name:      "api-ingress",
+		Rules:     []IngressRule{{Match: IngressMatch{Hostname: "api.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}}},
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}
+	ingress2 := &storedIngress{
+		ID:        "abc789xyz123",
+		Name:      "web-ingress",
+		Rules:     []IngressRule{{Match: IngressMatch{Hostname: "web.example.com", Port: 80}, Target: IngressTarget{Instance: "web", Port: 8080}}},
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}
+	ingress3 := &storedIngress{
+		ID:        "xyz999aaa111",
+		Name:      "admin-ingress",
+		Rules:     []IngressRule{{Match: IngressMatch{Hostname: "admin.example.com", Port: 80}, Target: IngressTarget{Instance: "admin", Port: 8080}}},
+		CreatedAt: time.Now().Format(time.RFC3339),
+	}
+
+	require.NoError(t, saveIngress(p, ingress1))
+	require.NoError(t, saveIngress(p, ingress2))
+	require.NoError(t, saveIngress(p, ingress3))
+
+	resolver := newMockResolver()
+	config := Config{
+		ListenAddress:  "0.0.0.0",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      12019,
+		DNSPort:        0, // Use random port for testing
+		StopOnShutdown: true,
+	}
+	manager := NewManager(p, config, resolver, nil)
+
+	t.Run("exact ID match", func(t *testing.T) {
+		ing, err := manager.Get(ctx, "abc123def456")
+		require.NoError(t, err)
+		assert.Equal(t, "abc123def456", ing.ID)
+		assert.Equal(t, "api-ingress", ing.Name)
+	})
+
+	t.Run("exact name match", func(t *testing.T) {
+		ing, err := manager.Get(ctx, "web-ingress")
+		require.NoError(t, err)
+		assert.Equal(t, "abc789xyz123", ing.ID)
+		assert.Equal(t, "web-ingress", ing.Name)
+	})
+
+	t.Run("unique ID prefix match", func(t *testing.T) {
+		ing, err := manager.Get(ctx, "xyz")
+		require.NoError(t, err)
+		assert.Equal(t, "xyz999aaa111", ing.ID)
+		assert.Equal(t, "admin-ingress", ing.Name)
+	})
+
+	t.Run("longer unique ID prefix", func(t *testing.T) {
+		ing, err := manager.Get(ctx, "abc123")
+		require.NoError(t, err)
+		assert.Equal(t, "abc123def456", ing.ID)
+	})
+
+	t.Run("ambiguous ID prefix", func(t *testing.T) {
+		// "abc" matches both abc123def456 and abc789xyz123
+		_, err := manager.Get(ctx, "abc")
+		assert.ErrorIs(t, err, ErrAmbiguousName)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		_, err := manager.Get(ctx, "nonexistent")
+		assert.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("ID takes precedence over name prefix", func(t *testing.T) {
+		// If we have an exact ID match, it should be returned even if
+		// there's another ingress with a name starting with the same prefix
+		ing, err := manager.Get(ctx, "abc123def456")
+		require.NoError(t, err)
+		assert.Equal(t, "abc123def456", ing.ID)
+	})
+}
+
+func TestDeleteIngress_Resolution(t *testing.T) {
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-delete-resolution-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.IngressesDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	ctx := context.Background()
+
+	resolver := newMockResolver()
+	config := Config{
+		ListenAddress:  "0.0.0.0",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      12019,
+		DNSPort:        0, // Use random port for testing
+		StopOnShutdown: true,
+	}
+
+	t.Run("delete by name", func(t *testing.T) {
+		// Save test ingress
+		ingress := &storedIngress{
+			ID:        "del123abc",
+			Name:      "delete-by-name",
+			Rules:     []IngressRule{{Match: IngressMatch{Hostname: "test.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}}},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		}
+		require.NoError(t, saveIngress(p, ingress))
+
+		manager := NewManager(p, config, resolver, nil)
+		err := manager.Delete(ctx, "delete-by-name")
+		require.NoError(t, err)
+
+		// Verify it's gone
+		_, err = manager.Get(ctx, "del123abc")
+		assert.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("delete by ID prefix", func(t *testing.T) {
+		// Save test ingress
+		ingress := &storedIngress{
+			ID:        "unique999prefix",
+			Name:      "prefix-delete-test",
+			Rules:     []IngressRule{{Match: IngressMatch{Hostname: "test2.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}}},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		}
+		require.NoError(t, saveIngress(p, ingress))
+
+		manager := NewManager(p, config, resolver, nil)
+		err := manager.Delete(ctx, "unique999")
+		require.NoError(t, err)
+
+		// Verify it's gone
+		_, err = manager.Get(ctx, "unique999prefix")
+		assert.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("delete ambiguous prefix fails", func(t *testing.T) {
+		// Save two ingresses with similar IDs
+		ingress1 := &storedIngress{
+			ID:        "ambig111aaa",
+			Name:      "ambig-test-1",
+			Rules:     []IngressRule{{Match: IngressMatch{Hostname: "ambig1.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}}},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		}
+		ingress2 := &storedIngress{
+			ID:        "ambig111bbb",
+			Name:      "ambig-test-2",
+			Rules:     []IngressRule{{Match: IngressMatch{Hostname: "ambig2.example.com", Port: 80}, Target: IngressTarget{Instance: "api", Port: 8080}}},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		}
+		require.NoError(t, saveIngress(p, ingress1))
+		require.NoError(t, saveIngress(p, ingress2))
+
+		manager := NewManager(p, config, resolver, nil)
+		err := manager.Delete(ctx, "ambig111")
+		assert.ErrorIs(t, err, ErrAmbiguousName)
+
+		// Both should still exist
+		_, err = manager.Get(ctx, "ambig111aaa")
+		require.NoError(t, err)
+		_, err = manager.Get(ctx, "ambig111bbb")
+		require.NoError(t, err)
+	})
 }

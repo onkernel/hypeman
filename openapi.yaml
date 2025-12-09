@@ -406,8 +406,15 @@ components:
       properties:
         hostname:
           type: string
-          description: Hostname to match (exact match on Host header)
-          example: api.example.com
+          description: |
+            Hostname to match. Can be:
+            - Literal: "api.example.com" (exact match on Host header)
+            - Pattern: "{instance}.example.com" (dynamic routing based on subdomain)
+            
+            Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
+            that extract parts of the hostname for routing. The extracted values can be
+            referenced in the target.instance field.
+          example: "{instance}.example.com"
         port:
           type: integer
           description: Host port to listen on for this rule (default 80)
@@ -420,8 +427,13 @@ components:
       properties:
         instance:
           type: string
-          description: Target instance name or ID
-          example: my-api
+          description: |
+            Target instance name, ID, or capture reference.
+            - For literal hostnames: Use the instance name or ID directly (e.g., "my-api")
+            - For pattern hostnames: Reference a capture from the hostname (e.g., "{instance}")
+            
+            When using pattern hostnames, the instance is resolved dynamically at request time.
+          example: "{instance}"
         port:
           type: integer
           description: Target port on the instance
@@ -435,6 +447,14 @@ components:
           $ref: "#/components/schemas/IngressMatch"
         target:
           $ref: "#/components/schemas/IngressTarget"
+        tls:
+          type: boolean
+          description: Enable TLS termination (certificate auto-issued via ACME).
+          default: false
+        redirect_http:
+          type: boolean
+          description: Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
+          default: false
     
     CreateIngressRequest:
       type: object
@@ -1285,7 +1305,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Ingress ID or name
+          description: Ingress ID, name, or ID prefix
       responses:
         200:
           description: Ingress details
@@ -1295,6 +1315,12 @@ paths:
                 $ref: "#/components/schemas/Ingress"
         404:
           description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
           content:
             application/json:
               schema:
@@ -1316,12 +1342,18 @@ paths:
           required: true
           schema:
             type: string
-          description: Ingress ID or name
+          description: Ingress ID, name, or ID prefix
       responses:
         204:
           description: Ingress deleted
         404:
           description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
           content:
             application/json:
               schema:

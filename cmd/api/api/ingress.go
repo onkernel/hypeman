@@ -45,6 +45,14 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 		if rule.Match.Port != nil {
 			matchPort = *rule.Match.Port
 		}
+		tlsEnabled := false
+		if rule.Tls != nil {
+			tlsEnabled = *rule.Tls
+		}
+		redirectHTTP := false
+		if rule.RedirectHttp != nil {
+			redirectHTTP = *rule.RedirectHttp
+		}
 		domainReq.Rules[i] = ingress.IngressRule{
 			Match: ingress.IngressMatch{
 				Hostname: rule.Match.Hostname,
@@ -54,6 +62,8 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 				Instance: rule.Target.Instance,
 				Port:     rule.Target.Port,
 			},
+			TLS:          tlsEnabled,
+			RedirectHTTP: redirectHTTP,
 		}
 	}
 
@@ -75,9 +85,25 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 				Code:    "hostname_in_use",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, ingress.ErrPortInUse):
+			return oapi.CreateIngress409JSONResponse{
+				Code:    "port_in_use",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, ingress.ErrInstanceNotFound):
 			return oapi.CreateIngress400JSONResponse{
 				Code:    "instance_not_found",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, ingress.ErrDomainNotAllowed):
+			return oapi.CreateIngress400JSONResponse{
+				Code:    "domain_not_allowed",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, ingress.ErrConfigValidationFailed):
+			log.ErrorContext(ctx, "failed to create ingress", "error", err, "name", request.Body.Name)
+			return oapi.CreateIngress400JSONResponse{
+				Code:    "config_validation_failed",
 				Message: err.Error(),
 			}, nil
 		default:
@@ -92,45 +118,59 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 	return oapi.CreateIngress201JSONResponse(ingressToOAPI(*ing)), nil
 }
 
-// GetIngress gets ingress details by ID or name
+// GetIngress gets ingress details by ID, name, or ID prefix
 func (s *ApiService) GetIngress(ctx context.Context, request oapi.GetIngressRequestObject) (oapi.GetIngressResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	ing, err := s.IngressManager.Get(ctx, request.Id)
 	if err != nil {
-		if errors.Is(err, ingress.ErrNotFound) {
+		switch {
+		case errors.Is(err, ingress.ErrNotFound):
 			return oapi.GetIngress404JSONResponse{
 				Code:    "not_found",
 				Message: "ingress not found",
 			}, nil
+		case errors.Is(err, ingress.ErrAmbiguousName):
+			return oapi.GetIngress409JSONResponse{
+				Code:    "ambiguous_identifier",
+				Message: "identifier matches multiple ingresses, please use a more specific ID or name",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to get ingress", "error", err, "id", request.Id)
+			return oapi.GetIngress500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to get ingress",
+			}, nil
 		}
-		log.ErrorContext(ctx, "failed to get ingress", "error", err, "id", request.Id)
-		return oapi.GetIngress500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to get ingress",
-		}, nil
 	}
 
 	return oapi.GetIngress200JSONResponse(ingressToOAPI(*ing)), nil
 }
 
-// DeleteIngress deletes an ingress by ID or name
+// DeleteIngress deletes an ingress by ID, name, or ID prefix
 func (s *ApiService) DeleteIngress(ctx context.Context, request oapi.DeleteIngressRequestObject) (oapi.DeleteIngressResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	err := s.IngressManager.Delete(ctx, request.Id)
 	if err != nil {
-		if errors.Is(err, ingress.ErrNotFound) {
+		switch {
+		case errors.Is(err, ingress.ErrNotFound):
 			return oapi.DeleteIngress404JSONResponse{
 				Code:    "not_found",
 				Message: "ingress not found",
 			}, nil
+		case errors.Is(err, ingress.ErrAmbiguousName):
+			return oapi.DeleteIngress409JSONResponse{
+				Code:    "ambiguous_identifier",
+				Message: "identifier matches multiple ingresses, please use a more specific ID or name",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to delete ingress", "error", err, "id", request.Id)
+			return oapi.DeleteIngress500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to delete ingress",
+			}, nil
 		}
-		log.ErrorContext(ctx, "failed to delete ingress", "error", err, "id", request.Id)
-		return oapi.DeleteIngress500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to delete ingress",
-		}, nil
 	}
 
 	return oapi.DeleteIngress204Response{}, nil
@@ -141,6 +181,8 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 	rules := make([]oapi.IngressRule, len(ing.Rules))
 	for i, rule := range ing.Rules {
 		port := rule.Match.GetPort()
+		tls := rule.TLS
+		redirectHTTP := rule.RedirectHTTP
 		rules[i] = oapi.IngressRule{
 			Match: oapi.IngressMatch{
 				Hostname: rule.Match.Hostname,
@@ -150,6 +192,8 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 				Instance: rule.Target.Instance,
 				Port:     rule.Target.Port,
 			},
+			Tls:          &tls,
+			RedirectHttp: &redirectHTTP,
 		}
 	}
 

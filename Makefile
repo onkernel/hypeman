@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries download-envoy-binaries ensure-envoy-binaries release-prep
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -12,6 +12,7 @@ OAPI_CODEGEN ?= $(BIN_DIR)/oapi-codegen
 AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 GODOTENV ?= $(BIN_DIR)/godotenv
+XCADDY ?= $(BIN_DIR)/xcaddy
 
 # Install oapi-codegen
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -29,7 +30,11 @@ $(WIRE): | $(BIN_DIR)
 $(GODOTENV): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/joho/godotenv/cmd/godotenv@latest
 
-install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV)
+# Install xcaddy for building Caddy with plugins
+$(XCADDY): | $(BIN_DIR)
+	GOBIN=$(BIN_DIR) go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV) $(XCADDY)
 
 # Download Cloud Hypervisor binaries
 download-ch-binaries:
@@ -49,18 +54,46 @@ download-ch-binaries:
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
-# Download Envoy binaries
-download-envoy-binaries:
-	@echo "Downloading Envoy binaries..."
-	@mkdir -p lib/ingress/binaries/envoy/v1.36/{x86_64,aarch64}
-	@echo "Downloading Envoy v1.36.3 for x86_64..."
-	@curl -L -o lib/ingress/binaries/envoy/v1.36/x86_64/envoy \
-		https://github.com/envoyproxy/envoy/releases/download/v1.36.3/envoy-1.36.3-linux-x86_64
-	@echo "Downloading Envoy v1.36.3 for aarch64..."
-	@curl -L -o lib/ingress/binaries/envoy/v1.36/aarch64/envoy \
-		https://github.com/envoyproxy/envoy/releases/download/v1.36.3/envoy-1.36.3-linux-aarch_64
-	@chmod +x lib/ingress/binaries/envoy/v1.36/*/envoy
-	@echo "Envoy binaries downloaded successfully"
+# Caddy version and modules
+CADDY_VERSION := v2.10.2
+CADDY_DNS_MODULES := --with github.com/caddy-dns/cloudflare
+
+# Build Caddy with DNS modules using xcaddy
+# xcaddy builds Caddy from source with the specified modules
+build-caddy-binaries: $(XCADDY)
+	@echo "Building Caddy $(CADDY_VERSION) with DNS modules..."
+	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64
+	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64
+	@echo "Building Caddy $(CADDY_VERSION) for x86_64..."
+	GOOS=linux GOARCH=amd64 $(XCADDY) build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64/caddy
+	@echo "Building Caddy $(CADDY_VERSION) for aarch64..."
+	GOOS=linux GOARCH=arm64 $(XCADDY) build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64/caddy
+	@chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/*/caddy
+	@echo "Caddy binaries built successfully with DNS modules"
+
+# Build Caddy for current architecture only (faster for development)
+build-caddy: $(XCADDY)
+	@echo "Building Caddy $(CADDY_VERSION) with DNS modules for current architecture..."
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CADDY_ARCH=x86_64; \
+		GOARCH=amd64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CADDY_ARCH=aarch64; \
+		GOARCH=arm64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH; \
+	GOOS=linux GOARCH=$$GOARCH $(XCADDY) build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy; \
+	chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy
+	@echo "Caddy binary built successfully"
 
 # Download Cloud Hypervisor API spec
 download-ch-spec:
@@ -107,12 +140,20 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
-# Check if Envoy binaries exist, download if missing
-.PHONY: ensure-envoy-binaries
-ensure-envoy-binaries:
-	@if [ ! -f lib/ingress/binaries/envoy/v1.36/x86_64/envoy ]; then \
-		echo "Envoy binaries not found, downloading..."; \
-		$(MAKE) download-envoy-binaries; \
+# Check if Caddy binaries exist, build if missing
+.PHONY: ensure-caddy-binaries
+ensure-caddy-binaries:
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CADDY_ARCH=x86_64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CADDY_ARCH=aarch64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	if [ ! -f lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy ]; then \
+		echo "Caddy binary not found, building with xcaddy..."; \
+		$(MAKE) build-caddy; \
 	fi
 
 # Build exec-agent (guest binary) into its own directory for embedding
@@ -121,7 +162,7 @@ lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
 	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
 
 # Build the binary
-build: ensure-ch-binaries ensure-envoy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
+build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build exec CLI
@@ -132,45 +173,18 @@ build-exec: | $(BIN_DIR)
 build-all: build build-exec
 
 # Run in development mode with hot reload
-dev: $(AIR)
+dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
 	$(AIR) -c .air.toml
 
-# Run tests
-# Compile test binaries and grant network capabilities (runs as user, not root)
+# Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-envoy-binaries lib/system/exec_agent/exec-agent
-	@echo "Building test binaries..."
-	@mkdir -p $(BIN_DIR)/tests
-	@for pkg in $$(go list -tags containers_image_openpgp ./...); do \
-		pkg_name=$$(basename $$pkg); \
-		go test -c -tags containers_image_openpgp -o $(BIN_DIR)/tests/$$pkg_name.test $$pkg 2>/dev/null || true; \
-	done
-	@echo "Granting capabilities to test binaries..."
-	@for test in $(BIN_DIR)/tests/*.test; do \
-		if [ -f "$$test" ]; then \
-			sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' $$test 2>/dev/null || true; \
-		fi; \
-	done
-	@echo "Running tests as current user with capabilities..."
+test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 	@if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		for test in $(BIN_DIR)/tests/*.test; do \
-			if [ -f "$$test" ]; then \
-				echo ""; \
-				echo "Checking $$(basename $$test) for $(TEST)..."; \
-				$$test -test.run=$(TEST) -test.v -test.timeout=60s 2>&1 | grep -q "PASS\|FAIL" && \
-				$$test -test.run=$(TEST) -test.v -test.timeout=60s || true; \
-			fi; \
-		done; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
 	else \
-		for test in $(BIN_DIR)/tests/*.test; do \
-			if [ -f "$$test" ]; then \
-				echo ""; \
-				echo "Running $$(basename $$test)..."; \
-				$$test -test.v -test.parallel=10 -test.timeout=60s || exit 1; \
-			fi; \
-		done; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -v -timeout=180s ./...; \
 	fi
 
 # Generate JWT token for testing
@@ -189,5 +203,5 @@ clean:
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries download-envoy-binaries lib/system/exec_agent/exec-agent
+release-prep: download-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 	go mod tidy

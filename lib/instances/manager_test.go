@@ -3,6 +3,7 @@ package instances
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
@@ -328,10 +330,10 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
 
-	// Test ingress - route external traffic to nginx through Envoy
+	// Test ingress - route external traffic to nginx through Caddy
 	t.Log("Testing ingress routing to nginx...")
 
-	// Get random free ports for Envoy
+	// Get random free ports for Caddy
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	ingressPort := listener.Addr().(*net.TCPAddr).Port
@@ -349,6 +351,7 @@ func TestBasicEndToEnd(t *testing.T) {
 		ListenAddress:  "127.0.0.1",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      adminPort,
+		DNSPort:        0, // Use random port for testing
 		StopOnShutdown: true,
 	}
 
@@ -362,20 +365,21 @@ func TestBasicEndToEnd(t *testing.T) {
 		exists: true,
 	}
 
-	ingressManager := ingress.NewManager(p, ingressConfig, resolver)
+	// Pass nil for otelLogger - no log forwarding in tests
+	ingressManager := ingress.NewManager(p, ingressConfig, resolver, nil)
 
-	// Initialize ingress manager (starts Envoy)
-	t.Log("Starting Envoy...")
+	// Initialize ingress manager (starts Caddy)
+	t.Log("Starting Caddy...")
 	err = ingressManager.Initialize(ctx)
 	require.NoError(t, err, "Ingress manager should initialize successfully")
 
-	// Ensure we clean up Envoy
-	defer func() {
-		t.Log("Shutting down Envoy...")
+	// Ensure we clean up Caddy - use t.Cleanup for guaranteed cleanup even on test failures
+	t.Cleanup(func() {
+		t.Log("Shutting down Caddy...")
 		if err := ingressManager.Shutdown(); err != nil {
 			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
 		}
-	}()
+	})
 
 	// Create an ingress rule
 	t.Log("Creating ingress rule...")
@@ -399,14 +403,13 @@ func TestBasicEndToEnd(t *testing.T) {
 	require.NotNil(t, ing)
 	t.Logf("Ingress created: %s", ing.ID)
 
-	// Make HTTP request through Envoy to nginx with retry
-	// Envoy watches the xDS files and reloads automatically, but we retry to handle timing
-	// Envoy may take a few seconds to detect file changes and start the new listener
-	t.Log("Making HTTP request through Envoy to nginx...")
-	client := &http.Client{Timeout: 1 * time.Second}
+	// Make HTTP request through Caddy to nginx with retry
+	// Caddy reloads config dynamically via the admin API
+	t.Log("Making HTTP request through Caddy to nginx...")
+	client := &http.Client{Timeout: 2 * time.Second}
 	var resp *http.Response
 	var lastErr error
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", ingressPort), nil)
 		require.NoError(t, err)
@@ -418,27 +421,176 @@ func TestBasicEndToEnd(t *testing.T) {
 		}
 		if resp != nil {
 			resp.Body.Close()
+			resp = nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
-	// TODO: Fix test flake or ingress bug
-	if lastErr != nil || resp == nil {
-		t.Logf("Warning: HTTP request through Envoy did not succeed within deadline: %v", lastErr)
-	} else {
-		defer resp.Body.Close()
+	require.NoError(t, lastErr, "HTTP request through Caddy should succeed")
+	require.NotNil(t, resp, "HTTP response should not be nil")
+	defer resp.Body.Close()
 
-		// Verify we got a successful response from nginx
-		assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
+	// Verify we got a successful response from nginx
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Should get 200 OK from nginx")
 
-		// Read response body
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
-		t.Logf("Got response from nginx through Envoy: %d bytes", len(body))
-	}
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "nginx", "Response should contain nginx welcome page")
+	t.Logf("Got response from nginx through Caddy: %d bytes", len(body))
 	err = ingressManager.Delete(ctx, ing.ID)
 	require.NoError(t, err)
 	t.Log("Ingress deleted")
+
+	// Test TLS ingress (only if ACME is configured via environment variables or .env file)
+	// Try to load .env file from repository root (for local development)
+	cwd, _ := os.Getwd()
+	for dir := cwd; dir != "/"; dir = filepath.Dir(dir) {
+		envFile := filepath.Join(dir, ".env")
+		if _, err := os.Stat(envFile); err == nil {
+			_ = godotenv.Load(envFile)
+			t.Logf("Loaded .env from %s", envFile)
+			break
+		}
+	}
+
+	acmeEmail := os.Getenv("ACME_EMAIL")
+	acmeDNSProvider := os.Getenv("ACME_DNS_PROVIDER")
+	cloudflareToken := os.Getenv("CLOUDFLARE_API_TOKEN")
+	tlsTestDomain := os.Getenv("TLS_TEST_DOMAIN")
+	acmeCA := os.Getenv("ACME_CA")
+
+	if acmeEmail != "" && acmeDNSProvider == "cloudflare" && cloudflareToken != "" && tlsTestDomain != "" {
+		t.Log("Testing TLS ingress (ACME configured)...")
+
+		// Get random port for HTTPS
+		httpsListener, err := net.Listen("tcp", "0.0.0.0:0")
+		require.NoError(t, err)
+		httpsPort := httpsListener.Addr().(*net.TCPAddr).Port
+		httpsListener.Close()
+
+		// Get random port for TLS admin API
+		tlsAdminListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		tlsAdminPort := tlsAdminListener.Addr().(*net.TCPAddr).Port
+		tlsAdminListener.Close()
+
+		t.Logf("Using random ports for TLS test: https=%d, admin=%d", httpsPort, tlsAdminPort)
+
+		// Create a new ingress manager with ACME configuration
+		tlsIngressConfig := ingress.Config{
+			ListenAddress:  "0.0.0.0", // Must be accessible for certificate validation
+			AdminAddress:   "127.0.0.1",
+			AdminPort:      tlsAdminPort,
+			DNSPort:        0, // Use random port for testing
+			StopOnShutdown: true,
+			ACME: ingress.ACMEConfig{
+				Email:              acmeEmail,
+				DNSProvider:        ingress.DNSProviderCloudflare,
+				CA:                 acmeCA, // Use staging CA if set, otherwise production
+				CloudflareAPIToken: cloudflareToken,
+				AllowedDomains:     tlsTestDomain, // Allow the test domain
+			},
+		}
+
+		tlsIngressManager := ingress.NewManager(p, tlsIngressConfig, resolver, nil)
+
+		// Initialize TLS ingress manager (starts a new Caddy instance)
+		t.Log("Starting Caddy with TLS support...")
+		err = tlsIngressManager.Initialize(ctx)
+		require.NoError(t, err, "TLS ingress manager should initialize successfully")
+
+		// Use t.Cleanup for guaranteed cleanup even on test failures
+		t.Cleanup(func() {
+			t.Log("Shutting down TLS Caddy...")
+			if err := tlsIngressManager.Shutdown(); err != nil {
+				t.Logf("Warning: failed to shutdown TLS ingress manager: %v", err)
+			}
+		})
+
+		// Create TLS ingress rule
+		t.Logf("Creating TLS ingress rule for %s...", tlsTestDomain)
+		tlsIngressReq := ingress.CreateIngressRequest{
+			Name: "test-nginx-tls",
+			Rules: []ingress.IngressRule{
+				{
+					Match: ingress.IngressMatch{
+						Hostname: tlsTestDomain,
+						Port:     httpsPort,
+					},
+					Target: ingress.IngressTarget{
+						Instance: "test-nginx",
+						Port:     80,
+					},
+					TLS:          true,
+					RedirectHTTP: false, // Don't redirect, just test HTTPS
+				},
+			},
+		}
+
+		tlsIng, err := tlsIngressManager.Create(ctx, tlsIngressReq)
+		require.NoError(t, err)
+		require.NotNil(t, tlsIng)
+		t.Logf("TLS Ingress created: %s", tlsIng.ID)
+
+		// Wait for certificate to be issued (this can take 10-60 seconds with DNS-01)
+		// Caddy will automatically obtain the certificate when the first request comes in
+		t.Log("Making HTTPS request (certificate will be obtained on first request)...")
+
+		// Create HTTP client that trusts the staging CA (or skips verification for testing)
+		// ServerName sets the SNI (Server Name Indication) for the TLS handshake.
+		// This is required because we connect to 127.0.0.1 but Caddy needs to know
+		// which certificate to serve based on the hostname.
+		tlsClient := &http.Client{
+			Timeout: 90 * time.Second, // Long timeout for certificate issuance
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,          // Accept staging CA certs
+					ServerName:         tlsTestDomain, // Set SNI to match the certificate
+				},
+			},
+		}
+
+		var tlsResp *http.Response
+		var tlsLastErr error
+		tlsDeadline := time.Now().Add(90 * time.Second) // Allow up to 90s for cert issuance
+
+		for time.Now().Before(tlsDeadline) {
+			tlsReq, err := http.NewRequest("GET", fmt.Sprintf("https://127.0.0.1:%d/", httpsPort), nil)
+			require.NoError(t, err)
+			tlsReq.Host = tlsTestDomain // Set Host header to match ingress rule
+
+			tlsResp, tlsLastErr = tlsClient.Do(tlsReq)
+			if tlsLastErr == nil && tlsResp.StatusCode == http.StatusOK {
+				break
+			}
+			if tlsResp != nil {
+				tlsResp.Body.Close()
+				tlsResp = nil
+			}
+			t.Logf("TLS request attempt failed: %v (retrying...)", tlsLastErr)
+			time.Sleep(2 * time.Second)
+		}
+
+		require.NoError(t, tlsLastErr, "HTTPS request through Caddy should succeed")
+		require.NotNil(t, tlsResp, "HTTPS response should not be nil")
+		defer tlsResp.Body.Close()
+
+		// Verify we got a successful response from nginx over HTTPS
+		assert.Equal(t, http.StatusOK, tlsResp.StatusCode, "Should get 200 OK from nginx over HTTPS")
+
+		// Read response body
+		tlsBody, err := io.ReadAll(tlsResp.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(tlsBody), "nginx", "HTTPS response should contain nginx welcome page")
+		t.Logf("Got HTTPS response from nginx through Caddy: %d bytes", len(tlsBody))
+
+		// Clean up TLS ingress
+		err = tlsIngressManager.Delete(ctx, tlsIng.ID)
+		require.NoError(t, err)
+		t.Log("TLS Ingress deleted")
+	} else {
+		t.Log("Skipping TLS ingress test (ACME not configured). Set ACME_EMAIL, ACME_DNS_PROVIDER=cloudflare, CLOUDFLARE_API_TOKEN, and TLS_TEST_DOMAIN to enable.")
+	}
 
 	// Test volume is accessible from inside the guest via exec
 	t.Log("Testing volume from inside guest via exec...")

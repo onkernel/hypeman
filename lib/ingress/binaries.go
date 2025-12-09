@@ -1,60 +1,76 @@
 package ingress
 
 import (
-	"embed"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-//go:embed binaries/envoy/v1.36/x86_64/envoy
-//go:embed binaries/envoy/v1.36/aarch64/envoy
-var envoyBinaryFS embed.FS
+// CaddyVersion is the version of Caddy embedded in this build.
+const CaddyVersion = "v2.10.2"
 
-// EnvoyVersion is the version of Envoy embedded in this build.
-const EnvoyVersion = "v1.36"
+// caddyBinaryFS and caddyArch are defined in architecture-specific files:
+// - binaries_amd64.go (for x86_64)
+// - binaries_arm64.go (for aarch64)
 
-// ExtractEnvoyBinary extracts the embedded Envoy binary to the data directory.
+// ExtractCaddyBinary extracts the embedded Caddy binary to the data directory.
 // Returns the path to the extracted binary.
-func ExtractEnvoyBinary(p *paths.Paths) (string, error) {
-	arch := runtime.GOARCH
-	if arch == "amd64" {
-		arch = "x86_64"
-	} else if arch == "arm64" {
-		arch = "aarch64"
+// If the binary already exists but doesn't match the embedded version (e.g., after
+// rebuilding with different modules), it will be re-extracted.
+func ExtractCaddyBinary(p *paths.Paths) (string, error) {
+	embeddedPath := fmt.Sprintf("binaries/caddy/%s/%s/caddy", CaddyVersion, caddyArch)
+	extractPath := p.CaddyBinary(CaddyVersion, caddyArch)
+	hashPath := extractPath + ".sha256"
+
+	// Read embedded binary
+	data, err := caddyBinaryFS.ReadFile(embeddedPath)
+	if err != nil {
+		return "", fmt.Errorf("read embedded caddy binary: %w", err)
 	}
 
-	embeddedPath := fmt.Sprintf("binaries/envoy/%s/%s/envoy", EnvoyVersion, arch)
-	extractPath := p.EnvoyBinary(EnvoyVersion, arch)
+	// Compute hash of embedded binary
+	hash := sha256.Sum256(data)
+	embeddedHash := hex.EncodeToString(hash[:])
 
-	// Check if already extracted
+	// Check if already extracted with matching hash
 	if _, err := os.Stat(extractPath); err == nil {
-		return extractPath, nil
+		// Binary exists, check if hash matches
+		if storedHash, err := os.ReadFile(hashPath); err == nil {
+			if string(storedHash) == embeddedHash {
+				// Hash matches, use existing binary
+				return extractPath, nil
+			}
+			// Hash mismatch - need to re-extract (binary was rebuilt with different modules)
+		}
+		// No hash file or mismatch - re-extract
 	}
 
 	// Create directory
 	if err := os.MkdirAll(filepath.Dir(extractPath), 0755); err != nil {
-		return "", fmt.Errorf("create envoy binary dir: %w", err)
+		return "", fmt.Errorf("create caddy binary dir: %w", err)
 	}
 
-	// Read embedded binary
-	data, err := envoyBinaryFS.ReadFile(embeddedPath)
-	if err != nil {
-		return "", fmt.Errorf("read embedded envoy binary: %w", err)
-	}
-
-	// Write to filesystem
+	// Write binary to filesystem
 	if err := os.WriteFile(extractPath, data, 0755); err != nil {
-		return "", fmt.Errorf("write envoy binary: %w", err)
+		return "", fmt.Errorf("write caddy binary: %w", err)
+	}
+
+	// Write hash file for future comparisons
+	if err := os.WriteFile(hashPath, []byte(embeddedHash), 0644); err != nil {
+		// Non-fatal - binary is extracted, just won't have hash for next time
+		// This could cause unnecessary re-extractions but won't break functionality
+		slog.Info("failed to write caddy binary hash file", "path", hashPath, "error", err)
 	}
 
 	return extractPath, nil
 }
 
-// GetEnvoyBinaryPath returns path to extracted binary, extracting if needed.
-func GetEnvoyBinaryPath(p *paths.Paths) (string, error) {
-	return ExtractEnvoyBinary(p)
+// GetCaddyBinaryPath returns path to extracted binary, extracting if needed.
+func GetCaddyBinaryPath(p *paths.Paths) (string, error) {
+	return ExtractCaddyBinary(p)
 }

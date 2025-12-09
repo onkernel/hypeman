@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
@@ -122,23 +123,45 @@ func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Reg
 }
 
 // ProvideIngressManager provides the ingress manager
-func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
+func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) (ingress.Manager, error) {
+	// Parse DNS provider - fail if invalid
+	dnsProvider, err := ingress.ParseDNSProvider(cfg.AcmeDnsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ACME_DNS_PROVIDER: %w", err)
+	}
+
+	// Validate DNS propagation timeout if set (must be a valid Go duration string)
+	if cfg.DnsPropagationTimeout != "" {
+		if _, err := time.ParseDuration(cfg.DnsPropagationTimeout); err != nil {
+			return nil, fmt.Errorf("invalid DNS_PROPAGATION_TIMEOUT %q: %w (expected format like '2m', '120s', '1h')", cfg.DnsPropagationTimeout, err)
+		}
+	}
+
 	ingressConfig := ingress.Config{
-		ListenAddress:  cfg.EnvoyListenAddress,
-		AdminAddress:   cfg.EnvoyAdminAddress,
-		AdminPort:      cfg.EnvoyAdminPort,
-		StopOnShutdown: cfg.EnvoyStopOnShutdown,
-		OTEL: ingress.OTELConfig{
-			Enabled:           cfg.OtelEnabled,
-			Endpoint:          cfg.OtelEndpoint,
-			ServiceName:       cfg.OtelServiceName + "-envoy",
-			ServiceInstanceID: cfg.OtelServiceInstanceID,
-			Insecure:          cfg.OtelInsecure,
-			Environment:       cfg.Env,
+		ListenAddress:  cfg.CaddyListenAddress,
+		AdminAddress:   cfg.CaddyAdminAddress,
+		AdminPort:      cfg.CaddyAdminPort,
+		DNSPort:        ingress.DefaultDNSPort,
+		StopOnShutdown: cfg.CaddyStopOnShutdown,
+		ACME: ingress.ACMEConfig{
+			Email:                 cfg.AcmeEmail,
+			DNSProvider:           dnsProvider,
+			CA:                    cfg.AcmeCA,
+			DNSPropagationTimeout: cfg.DnsPropagationTimeout,
+			DNSResolvers:          cfg.DnsResolvers,
+			AllowedDomains:        cfg.TlsAllowedDomains,
+			CloudflareAPIToken:    cfg.CloudflareApiToken,
 		},
+	}
+
+	// Create OTEL logger for Caddy log forwarding (if OTEL is enabled)
+	var otelLogger *slog.Logger
+	if otelHandler := hypemanotel.GetGlobalLogHandler(); otelHandler != nil {
+		logCfg := logger.NewConfig()
+		otelLogger = logger.NewSubsystemLogger(logger.SubsystemCaddy, logCfg, otelHandler)
 	}
 
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
-	return ingress.NewManager(p, ingressConfig, resolver)
+	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
 }

@@ -1,6 +1,11 @@
 package ingress
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // Common errors returned by the ingress package.
 var (
@@ -19,13 +24,35 @@ var (
 	// ErrInstanceNoNetwork is returned when the target instance has no network.
 	ErrInstanceNoNetwork = errors.New("target instance has no network configured")
 
-	// ErrEnvoyNotRunning is returned when Envoy is not running.
-	ErrEnvoyNotRunning = errors.New("envoy is not running")
-
 	// ErrHostnameInUse is returned when a hostname is already in use by another ingress.
 	ErrHostnameInUse = errors.New("hostname already in use by another ingress")
 
-	// ErrConfigValidationFailed is returned when Envoy config validation fails.
-	// This indicates a server-side bug since input validation should catch user errors.
-	ErrConfigValidationFailed = errors.New("internal error: config validation failed")
+	// ErrConfigValidationFailed is returned when Caddy config validation fails.
+	// This indicates the config was rejected by Caddy's admin API.
+	ErrConfigValidationFailed = errors.New("config validation failed")
+
+	// ErrPortInUse is returned when the requested port is already in use by another process.
+	ErrPortInUse = errors.New("port already in use")
+
+	// ErrDomainNotAllowed is returned when a TLS ingress is requested for a domain not in the allowed list.
+	ErrDomainNotAllowed = errors.New("domain not allowed for TLS")
+
+	// ErrAmbiguousName is returned when a lookup matches multiple ingresses.
+	ErrAmbiguousName = errors.New("ambiguous ingress identifier matches multiple ingresses")
 )
+
+// portInUseRegex matches Caddy's "address already in use" error messages
+var portInUseRegex = regexp.MustCompile(`listen tcp [^:]+:(\d+): bind: address already in use`)
+
+// ParseCaddyError parses a Caddy error response and returns a more specific error if possible.
+func ParseCaddyError(caddyError string) error {
+	// Check for "address already in use" errors
+	if strings.Contains(caddyError, "address already in use") {
+		if matches := portInUseRegex.FindStringSubmatch(caddyError); len(matches) > 1 {
+			return fmt.Errorf("%w: port %s is already bound by another process", ErrPortInUse, matches[1])
+		}
+		return fmt.Errorf("%w: address is already bound by another process", ErrPortInUse)
+	}
+
+	return nil
+}

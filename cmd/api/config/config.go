@@ -84,11 +84,22 @@ type Config struct {
 	// Logging configuration
 	LogLevel string // Default log level (debug, info, warn, error)
 
-	// Envoy / Ingress configuration
-	EnvoyListenAddress  string // Address for Envoy to listen on (default: 0.0.0.0)
-	EnvoyAdminAddress   string // Address for Envoy admin API (default: 127.0.0.1)
-	EnvoyAdminPort      int    // Port for Envoy admin API (default: 9901)
-	EnvoyStopOnShutdown bool   // Stop Envoy when hypeman shuts down (default: false)
+	// Caddy / Ingress configuration
+	CaddyListenAddress  string // Address for Caddy to listen on
+	CaddyAdminAddress   string // Address for Caddy admin API
+	CaddyAdminPort      int    // Port for Caddy admin API
+	CaddyStopOnShutdown bool   // Stop Caddy when hypeman shuts down
+
+	// ACME / TLS configuration
+	AcmeEmail             string // ACME account email (required for TLS ingresses)
+	AcmeDnsProvider       string // DNS provider: "cloudflare"
+	AcmeCA                string // ACME CA URL (empty = Let's Encrypt production)
+	DnsPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
+	DnsResolvers          string // Comma-separated DNS resolvers for propagation checking
+	TlsAllowedDomains     string // Comma-separated list of allowed domain patterns for TLS (e.g., "*.example.com,api.example.com")
+
+	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
+	CloudflareApiToken string // Cloudflare API token
 }
 
 // Load loads configuration from environment variables
@@ -133,13 +144,22 @@ func Load() *Config {
 		// Logging configuration
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
-		// Envoy / Ingress configuration
-		EnvoyListenAddress: getEnv("ENVOY_LISTEN_ADDRESS", "0.0.0.0"),
-		EnvoyAdminAddress:  getEnv("ENVOY_ADMIN_ADDRESS", "127.0.0.1"),
-		EnvoyAdminPort:     getEnvInt("ENVOY_ADMIN_PORT", 9901),
-		// For production, set to false
-		// allows for updating hypeman without restarting envoy
-		EnvoyStopOnShutdown: getEnvBool("ENVOY_STOP_ON_SHUTDOWN", true),
+		// Caddy / Ingress configuration
+		CaddyListenAddress:  getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
+		CaddyAdminAddress:   getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
+		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 0), // 0 = random port to prevent conflicts on shared dev machines
+		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", false),
+
+		// ACME / TLS configuration
+		AcmeEmail:             getEnv("ACME_EMAIL", ""),
+		AcmeDnsProvider:       getEnv("ACME_DNS_PROVIDER", ""),
+		AcmeCA:                getEnv("ACME_CA", ""),
+		DnsPropagationTimeout: getEnv("DNS_PROPAGATION_TIMEOUT", ""),
+		DnsResolvers:          getEnv("DNS_RESOLVERS", ""),
+		TlsAllowedDomains:     getEnv("TLS_ALLOWED_DOMAINS", ""), // Empty = no TLS domains allowed
+
+		// Cloudflare configuration
+		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
 	}
 
 	return cfg
