@@ -23,10 +23,11 @@ CONFIG_FILE="${CONFIG_DIR}/config"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
+# Colors for output (true color)
+RED='\033[38;2;255;110;110m'
+GREEN='\033[38;2;92;190;83m'
 YELLOW='\033[0;33m'
+PURPLE='\033[38;2;172;134;249m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -229,6 +230,16 @@ $SUDO systemctl start "$SERVICE_NAME"
 # =============================================================================
 
 echo ""
+echo -e "${PURPLE}"
+cat << 'EOF'
+ ██╗  ██╗  ██╗   ██╗  ██████╗   ███████╗  ███╗   ███╗   █████╗   ███╗   ██╗
+ ██║  ██║  ╚██╗ ██╔╝  ██╔══██╗  ██╔════╝  ████╗ ████║  ██╔══██╗  ████╗  ██║
+ ███████║   ╚████╔╝   ██████╔╝  █████╗    ██╔████╔██║  ███████║  ██╔██╗ ██║
+ ██╔══██║    ╚██╔╝    ██╔═══╝   ██╔══╝    ██║╚██╔╝██║  ██╔══██║  ██║╚██╗██║
+ ██║  ██║     ██║     ██║       ███████╗  ██║ ╚═╝ ██║  ██║  ██║  ██║ ╚████║
+ ╚═╝  ╚═╝     ╚═╝     ╚═╝       ╚══════╝  ╚═╝     ╚═╝  ╚═╝  ╚═╝  ╚═╝  ╚═══╝
+EOF
+echo -e "${NC}"
 info "Hypeman API ${VERSION} installed successfully!"
 echo ""
 echo "  Binary:      ${INSTALL_DIR}/${BINARY_NAME}"
@@ -237,13 +248,12 @@ echo "  Config:      ${CONFIG_FILE}"
 echo "  Data:        ${DATA_DIR}"
 echo "  Service:     ${SERVICE_NAME}.service"
 echo ""
-echo "Useful commands:"
-echo "  hypeman-token -user-id myapp             # Generate a JWT token"
-echo "  sudo systemctl status ${SERVICE_NAME}    # Check service status"
-echo "  sudo systemctl restart ${SERVICE_NAME}   # Restart after config changes"
-echo "  sudo journalctl -u ${SERVICE_NAME} -f    # View logs"
 echo ""
 echo "Next steps:"
-echo "  1. Edit ${CONFIG_FILE} to configure your installation"
-echo "  2. Restart the service: sudo systemctl restart ${SERVICE_NAME}"
+echo "  - (Optional) Edit ${CONFIG_FILE} to configure your installation"
+echo ""
+echo "Get Started:"
+echo "╭────────────────────────────────────────────────────────────────────╮"
+echo "│  Install the Hypeman CLI: https://github.com/onkernel/hypeman-cli  │"
+echo "╰────────────────────────────────────────────────────────────────────╯"
 echo ""
