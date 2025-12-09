@@ -112,24 +112,40 @@ if [ -n "$BRANCH" ]; then
     info "Building from source (branch: $BRANCH)..."
     
     BUILD_DIR="${TMP_DIR}/hypeman"
-    git clone --branch "$BRANCH" --depth 1 "https://github.com/${REPO}.git" "$BUILD_DIR"
+    BUILD_LOG="${TMP_DIR}/build.log"
+    
+    # Clone repo (quiet)
+    if ! git clone --branch "$BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$BUILD_DIR" 2>&1 | tee -a "$BUILD_LOG"; then
+        error "Failed to clone repository. Build log:\n$(cat "$BUILD_LOG")"
+    fi
     
     info "Building binaries (this may take a few minutes)..."
     cd "$BUILD_DIR"
     
-    # Build main binary (includes dependencies)
-    make build
+    # Build main binary (includes dependencies) - capture output, show on error
+    if ! make build >> "$BUILD_LOG" 2>&1; then
+        echo ""
+        echo -e "${RED}Build failed. Full build log:${NC}"
+        cat "$BUILD_LOG"
+        error "Build failed"
+    fi
     cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
     
     # Build hypeman-token (not included in make build)
-    info "Building hypeman-token..."
-    go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt
+    if ! go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
+        echo ""
+        echo -e "${RED}Build failed. Full build log:${NC}"
+        cat "$BUILD_LOG"
+        error "Failed to build hypeman-token"
+    fi
     
     # Copy .env.example for config template
     cp ".env.example" "${TMP_DIR}/.env.example"
     
     VERSION="$BRANCH (source)"
     cd - > /dev/null
+    
+    info "Build complete"
 else
     # Download release mode
     if [ -z "$VERSION" ]; then
