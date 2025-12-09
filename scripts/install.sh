@@ -401,6 +401,7 @@ echo "╭───────────────────────�
 echo "│  hypeman pull nginx:alpine               │"
 echo "│  hypeman run nginx:alpine                │"
 echo "│  hypeman logs <instance-id>              │"
+echo "│  hypeman exec -it <instance-id> /bin/sh  │"
 echo "│  hypeman --help                          │"
 echo "╰──────────────────────────────────────────╯"
 echo ""
