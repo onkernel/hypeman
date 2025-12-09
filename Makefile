@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -200,3 +200,8 @@ clean:
 	rm -f lib/exec/exec.pb.go
 	rm -f lib/exec/exec_grpc.pb.go
 	rm -f lib/system/exec_agent/exec-agent
+
+# Prepare for release build (called by GoReleaser)
+# Downloads all embedded binaries and builds embedded components
+release-prep: download-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
+	go mod tidy
