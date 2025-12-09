@@ -47,9 +47,13 @@ if [ "$EUID" -ne 0 ]; then
     if ! command -v sudo >/dev/null 2>&1; then
         error "This script requires root privileges. Please run as root or install sudo."
     fi
-    info "Requesting sudo privileges..."
-    if ! sudo -v; then
-        error "Failed to obtain sudo privileges"
+    # Try passwordless sudo first, then prompt from terminal if needed
+    if ! sudo -n true 2>/dev/null; then
+        info "Requesting sudo privileges..."
+        # Read password from /dev/tty (terminal) even when script is piped
+        if ! sudo -v < /dev/tty; then
+            error "Failed to obtain sudo privileges"
+        fi
     fi
     SUDO="sudo"
 fi
@@ -182,6 +186,11 @@ if [ ! -f "$CONFIG_FILE" ]; then
     
     info "Installing config file at ${CONFIG_FILE}..."
     $SUDO install -m 600 "${TMP_DIR}/config" "$CONFIG_FILE"
+    
+    # Give ownership to the installing user so they can read the config for CLI
+    if [ -n "$SUDO_USER" ]; then
+        $SUDO chown "$SUDO_USER" "$CONFIG_FILE"
+    fi
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
 fi
