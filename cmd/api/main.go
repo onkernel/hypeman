@@ -157,6 +157,8 @@ func run() error {
 		logger.Warn("failed to list instances for TAP cleanup, skipping cleanup", "error", err)
 		preserveTAPs = nil
 	} else {
+		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
+		preserveTAPs = []string{}
 		for _, inst := range allInstances {
 			if inst.State == instances.StateRunning || inst.State == instances.StateUnknown {
 				preserveTAPs = append(preserveTAPs, inst.Id)
