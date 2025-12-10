@@ -214,6 +214,16 @@ Docker itself isn't required to be installed. `~/.docker/config.json` is a stand
 ```bash
 make build
 ```
+
+**First-time build:** The first build downloads Cloud Hypervisor binaries (~100MB) and builds Caddy with DNS plugins using xcaddy (compiles from source, takes a few minutes). Subsequent builds are fast.
+
+**Optional:** To pre-install all dev tools explicitly:
+```bash
+make install-tools
+```
+
+This installs oapi-codegen, air, wire, godotenv, and xcaddy to `./bin/`. These are also installed lazily when needed.
+
 ### Running the Server
 
 1. Generate a JWT token for testing (optional):
@@ -271,7 +281,9 @@ Network tests require elevated permissions to create bridges and TAP devices.
 make test
 ```
 
-The test command compiles test binaries, grants capabilities via `sudo setcap`, then runs tests as the current user (not root). You may be prompted for your sudo password during the capability grant step.
+**Note:** The first test run will also download/build any missing binaries (Cloud Hypervisor, Caddy, exec-agent).
+
+Tests run with `sudo` to enable network capabilities for bridge/TAP device creation. You may be prompted for your sudo password.
 
 ### Building the Preview CLI
 
