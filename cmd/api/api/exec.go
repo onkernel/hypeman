@@ -138,7 +138,11 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 			"duration_ms", duration.Milliseconds(),
 		)
 		// Send error message over WebSocket before closing
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: %v", err)))
+		// Use BinaryMessage so the CLI writes it to stdout (it ignores TextMessage for output)
+		// Use \r\n so it displays properly when client terminal is in raw mode
+		ws.WriteMessage(websocket.BinaryMessage, []byte(fmt.Sprintf("Error: %v\r\n", err)))
+		// Send exit code 127 (command not found - standard Unix convention)
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"exitCode":127}`))
 		return
 	}
 
@@ -199,4 +203,3 @@ func (w *wsReadWriter) Write(p []byte) (n int, err error) {
 	}
 	return len(p), nil
 }
-
