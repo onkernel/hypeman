@@ -20,6 +20,7 @@ import (
 type InstanceLogHandler struct {
 	slog.Handler
 	logPathFunc func(id string) string // returns path to hypeman.log for an instance
+	preAttrs    []slog.Attr            // attrs added via WithAttrs (needed to find "id")
 }
 
 // NewInstanceLogHandler creates a new handler that wraps the given handler
@@ -40,8 +41,16 @@ func (h *InstanceLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		return err
 	}
 
-	// Check for instance ID in attributes
+	// Check for instance ID in pre-bound attrs first (from WithAttrs)
 	var instanceID string
+	for _, a := range h.preAttrs {
+		if a.Key == "id" {
+			instanceID = a.Value.String()
+			break
+		}
+	}
+
+	// Then check record attrs (overrides pre-bound if present)
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "id" {
 			instanceID = a.Value.String()
@@ -72,7 +81,13 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 	msg := r.Message
 
 	// Collect attributes (excluding "id" since it's implicit)
+	// Include both pre-bound attrs and record attrs
 	var attrs []string
+	for _, a := range h.preAttrs {
+		if a.Key != "id" {
+			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
+		}
+	}
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key != "id" {
 			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
@@ -115,17 +130,27 @@ func (h *InstanceLogHandler) Enabled(ctx context.Context, level slog.Level) bool
 }
 
 // WithAttrs returns a new handler with the given attributes.
+// Tracks attrs locally so we can find "id" even when added via With().
 func (h *InstanceLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	// Combine existing pre-attrs with new ones
+	newPreAttrs := make([]slog.Attr, len(h.preAttrs), len(h.preAttrs)+len(attrs))
+	copy(newPreAttrs, h.preAttrs)
+	newPreAttrs = append(newPreAttrs, attrs...)
+
 	return &InstanceLogHandler{
 		Handler:     h.Handler.WithAttrs(attrs),
 		logPathFunc: h.logPathFunc,
+		preAttrs:    newPreAttrs,
 	}
 }
 
 // WithGroup returns a new handler with the given group name.
 func (h *InstanceLogHandler) WithGroup(name string) slog.Handler {
+	// Note: We don't track groups for "id" lookup since instance IDs
+	// should always be at the top level, not nested in groups.
 	return &InstanceLogHandler{
 		Handler:     h.Handler.WithGroup(name),
 		logPathFunc: h.logPathFunc,
+		preAttrs:    h.preAttrs,
 	}
 }
