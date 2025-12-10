@@ -62,7 +62,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	m.recordTAPOperation(ctx, "create")
 
 	log.InfoContext(ctx, "allocated network",
-		"id", req.InstanceID,
+		"instance_id", req.InstanceID,
 		"instance_name", req.InstanceName,
 		"network", "default",
 		"ip", ip,
@@ -115,7 +115,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) err
 	m.recordTAPOperation(ctx, "create")
 
 	log.InfoContext(ctx, "recreated network for restore",
-		"id", instanceID,
+		"instance_id", instanceID,
 		"network", "default",
 		"tap", alloc.TAPDevice)
 
@@ -145,7 +145,7 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	}
 
 	log.InfoContext(ctx, "released network",
-		"id", alloc.InstanceID,
+		"instance_id", alloc.InstanceID,
 		"network", alloc.Network,
 		"ip", alloc.IP)
 

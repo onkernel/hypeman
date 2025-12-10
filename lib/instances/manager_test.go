@@ -983,3 +983,11 @@ func (r *testInstanceResolver) ResolveInstanceIP(ctx context.Context, nameOrID s
 func (r *testInstanceResolver) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
 	return r.exists, nil
 }
+
+func (r *testInstanceResolver) ResolveInstance(ctx context.Context, nameOrID string) (string, string, error) {
+	if !r.exists {
+		return "", "", fmt.Errorf("instance not found: %s", nameOrID)
+	}
+	// For tests, just return nameOrID as both name and id
+	return nameOrID, nameOrID, nil
+}

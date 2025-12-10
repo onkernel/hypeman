@@ -108,8 +108,13 @@ func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http
 				Resource: resource,
 			})
 
-			// Enrich logger with resolved ID
-			log := logger.FromContext(ctx).With("id", resolvedID)
+			// Enrich logger with resource-specific key
+			// Use "image_name" for images (keyed by OCI reference), "<type>_id" for others
+			logKey := resourceType + "_id"
+			if resourceType == "image" {
+				logKey = "image_name"
+			}
+			log := logger.FromContext(ctx).With(logKey, resolvedID)
 			ctx = logger.AddToContext(ctx, log)
 
 			next.ServeHTTP(w, r.WithContext(ctx))

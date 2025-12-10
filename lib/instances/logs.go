@@ -34,7 +34,7 @@ var ErrLogNotFound = fmt.Errorf("log file not found")
 // Returns last N lines, then continues following if follow=true
 func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error) {
 	log := logger.FromContext(ctx)
-	log.DebugContext(ctx, "starting log stream", "id", id, "tail", tail, "follow", follow, "source", source)
+	log.DebugContext(ctx, "starting log stream", "instance_id", id, "tail", tail, "follow", follow, "source", source)
 
 	// Verify tail command is available
 	if _, err := exec.LookPath("tail"); err != nil {
@@ -92,14 +92,14 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 		for scanner.Scan() {
 			select {
 			case <-ctx.Done():
-				log.DebugContext(ctx, "log stream cancelled", "id", id)
+				log.DebugContext(ctx, "log stream cancelled", "instance_id", id)
 				return
 			case out <- scanner.Text():
 			}
 		}
 
 		if err := scanner.Err(); err != nil {
-			log.ErrorContext(ctx, "scanner error", "id", id, "error", err)
+			log.ErrorContext(ctx, "scanner error", "instance_id", id, "error", err)
 		}
 
 		// Wait for tail to exit (important for non-follow mode)

@@ -36,12 +36,12 @@ ctx = logger.AddToContext(ctx, log)
 
 // Retrieve from context
 log = logger.FromContext(ctx)
-log.InfoContext(ctx, "instance created", "id", instanceID)
+log.InfoContext(ctx, "instance created", "instance_id", instanceID)
 ```
 
 ## Per-Instance Logging
 
-The `InstanceLogHandler` automatically writes logs with an `"id"` attribute to per-instance `hypeman.log` files. This provides an operations audit trail for each VM.
+The `InstanceLogHandler` automatically writes logs with an `"instance_id"` attribute to per-instance `hypeman.log` files. This provides an operations audit trail for each VM.
 
 ```go
 // Wrap any handler with instance logging
@@ -49,8 +49,12 @@ handler := logger.NewInstanceLogHandler(baseHandler, func(id string) string {
     return paths.InstanceHypemanLog(id)
 })
 
-// Logs with "id" attribute are automatically written to that instance's hypeman.log
-log.InfoContext(ctx, "starting VM", "id", instanceID)
+// Logs with "instance_id" attribute are automatically written to that instance's hypeman.log
+log.InfoContext(ctx, "starting VM", "instance_id", instanceID)
+
+// Related operations (e.g., ingress creation) can also include instance_id
+// to appear in the instance's audit log
+log.InfoContext(ctx, "ingress created", "ingress_id", ingressID, "instance_id", targetInstance)
 ```
 
 ## Output
@@ -64,7 +68,7 @@ When OTel tracing is active, logs include trace context:
   "subsystem": "INSTANCES",
   "trace_id": "abc123...",
   "span_id": "def456...",
-  "id": "instance-123"
+  "instance_id": "instance-123"
 }
 ```
 

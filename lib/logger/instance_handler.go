@@ -44,7 +44,7 @@ func (h *InstanceLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Check for instance ID in pre-bound attrs first (from WithAttrs)
 	var instanceID string
 	for _, a := range h.preAttrs {
-		if a.Key == "id" {
+		if a.Key == "instance_id" {
 			instanceID = a.Value.String()
 			break
 		}
@@ -52,7 +52,7 @@ func (h *InstanceLogHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	// Then check record attrs (overrides pre-bound if present)
 	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "id" {
+		if a.Key == "instance_id" {
 			instanceID = a.Value.String()
 			return false // stop iteration
 		}
@@ -88,16 +88,16 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 	level := r.Level.String()
 	msg := r.Message
 
-	// Collect attributes (excluding "id" since it's implicit)
+	// Collect attributes (excluding "instance_id" since it's implicit)
 	// Include both pre-bound attrs and record attrs
 	var attrs []string
 	for _, a := range h.preAttrs {
-		if a.Key != "id" {
+		if a.Key != "instance_id" {
 			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
 		}
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		if a.Key != "id" {
+		if a.Key != "instance_id" {
 			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
 		}
 		return true
