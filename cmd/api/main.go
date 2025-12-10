@@ -219,6 +219,7 @@ func run() error {
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
@@ -272,6 +273,10 @@ func run() error {
 			ErrorHandler: mw.OapiErrorHandler,
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
+
+		// Resource resolver middleware - resolves IDs/names/prefixes before handlers
+		// Enriches context with resolved resource and logger with resolved ID
+		r.Use(mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder))
 
 		// Setup strict handler
 		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)

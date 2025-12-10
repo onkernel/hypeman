@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 )
 
 var upgrader = websocket.Upgrader{
@@ -36,24 +36,14 @@ type ExecRequest struct {
 }
 
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	log := logger.FromContext(ctx)
 	startTime := time.Now()
+	log := logger.FromContext(ctx)
 
-	instanceID := chi.URLParam(r, "id")
-
-	// Get instance
-	inst, err := s.InstanceManager.GetInstance(ctx, instanceID)
-	if err != nil {
-		if err == instances.ErrNotFound {
-			http.Error(w, `{"code":"not_found","message":"instance not found"}`, http.StatusNotFound)
-			return
-		}
-		log.ErrorContext(ctx, "failed to get instance", "error", err)
-		http.Error(w, `{"code":"internal_error","message":"failed to get instance"}`, http.StatusInternalServerError)
-		return
-	}
+	// Get instance resolved by middleware
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 
 	if inst.State != instances.StateRunning {
 		http.Error(w, fmt.Sprintf(`{"code":"invalid_state","message":"instance must be running (current state: %s)"}`, inst.State), http.StatusConflict)

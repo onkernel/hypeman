@@ -153,7 +153,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 
 	// Cleanup
 	t.Log("Cleaning up instance...")
-	delResp, err := svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{
+	delResp, err := svc.DeleteInstance(ctxWithInstance(svc, inst.Id), oapi.DeleteInstanceRequestObject{
 		Id: inst.Id,
 	})
 	require.NoError(t, err)
@@ -212,7 +212,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// Cleanup on exit
 	t.Cleanup(func() {
 		t.Log("Cleaning up instance...")
-		svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{Id: inst.Id})
+		svc.DeleteInstance(ctxWithInstance(svc, inst.Id), oapi.DeleteInstanceRequestObject{Id: inst.Id})
 	})
 
 	// Get actual instance to access vsock fields

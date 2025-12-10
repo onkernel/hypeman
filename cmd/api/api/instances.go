@@ -10,6 +10,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/samber/lo"
@@ -172,64 +173,22 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 // GetInstance gets instance details
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRequestObject) (oapi.GetInstanceResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	inst, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.GetInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.GetInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.GetInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
 // DeleteInstance stops and deletes an instance
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	log := logger.FromContext(ctx)
 
-	// Resolve to get the actual instance ID
-	inst, err := s.InstanceManager.GetInstance(ctx, request.Id)
+	err := s.InstanceManager.DeleteInstance(ctx, inst.Id)
 	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.DeleteInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.DeleteInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.DeleteInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	err = s.InstanceManager.DeleteInstance(ctx, inst.Id)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to delete instance", "error", err, "id", inst.Id)
+		log.ErrorContext(ctx, "failed to delete instance", "error", err)
 		return oapi.DeleteInstance500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to delete instance",
@@ -240,33 +199,12 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyInstanceRequestObject) (oapi.StandbyInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	log := logger.FromContext(ctx)
 
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.StandbyInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.StandbyInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.StandbyInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	inst, err := s.InstanceManager.StandbyInstance(ctx, resolved.Id)
+	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):
@@ -275,45 +213,24 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 				Message: err.Error(),
 			}, nil
 		default:
-			log.ErrorContext(ctx, "failed to standby instance", "error", err, "id", resolved.Id)
+			log.ErrorContext(ctx, "failed to standby instance", "error", err)
 			return oapi.StandbyInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to standby instance",
 			}, nil
 		}
 	}
-	return oapi.StandbyInstance200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.StandbyInstance200JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // RestoreInstance restores an instance from standby
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreInstanceRequestObject) (oapi.RestoreInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	log := logger.FromContext(ctx)
 
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.RestoreInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.RestoreInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.RestoreInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	inst, err := s.InstanceManager.RestoreInstance(ctx, resolved.Id)
+	result, err := s.InstanceManager.RestoreInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):
@@ -322,45 +239,24 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Message: err.Error(),
 			}, nil
 		default:
-			log.ErrorContext(ctx, "failed to restore instance", "error", err, "id", resolved.Id)
+			log.ErrorContext(ctx, "failed to restore instance", "error", err)
 			return oapi.RestoreInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to restore instance",
 			}, nil
 		}
 	}
-	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // StopInstance gracefully stops a running instance
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstanceRequestObject) (oapi.StopInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	log := logger.FromContext(ctx)
 
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.StopInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.StopInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.StopInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	inst, err := s.InstanceManager.StopInstance(ctx, resolved.Id)
+	result, err := s.InstanceManager.StopInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):
@@ -369,45 +265,24 @@ func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstance
 				Message: err.Error(),
 			}, nil
 		default:
-			log.ErrorContext(ctx, "failed to stop instance", "error", err, "id", resolved.Id)
+			log.ErrorContext(ctx, "failed to stop instance", "error", err)
 			return oapi.StopInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to stop instance",
 			}, nil
 		}
 	}
-	return oapi.StopInstance200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.StopInstance200JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // StartInstance starts a stopped instance
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstanceRequestObject) (oapi.StartInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	log := logger.FromContext(ctx)
 
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.StartInstance404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.StartInstance404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
-			return oapi.StartInstance500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	inst, err := s.InstanceManager.StartInstance(ctx, resolved.Id)
+	result, err := s.InstanceManager.StartInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):
@@ -416,14 +291,14 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 				Message: err.Error(),
 			}, nil
 		default:
-			log.ErrorContext(ctx, "failed to start instance", "error", err, "id", resolved.Id)
+			log.ErrorContext(ctx, "failed to start instance", "error", err)
 			return oapi.StartInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to start instance",
 			}, nil
 		}
 	}
-	return oapi.StartInstance200JSONResponse(instanceToOAPI(*inst)), nil
+	return oapi.StartInstance200JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
@@ -455,7 +330,10 @@ func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) 
 // With follow=false (default), streams last N lines then closes
 // With follow=true, streams last N lines then continues following new output
 // The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+
 	tail := 100
 	if request.Params.Tail != nil {
 		tail = *request.Params.Tail
@@ -479,29 +357,7 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 		}
 	}
 
-	// Resolve to get the actual instance ID
-	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.GetInstanceLogs404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrAmbiguousName):
-			return oapi.GetInstanceLogs404JSONResponse{
-				Code:    "ambiguous",
-				Message: "multiple instances match, use full instance ID",
-			}, nil
-		default:
-			return oapi.GetInstanceLogs500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance",
-			}, nil
-		}
-	}
-
-	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, resolved.Id, tail, follow, source)
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, inst.Id, tail, follow, source)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrTailNotFound):

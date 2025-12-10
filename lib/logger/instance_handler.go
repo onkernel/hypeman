@@ -75,6 +75,14 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 		return
 	}
 
+	// Check if the instance directory exists - if not, this "id" isn't an instance ID
+	// (could be an ingress ID, volume ID, etc.). Skip to avoid creating orphan directories.
+	dir := filepath.Dir(logPath)
+	instanceDir := filepath.Dir(dir) // logs dir -> instance dir
+	if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
+		return // not a valid instance, skip silently
+	}
+
 	// Format log line: timestamp LEVEL message key=value key=value...
 	timestamp := r.Time.Format(time.RFC3339)
 	level := r.Level.String()
@@ -102,8 +110,7 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 	}
 	line += "\n"
 
-	// Ensure directory exists
-	dir := filepath.Dir(logPath)
+	// Ensure logs directory exists (dir was already computed above)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		// Use package-level slog (not our handler) to avoid recursion.
 		// No "id" attr means this won't trigger writeToInstanceLog.
