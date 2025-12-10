@@ -35,6 +35,7 @@ var ValidTransitions = map[State][]State{
 	// StateUnknown means we failed to determine state - no transitions allowed.
 	// Operations on instances in Unknown state should fail with an error
 	// until the underlying issue is resolved.
+	// Can still Delete the instance.
 	StateUnknown: {},
 }
 
