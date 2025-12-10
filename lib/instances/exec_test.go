@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -214,4 +215,43 @@ func TestExecConcurrent(t *testing.T) {
 		"streams appear serialized - took %v, expected < %v", streamElapsed, maxExpected)
 
 	t.Logf("Long-running streams completed in %v (concurrent OK)", streamElapsed)
+
+	// Phase 3: Test command not found returns quickly (no hang)
+	// Regression test for a hang that occurred when the command wasn't found.
+	t.Log("Phase 3: Testing exec with non-existent command...")
+
+	// Test without TTY
+	start := time.Now()
+	var stdout, stderr strings.Builder
+	_, err = exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+		Command: []string{"nonexistent_command_asdfasdf"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		TTY:     false,
+	})
+	elapsed := time.Since(start)
+	t.Logf("Exec (no TTY) completed in %v (error: %v)", elapsed, err)
+
+	require.Error(t, err, "exec should fail for non-existent command")
+	require.Contains(t, err.Error(), "executable file not found", "error should mention command not found")
+	require.Less(t, elapsed, 5*time.Second, "exec should not hang, took %v", elapsed)
+
+	// Test with TTY
+	start = time.Now()
+	stdout.Reset()
+	stderr.Reset()
+	_, err = exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+		Command: []string{"nonexistent_command_xyz123"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		TTY:     true,
+	})
+	elapsed = time.Since(start)
+	t.Logf("Exec (with TTY) completed in %v (error: %v)", elapsed, err)
+
+	require.Error(t, err, "exec with TTY should fail for non-existent command")
+	require.Contains(t, err.Error(), "executable file not found", "error should mention command not found")
+	require.Less(t, elapsed, 5*time.Second, "exec with TTY should not hang, took %v", elapsed)
+
+	t.Log("Command not found tests passed - exec does not hang")
 }

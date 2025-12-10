@@ -143,22 +143,22 @@ func main() {
 
 	// Use custom WebSocket dialer
 	dialer := &websocket.Dialer{}
-	
+
 	// Set up headers for WebSocket connection (body was already sent)
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Bearer %s", jwtToken))
 
 	// Make HTTP POST with body
 	client := &http.Client{}
-	
+
 	// Actually, we need a custom approach. Let me use a modified request
 	// that sends body AND upgrades to WebSocket.
 	// For simplicity, let's POST the JSON as the Sec-WebSocket-Protocol header value (hacky but works)
 	// OR we can encode params in URL query string
-	
+
 	// Actually, the simplest approach: POST the body first, get a session ID, then connect WebSocket
 	// But that requires server changes.
-	
+
 	// Let's use the approach where we send JSON as first WebSocket message after connect
 	ws, resp, err := dialer.Dial(wsURL.String(), headers)
 	if err != nil {
@@ -240,7 +240,10 @@ func runInteractive(ws *websocket.Conn) (int, error) {
 		for {
 			msgType, message, err := ws.ReadMessage()
 			if err != nil {
-				if !websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					// Unexpected close - report as error to avoid hanging
+					errCh <- fmt.Errorf("connection closed unexpectedly: %w", err)
+				} else {
 					// Normal close, default exit code 0
 					exitCodeCh <- 0
 				}
@@ -310,8 +313,8 @@ func runNonInteractive(ws *websocket.Conn) (int, error) {
 			msgType, message, err := ws.ReadMessage()
 			if err != nil {
 				// Connection closed is normal - default exit code 0
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) || 
-				   err == io.EOF {
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) ||
+					err == io.EOF {
 					exitCodeCh <- 0
 					return
 				}
