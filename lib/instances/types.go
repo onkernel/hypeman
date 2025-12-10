@@ -18,6 +18,15 @@ const (
 	StateStandby  State = "Standby"  // No VMM, snapshot exists
 )
 
+// VolumeAttachment represents a volume attached to an instance
+type VolumeAttachment struct {
+	VolumeID    string // Volume ID
+	MountPath   string // Mount path in guest
+	Readonly    bool   // Whether mounted read-only
+	Overlay     bool   // If true, create per-instance overlay for writes (requires Readonly=true)
+	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
+}
+
 // StoredMetadata represents instance metadata that is persisted to disk
 type StoredMetadata struct {
 	// Identification
@@ -36,6 +45,9 @@ type StoredMetadata struct {
 	NetworkEnabled bool   // Whether instance has networking enabled (uses default network)
 	IP             string // Assigned IP address (empty if NetworkEnabled=false)
 	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
+
+	// Attached volumes
+	Volumes []VolumeAttachment // Volumes attached to this instance
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
@@ -70,18 +82,20 @@ type Instance struct {
 
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
-	Name           string            // Required
-	Image          string            // Required: OCI reference
-	Size           int64             // Base memory in bytes (default: 1GB)
-	HotplugSize    int64             // Hotplug memory in bytes (default: 3GB)
-	OverlaySize    int64             // Overlay disk size in bytes (default: 10GB)
-	Vcpus          int               // Default 2
-	Env            map[string]string // Optional environment variables
-	NetworkEnabled bool              // Whether to enable networking (uses default network)
-	Devices        []string          // Device IDs or names to attach (GPU passthrough)
+	Name           string             // Required
+	Image          string             // Required: OCI reference
+	Size           int64              // Base memory in bytes (default: 1GB)
+	HotplugSize    int64              // Hotplug memory in bytes (default: 3GB)
+	OverlaySize    int64              // Overlay disk size in bytes (default: 10GB)
+	Vcpus          int                // Default 2
+	Env            map[string]string  // Optional environment variables
+	NetworkEnabled bool               // Whether to enable networking (uses default network)
+	Devices        []string           // Device IDs or names to attach (GPU passthrough)
+	Volumes        []VolumeAttachment // Volumes to attach at creation time
 }
 
-// AttachVolumeRequest is the domain request for attaching a volume
+// AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string
+	Readonly  bool
 }

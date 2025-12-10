@@ -10,8 +10,11 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
+          # Not necessary to upload cache on self-hosted runner(s)
+          # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
+          cache: false
           go-version: '1.25'
       
       - name: Install dependencies
@@ -35,4 +38,14 @@ jobs:
         run: make build
      
       - name: Run tests
+        env:
+          # Docker auth for tests running as root (sudo)
+          DOCKER_CONFIG: /home/debianuser/.docker
+          # TLS/ACME testing (optional - tests will skip if not configured)
+          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          ACME_DNS_PROVIDER: "cloudflare"
+          ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TLS_TEST_DOMAIN: "test.hypeman-development.com"
+          TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
         run: make test

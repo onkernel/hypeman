@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/oapi-codegen/runtime"
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 const (
@@ -105,6 +107,15 @@ type CreateImageRequest struct {
 	Name string `json:"name"`
 }
 
+// CreateIngressRequest defines model for CreateIngressRequest.
+type CreateIngressRequest struct {
+	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+	Name string `json:"name"`
+
+	// Rules Routing rules for this ingress
+	Rules []IngressRule `json:"rules"`
+}
+
 // CreateInstanceRequest defines model for CreateInstanceRequest.
 type CreateInstanceRequest struct {
 	// Devices Device IDs or names to attach for GPU/PCI passthrough
@@ -136,6 +147,9 @@ type CreateInstanceRequest struct {
 
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
+
+	// Volumes Volumes to attach to the instance at creation time
+	Volumes *[]VolumeMount `json:"volumes,omitempty"`
 }
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
@@ -255,6 +269,61 @@ type Image struct {
 // ImageStatus Build status
 type ImageStatus string
 
+// Ingress defines model for Ingress.
+type Ingress struct {
+	// CreatedAt Creation timestamp (RFC3339)
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id Auto-generated unique identifier
+	Id string `json:"id"`
+
+	// Name Human-readable name
+	Name string `json:"name"`
+
+	// Rules Routing rules for this ingress
+	Rules []IngressRule `json:"rules"`
+}
+
+// IngressMatch defines model for IngressMatch.
+type IngressMatch struct {
+	// Hostname Hostname to match. Can be:
+	// - Literal: "api.example.com" (exact match on Host header)
+	// - Pattern: "{instance}.example.com" (dynamic routing based on subdomain)
+	//
+	// Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
+	// that extract parts of the hostname for routing. The extracted values can be
+	// referenced in the target.instance field.
+	Hostname string `json:"hostname"`
+
+	// Port Host port to listen on for this rule (default 80)
+	Port *int `json:"port,omitempty"`
+}
+
+// IngressRule defines model for IngressRule.
+type IngressRule struct {
+	Match IngressMatch `json:"match"`
+
+	// RedirectHttp Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
+	RedirectHttp *bool         `json:"redirect_http,omitempty"`
+	Target       IngressTarget `json:"target"`
+
+	// Tls Enable TLS termination (certificate auto-issued via ACME).
+	Tls *bool `json:"tls,omitempty"`
+}
+
+// IngressTarget defines model for IngressTarget.
+type IngressTarget struct {
+	// Instance Target instance name, ID, or capture reference.
+	// - For literal hostnames: Use the instance name or ID directly (e.g., "my-api")
+	// - For pattern hostnames: Reference a capture from the hostname (e.g., "{instance}")
+	//
+	// When using pattern hostnames, the instance is resolved dynamically at request time.
+	Instance string `json:"instance"`
+
+	// Port Target port on the instance
+	Port int `json:"port"`
+}
+
 // Instance defines model for Instance.
 type Instance struct {
 	// CreatedAt Creation timestamp (RFC3339)
@@ -316,6 +385,9 @@ type Instance struct {
 
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
+
+	// Volumes Volumes attached to the instance
+	Volumes *[]VolumeMount `json:"volumes,omitempty"`
 }
 
 // InstanceState Instance state:
@@ -329,8 +401,8 @@ type InstanceState string
 
 // Volume defines model for Volume.
 type Volume struct {
-	// AttachedTo Instance ID if attached
-	AttachedTo *string `json:"attached_to"`
+	// Attachments List of current attachments (empty if not attached)
+	Attachments *[]VolumeAttachment `json:"attachments,omitempty"`
 
 	// CreatedAt Creation timestamp (RFC3339)
 	CreatedAt time.Time `json:"created_at"`
@@ -338,14 +410,41 @@ type Volume struct {
 	// Id Unique identifier
 	Id string `json:"id"`
 
-	// MountPath Mount path if attached
-	MountPath *string `json:"mount_path"`
-
 	// Name Volume name
 	Name string `json:"name"`
 
 	// SizeGb Size in gigabytes
 	SizeGb int `json:"size_gb"`
+}
+
+// VolumeAttachment defines model for VolumeAttachment.
+type VolumeAttachment struct {
+	// InstanceId ID of the instance this volume is attached to
+	InstanceId string `json:"instance_id"`
+
+	// MountPath Mount path in the guest
+	MountPath string `json:"mount_path"`
+
+	// Readonly Whether the attachment is read-only
+	Readonly bool `json:"readonly"`
+}
+
+// VolumeMount defines model for VolumeMount.
+type VolumeMount struct {
+	// MountPath Path where volume is mounted in the guest
+	MountPath string `json:"mount_path"`
+
+	// Overlay Create per-instance overlay for writes (requires readonly=true)
+	Overlay *bool `json:"overlay,omitempty"`
+
+	// OverlaySize Max overlay size as human-readable string (e.g., "1GB"). Required if overlay=true.
+	OverlaySize *string `json:"overlay_size,omitempty"`
+
+	// Readonly Whether volume is mounted read-only
+	Readonly *bool `json:"readonly,omitempty"`
+
+	// VolumeId Volume identifier
+	VolumeId string `json:"volume_id"`
 }
 
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
@@ -357,11 +456,29 @@ type GetInstanceLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// CreateVolumeMultipartBody defines parameters for CreateVolume.
+type CreateVolumeMultipartBody struct {
+	// Content tar.gz archive file containing the volume content
+	Content openapi_types.File `json:"content"`
+
+	// Id Optional custom volume ID (auto-generated if not provided)
+	Id *string `json:"id,omitempty"`
+
+	// Name Volume name
+	Name string `json:"name"`
+
+	// SizeGb Maximum size in GB (extraction fails if content exceeds this)
+	SizeGb int `json:"size_gb"`
+}
+
 // CreateDeviceJSONRequestBody defines body for CreateDevice for application/json ContentType.
 type CreateDeviceJSONRequestBody = CreateDeviceRequest
 
 // CreateImageJSONRequestBody defines body for CreateImage for application/json ContentType.
 type CreateImageJSONRequestBody = CreateImageRequest
+
+// CreateIngressJSONRequestBody defines body for CreateIngress for application/json ContentType.
+type CreateIngressJSONRequestBody = CreateIngressRequest
 
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = CreateInstanceRequest
@@ -371,6 +488,9 @@ type AttachVolumeJSONRequestBody = AttachVolumeRequest
 
 // CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
 type CreateVolumeJSONRequestBody = CreateVolumeRequest
+
+// CreateVolumeMultipartRequestBody defines body for CreateVolume for multipart/form-data ContentType.
+type CreateVolumeMultipartRequestBody CreateVolumeMultipartBody
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -479,6 +599,20 @@ type ClientInterface interface {
 	// GetImage request
 	GetImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListIngresses request
+	ListIngresses(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateIngressWithBody request with any body
+	CreateIngressWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateIngress(ctx context.Context, body CreateIngressJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteIngress request
+	DeleteIngress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetIngress request
+	GetIngress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListInstances request
 	ListInstances(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -501,6 +635,12 @@ type ClientInterface interface {
 
 	// StandbyInstance request
 	StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartInstance request
+	StartInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StopInstance request
+	StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DetachVolume request
 	DetachVolume(ctx context.Context, id string, volumeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -669,6 +809,66 @@ func (c *Client) GetImage(ctx context.Context, name string, reqEditors ...Reques
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListIngresses(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListIngressesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateIngressWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateIngressRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateIngress(ctx context.Context, body CreateIngressJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateIngressRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteIngress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteIngressRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetIngress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetIngressRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListInstances(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListInstancesRequest(c.Server)
 	if err != nil {
@@ -755,6 +955,30 @@ func (c *Client) RestoreInstance(ctx context.Context, id string, reqEditors ...R
 
 func (c *Client) StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStandbyInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStopInstanceRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1185,6 +1409,141 @@ func NewGetImageRequest(server string, name string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListIngressesRequest generates requests for ListIngresses
+func NewListIngressesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/ingresses")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateIngressRequest calls the generic CreateIngress builder with application/json body
+func NewCreateIngressRequest(server string, body CreateIngressJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateIngressRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateIngressRequestWithBody generates requests for CreateIngress with any type of body
+func NewCreateIngressRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/ingresses")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteIngressRequest generates requests for DeleteIngress
+func NewDeleteIngressRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/ingresses/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetIngressRequest generates requests for GetIngress
+func NewGetIngressRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/ingresses/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListInstancesRequest generates requests for ListInstances
 func NewListInstancesRequest(server string) (*http.Request, error) {
 	var err error
@@ -1443,6 +1802,74 @@ func NewStandbyInstanceRequest(server string, id string) (*http.Request, error) 
 	}
 
 	operationPath := fmt.Sprintf("/instances/%s/standby", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartInstanceRequest generates requests for StartInstance
+func NewStartInstanceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/start", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStopInstanceRequest generates requests for StopInstance
+func NewStopInstanceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/stop", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1767,6 +2194,20 @@ type ClientWithResponsesInterface interface {
 	// GetImageWithResponse request
 	GetImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetImageResponse, error)
 
+	// ListIngressesWithResponse request
+	ListIngressesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error)
+
+	// CreateIngressWithBodyWithResponse request with any body
+	CreateIngressWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateIngressResponse, error)
+
+	CreateIngressWithResponse(ctx context.Context, body CreateIngressJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateIngressResponse, error)
+
+	// DeleteIngressWithResponse request
+	DeleteIngressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteIngressResponse, error)
+
+	// GetIngressWithResponse request
+	GetIngressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetIngressResponse, error)
+
 	// ListInstancesWithResponse request
 	ListInstancesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListInstancesResponse, error)
 
@@ -1789,6 +2230,12 @@ type ClientWithResponsesInterface interface {
 
 	// StandbyInstanceWithResponse request
 	StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
+
+	// StartInstanceWithResponse request
+	StartInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error)
+
+	// StopInstanceWithResponse request
+	StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error)
 
 	// DetachVolumeWithResponse request
 	DetachVolumeWithResponse(ctx context.Context, id string, volumeId string, reqEditors ...RequestEditorFn) (*DetachVolumeResponse, error)
@@ -2055,6 +2502,105 @@ func (r GetImageResponse) StatusCode() int {
 	return 0
 }
 
+type ListIngressesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]Ingress
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListIngressesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListIngressesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateIngressResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Ingress
+	JSON400      *Error
+	JSON401      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateIngressResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateIngressResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteIngressResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteIngressResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteIngressResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetIngressResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Ingress
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetIngressResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetIngressResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListInstancesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2224,6 +2770,56 @@ func (r StandbyInstanceResponse) StatusCode() int {
 	return 0
 }
 
+type StartInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StartInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type StopInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StopInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StopInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DetachVolumeResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2303,6 +2899,7 @@ type CreateVolumeResponse struct {
 	JSON201      *Volume
 	JSON400      *Error
 	JSON401      *Error
+	JSON409      *Error
 	JSON500      *Error
 }
 
@@ -2476,6 +3073,50 @@ func (c *ClientWithResponses) GetImageWithResponse(ctx context.Context, name str
 	return ParseGetImageResponse(rsp)
 }
 
+// ListIngressesWithResponse request returning *ListIngressesResponse
+func (c *ClientWithResponses) ListIngressesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error) {
+	rsp, err := c.ListIngresses(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListIngressesResponse(rsp)
+}
+
+// CreateIngressWithBodyWithResponse request with arbitrary body returning *CreateIngressResponse
+func (c *ClientWithResponses) CreateIngressWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateIngressResponse, error) {
+	rsp, err := c.CreateIngressWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateIngressResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateIngressWithResponse(ctx context.Context, body CreateIngressJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateIngressResponse, error) {
+	rsp, err := c.CreateIngress(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateIngressResponse(rsp)
+}
+
+// DeleteIngressWithResponse request returning *DeleteIngressResponse
+func (c *ClientWithResponses) DeleteIngressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DeleteIngressResponse, error) {
+	rsp, err := c.DeleteIngress(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteIngressResponse(rsp)
+}
+
+// GetIngressWithResponse request returning *GetIngressResponse
+func (c *ClientWithResponses) GetIngressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetIngressResponse, error) {
+	rsp, err := c.GetIngress(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetIngressResponse(rsp)
+}
+
 // ListInstancesWithResponse request returning *ListInstancesResponse
 func (c *ClientWithResponses) ListInstancesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListInstancesResponse, error) {
 	rsp, err := c.ListInstances(ctx, reqEditors...)
@@ -2545,6 +3186,24 @@ func (c *ClientWithResponses) StandbyInstanceWithResponse(ctx context.Context, i
 		return nil, err
 	}
 	return ParseStandbyInstanceResponse(rsp)
+}
+
+// StartInstanceWithResponse request returning *StartInstanceResponse
+func (c *ClientWithResponses) StartInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error) {
+	rsp, err := c.StartInstance(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartInstanceResponse(rsp)
+}
+
+// StopInstanceWithResponse request returning *StopInstanceResponse
+func (c *ClientWithResponses) StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error) {
+	rsp, err := c.StopInstance(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStopInstanceResponse(rsp)
 }
 
 // DetachVolumeWithResponse request returning *DetachVolumeResponse
@@ -3031,6 +3690,187 @@ func ParseGetImageResponse(rsp *http.Response) (*GetImageResponse, error) {
 	return response, nil
 }
 
+// ParseListIngressesResponse parses an HTTP response from a ListIngressesWithResponse call
+func ParseListIngressesResponse(rsp *http.Response) (*ListIngressesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListIngressesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []Ingress
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateIngressResponse parses an HTTP response from a CreateIngressWithResponse call
+func ParseCreateIngressResponse(rsp *http.Response) (*CreateIngressResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateIngressResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Ingress
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteIngressResponse parses an HTTP response from a DeleteIngressWithResponse call
+func ParseDeleteIngressResponse(rsp *http.Response) (*DeleteIngressResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteIngressResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetIngressResponse parses an HTTP response from a GetIngressWithResponse call
+func ParseGetIngressResponse(rsp *http.Response) (*GetIngressResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetIngressResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Ingress
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListInstancesResponse parses an HTTP response from a ListInstancesWithResponse call
 func ParseListInstancesResponse(rsp *http.Response) (*ListInstancesResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3318,6 +4158,100 @@ func ParseStandbyInstanceResponse(rsp *http.Response) (*StandbyInstanceResponse,
 	return response, nil
 }
 
+// ParseStartInstanceResponse parses an HTTP response from a StartInstanceWithResponse call
+func ParseStartInstanceResponse(rsp *http.Response) (*StartInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStopInstanceResponse parses an HTTP response from a StopInstanceWithResponse call
+func ParseStopInstanceResponse(rsp *http.Response) (*StopInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StopInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseDetachVolumeResponse parses an HTTP response from a DetachVolumeWithResponse call
 func ParseDetachVolumeResponse(rsp *http.Response) (*DetachVolumeResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3480,6 +4414,13 @@ func ParseCreateVolumeResponse(rsp *http.Response) (*CreateVolumeResponse, error
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3604,6 +4545,18 @@ type ServerInterface interface {
 	// Get image details
 	// (GET /images/{name})
 	GetImage(w http.ResponseWriter, r *http.Request, name string)
+	// List ingresses
+	// (GET /ingresses)
+	ListIngresses(w http.ResponseWriter, r *http.Request)
+	// Create ingress
+	// (POST /ingresses)
+	CreateIngress(w http.ResponseWriter, r *http.Request)
+	// Delete ingress
+	// (DELETE /ingresses/{id})
+	DeleteIngress(w http.ResponseWriter, r *http.Request, id string)
+	// Get ingress details
+	// (GET /ingresses/{id})
+	GetIngress(w http.ResponseWriter, r *http.Request, id string)
 	// List instances
 	// (GET /instances)
 	ListInstances(w http.ResponseWriter, r *http.Request)
@@ -3625,6 +4578,12 @@ type ServerInterface interface {
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Start a stopped instance
+	// (POST /instances/{id}/start)
+	StartInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Stop instance (graceful shutdown)
+	// (POST /instances/{id}/stop)
+	StopInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Detach volume from instance
 	// (DELETE /instances/{id}/volumes/{volumeId})
 	DetachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string)
@@ -3709,6 +4668,30 @@ func (_ Unimplemented) GetImage(w http.ResponseWriter, r *http.Request, name str
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List ingresses
+// (GET /ingresses)
+func (_ Unimplemented) ListIngresses(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create ingress
+// (POST /ingresses)
+func (_ Unimplemented) CreateIngress(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete ingress
+// (DELETE /ingresses/{id})
+func (_ Unimplemented) DeleteIngress(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get ingress details
+// (GET /ingresses/{id})
+func (_ Unimplemented) GetIngress(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // List instances
 // (GET /instances)
 func (_ Unimplemented) ListInstances(w http.ResponseWriter, r *http.Request) {
@@ -3748,6 +4731,18 @@ func (_ Unimplemented) RestoreInstance(w http.ResponseWriter, r *http.Request, i
 // Put instance in standby (pause, snapshot, delete VMM)
 // (POST /instances/{id}/standby)
 func (_ Unimplemented) StandbyInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Start a stopped instance
+// (POST /instances/{id}/start)
+func (_ Unimplemented) StartInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Stop instance (graceful shutdown)
+// (POST /instances/{id}/stop)
+func (_ Unimplemented) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -4034,6 +5029,108 @@ func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
+// ListIngresses operation middleware
+func (siw *ServerInterfaceWrapper) ListIngresses(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListIngresses(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateIngress operation middleware
+func (siw *ServerInterfaceWrapper) CreateIngress(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateIngress(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteIngress operation middleware
+func (siw *ServerInterfaceWrapper) DeleteIngress(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteIngress(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetIngress operation middleware
+func (siw *ServerInterfaceWrapper) GetIngress(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetIngress(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListInstances operation middleware
 func (siw *ServerInterfaceWrapper) ListInstances(w http.ResponseWriter, r *http.Request) {
 
@@ -4239,6 +5336,68 @@ func (siw *ServerInterfaceWrapper) StandbyInstance(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StandbyInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartInstance operation middleware
+func (siw *ServerInterfaceWrapper) StartInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StopInstance operation middleware
+func (siw *ServerInterfaceWrapper) StopInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StopInstance(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4574,6 +5733,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/images/{name}", wrapper.GetImage)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/ingresses", wrapper.ListIngresses)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/ingresses", wrapper.CreateIngress)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/ingresses/{id}", wrapper.DeleteIngress)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/ingresses/{id}", wrapper.GetIngress)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/instances", wrapper.ListInstances)
 	})
 	r.Group(func(r chi.Router) {
@@ -4593,6 +5764,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/standby", wrapper.StandbyInstance)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/start", wrapper.StartInstance)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/stop", wrapper.StopInstance)
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/instances/{id}/volumes/{volumeId}", wrapper.DetachVolume)
@@ -4996,6 +6173,180 @@ func (response GetImage500JSONResponse) VisitGetImageResponse(w http.ResponseWri
 	return json.NewEncoder(w).Encode(response)
 }
 
+type ListIngressesRequestObject struct {
+}
+
+type ListIngressesResponseObject interface {
+	VisitListIngressesResponse(w http.ResponseWriter) error
+}
+
+type ListIngresses200JSONResponse []Ingress
+
+func (response ListIngresses200JSONResponse) VisitListIngressesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIngresses401JSONResponse Error
+
+func (response ListIngresses401JSONResponse) VisitListIngressesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIngresses500JSONResponse Error
+
+func (response ListIngresses500JSONResponse) VisitListIngressesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIngressRequestObject struct {
+	Body *CreateIngressJSONRequestBody
+}
+
+type CreateIngressResponseObject interface {
+	VisitCreateIngressResponse(w http.ResponseWriter) error
+}
+
+type CreateIngress201JSONResponse Ingress
+
+func (response CreateIngress201JSONResponse) VisitCreateIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIngress400JSONResponse Error
+
+func (response CreateIngress400JSONResponse) VisitCreateIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIngress401JSONResponse Error
+
+func (response CreateIngress401JSONResponse) VisitCreateIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIngress409JSONResponse Error
+
+func (response CreateIngress409JSONResponse) VisitCreateIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIngress500JSONResponse Error
+
+func (response CreateIngress500JSONResponse) VisitCreateIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIngressRequestObject struct {
+	Id string `json:"id"`
+}
+
+type DeleteIngressResponseObject interface {
+	VisitDeleteIngressResponse(w http.ResponseWriter) error
+}
+
+type DeleteIngress204Response struct {
+}
+
+func (response DeleteIngress204Response) VisitDeleteIngressResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteIngress404JSONResponse Error
+
+func (response DeleteIngress404JSONResponse) VisitDeleteIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIngress409JSONResponse Error
+
+func (response DeleteIngress409JSONResponse) VisitDeleteIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIngress500JSONResponse Error
+
+func (response DeleteIngress500JSONResponse) VisitDeleteIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIngressRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetIngressResponseObject interface {
+	VisitGetIngressResponse(w http.ResponseWriter) error
+}
+
+type GetIngress200JSONResponse Ingress
+
+func (response GetIngress200JSONResponse) VisitGetIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIngress404JSONResponse Error
+
+func (response GetIngress404JSONResponse) VisitGetIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIngress409JSONResponse Error
+
+func (response GetIngress409JSONResponse) VisitGetIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIngress500JSONResponse Error
+
+func (response GetIngress500JSONResponse) VisitGetIngressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ListInstancesRequestObject struct {
 }
 
@@ -5277,6 +6628,94 @@ func (response StandbyInstance500JSONResponse) VisitStandbyInstanceResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type StartInstanceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type StartInstanceResponseObject interface {
+	VisitStartInstanceResponse(w http.ResponseWriter) error
+}
+
+type StartInstance200JSONResponse Instance
+
+func (response StartInstance200JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance404JSONResponse Error
+
+func (response StartInstance404JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance409JSONResponse Error
+
+func (response StartInstance409JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance500JSONResponse Error
+
+func (response StartInstance500JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstanceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type StopInstanceResponseObject interface {
+	VisitStopInstanceResponse(w http.ResponseWriter) error
+}
+
+type StopInstance200JSONResponse Instance
+
+func (response StopInstance200JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance404JSONResponse Error
+
+func (response StopInstance404JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance409JSONResponse Error
+
+func (response StopInstance409JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance500JSONResponse Error
+
+func (response StopInstance500JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type DetachVolumeRequestObject struct {
 	Id       string `json:"id"`
 	VolumeId string `json:"volumeId"`
@@ -5394,7 +6833,8 @@ func (response ListVolumes500JSONResponse) VisitListVolumesResponse(w http.Respo
 }
 
 type CreateVolumeRequestObject struct {
-	Body *CreateVolumeJSONRequestBody
+	JSONBody      *CreateVolumeJSONRequestBody
+	MultipartBody *multipart.Reader
 }
 
 type CreateVolumeResponseObject interface {
@@ -5424,6 +6864,15 @@ type CreateVolume401JSONResponse Error
 func (response CreateVolume401JSONResponse) VisitCreateVolumeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateVolume409JSONResponse Error
+
+func (response CreateVolume409JSONResponse) VisitCreateVolumeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -5547,6 +6996,18 @@ type StrictServerInterface interface {
 	// Get image details
 	// (GET /images/{name})
 	GetImage(ctx context.Context, request GetImageRequestObject) (GetImageResponseObject, error)
+	// List ingresses
+	// (GET /ingresses)
+	ListIngresses(ctx context.Context, request ListIngressesRequestObject) (ListIngressesResponseObject, error)
+	// Create ingress
+	// (POST /ingresses)
+	CreateIngress(ctx context.Context, request CreateIngressRequestObject) (CreateIngressResponseObject, error)
+	// Delete ingress
+	// (DELETE /ingresses/{id})
+	DeleteIngress(ctx context.Context, request DeleteIngressRequestObject) (DeleteIngressResponseObject, error)
+	// Get ingress details
+	// (GET /ingresses/{id})
+	GetIngress(ctx context.Context, request GetIngressRequestObject) (GetIngressResponseObject, error)
 	// List instances
 	// (GET /instances)
 	ListInstances(ctx context.Context, request ListInstancesRequestObject) (ListInstancesResponseObject, error)
@@ -5568,6 +7029,12 @@ type StrictServerInterface interface {
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(ctx context.Context, request StandbyInstanceRequestObject) (StandbyInstanceResponseObject, error)
+	// Start a stopped instance
+	// (POST /instances/{id}/start)
+	StartInstance(ctx context.Context, request StartInstanceRequestObject) (StartInstanceResponseObject, error)
+	// Stop instance (graceful shutdown)
+	// (POST /instances/{id}/stop)
+	StopInstance(ctx context.Context, request StopInstanceRequestObject) (StopInstanceResponseObject, error)
 	// Detach volume from instance
 	// (DELETE /instances/{id}/volumes/{volumeId})
 	DetachVolume(ctx context.Context, request DetachVolumeRequestObject) (DetachVolumeResponseObject, error)
@@ -5879,6 +7346,113 @@ func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, name s
 	}
 }
 
+// ListIngresses operation middleware
+func (sh *strictHandler) ListIngresses(w http.ResponseWriter, r *http.Request) {
+	var request ListIngressesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListIngresses(ctx, request.(ListIngressesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListIngresses")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListIngressesResponseObject); ok {
+		if err := validResponse.VisitListIngressesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateIngress operation middleware
+func (sh *strictHandler) CreateIngress(w http.ResponseWriter, r *http.Request) {
+	var request CreateIngressRequestObject
+
+	var body CreateIngressJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateIngress(ctx, request.(CreateIngressRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateIngress")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateIngressResponseObject); ok {
+		if err := validResponse.VisitCreateIngressResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteIngress operation middleware
+func (sh *strictHandler) DeleteIngress(w http.ResponseWriter, r *http.Request, id string) {
+	var request DeleteIngressRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteIngress(ctx, request.(DeleteIngressRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteIngress")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteIngressResponseObject); ok {
+		if err := validResponse.VisitDeleteIngressResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetIngress operation middleware
+func (sh *strictHandler) GetIngress(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetIngressRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetIngress(ctx, request.(GetIngressRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetIngress")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetIngressResponseObject); ok {
+		if err := validResponse.VisitGetIngressResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListInstances operation middleware
 func (sh *strictHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
 	var request ListInstancesRequestObject
@@ -6065,6 +7639,58 @@ func (sh *strictHandler) StandbyInstance(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// StartInstance operation middleware
+func (sh *strictHandler) StartInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request StartInstanceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartInstance(ctx, request.(StartInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartInstanceResponseObject); ok {
+		if err := validResponse.VisitStartInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StopInstance operation middleware
+func (sh *strictHandler) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request StopInstanceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StopInstance(ctx, request.(StopInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StopInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StopInstanceResponseObject); ok {
+		if err := validResponse.VisitStopInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // DetachVolume operation middleware
 func (sh *strictHandler) DetachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string) {
 	var request DetachVolumeRequestObject
@@ -6154,12 +7780,23 @@ func (sh *strictHandler) ListVolumes(w http.ResponseWriter, r *http.Request) {
 func (sh *strictHandler) CreateVolume(w http.ResponseWriter, r *http.Request) {
 	var request CreateVolumeRequestObject
 
-	var body CreateVolumeJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+
+		var body CreateVolumeJSONRequestBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+		request.JSONBody = &body
 	}
-	request.Body = &body
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if reader, err := r.MultipartReader(); err != nil {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode multipart body: %w", err))
+			return
+		} else {
+			request.MultipartBody = reader
+		}
+	}
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.CreateVolume(ctx, request.(CreateVolumeRequestObject))
@@ -6236,75 +7873,97 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"H4sIAAAAAAAC/+xce2/buJb/KoT2DpDu+qE4aW/ji8Uik3Q6Bpo2SNoMcJusS0vHNqcUqZKUUzfId7/g",
-	"Q7Ik07bSJm4zUyB/OBYf5xz+zpNHvgkinqScAVMy6N8EMppCgs3HQ6VwNL3gNEvgDD5lIJX+OhU8BaEI",
-	"mEEJz5gaplhN9X8xyEiQVBHOgn5witUUXU9BAJqZVZCc8ozGaATIzIM4aAXwGScphaAfdBOmujFWOGgF",
-	"ap7qr6QShE2C21YgAMec0bndZowzqoL+GFMJrdq2J3pphCXSU9pmTrHeiHMKmAW3ZsVPGREQB/33ZTau",
-	"isF89CdESm9+OMOE4hGFY5iRCJbFEGVCAFPDWJAZiGVRHNnndI5GPGMxsuPQDssoRWSMGGfwpCIMNiMx",
-	"0ZLQQ/TWQV+JDDySiQ1NQxJ7TuBogOxjNDhGO1P4XN2k98/R82D1kgwnsLzo71mCWVsLV5OVr2/Gltd+",
-	"te9bmfAkyYYTwbN0eeXBm5OTd8g8RCxLRiDKKz7vFesRpmACQi+YRmSI41iAlH7+84dl2sIwDPu41w/D",
-	"TuijcgYs5mKlSO1jv0h3wxjWLNlIpG79JZG+vhgcDw7RERcpF9jMXdqpBuyyeMp8lWFTPRUf/o8EYOXA",
-	"v9IU+Fl7Yz5giiaUjzClc5Qx8imr4KaDBloFFEoFn5EY4hbC5gEiEuFM8fYEGAisIEZjwROkpoBKZ4t2",
-	"oDPptNClZretD7eNe+0wbIeXQfV06H57kmZBK0ixUiA0gf//Hre/HLb/HbYPrhYfh5321f/8w3eQTQGH",
-	"+NjQ6fjcyU+lhXJiyyisE7oeoWsOefXxDRI8ufPpHQ0Q0fOQgDEIYJoTS3/Mo48gOoR3KRkJLOZdNiHs",
-	"c59iBVJVuVk/diN/hrY1jDGpMFuDTHsEnuM6zm2jRE7fJFIcYeP50JgL9PL0XVcfaoqlVFPBs8m0zNn7",
-	"HFFXrYAoSMweS5BxX2Ah8Fz/D2ymx+E4JlY5TivkesxxmegXbEYEZwkwhWZYEG0yKubtJnj95vjF8MXr",
-	"i6CvJRFnkbMVp2/O3gb9YC8MwxJdC3lOuUppNhlK8gUqjjbYe/lrUCfksKAfJZBwMTcSc2ugnWnVqI25",
-	"SLBClHwEdKnXuwy0Euy+rEO/Z7Za9hwaho0QugF6mKaEwUrstYJGNtqYpx3Kr0FEWAKioA2KbKGYTIiS",
-	"LYS1m8dyChLpGORfKMJM2zipsFAabsBidE3UFGEzriqEZN6+5uIj5Thu7watIMGfXwGb6DDr2d6S+dK2",
-	"a8d9aF/9d/7Vk//zWjAGSq+9zOJr+wBFnI3JJLMuxhyqNmTEqZm2nhW8AtMSiSuAsbFKdfk/pqCmIEoa",
-	"li+pv7K20kxHOYUliVSCn3IYtwRiPgNB8dwD4t3Qg+I/BFHmRN08FBP5EenJGyCsV7MYfhougzj0o9hD",
-	"lIemXzWinE41oaQgZLd34j72murVLEozWSGpVyfntYnFtEObEaEyTNHR6buKyfGEZj4bnmvxalu+Id3w",
-	"RWRFhBFlUvEEkRiYImOi4+ta8ECqYUZVPjNO2zr7MPrW0ChYcpcjtWRul7J5zyogDCej5SXP9XkThiZk",
-	"gkdzVTXtu2FTQefr+0S9KouxWgnxUHFPcJ7r6uBYyzEf2yRDMTnPUPHhbEw8K+d2wUVKRLokSXGkJ7TT",
-	"iLiEqSwKl/vVLUIriAyQ4iFWy1udwYRI5QybIglIhZMU7Zz9drS3t3dQ1+He03a42959+nY37If6799B",
-	"K7C6p10LVtDWiwTbycp8ax1WAe5i67IKHL0bHPecwajuo77s44Pnnz9jdfCMXMuDL8lITP7cw1vJ2/z6",
-	"dLxICtBOJkG0c13VHtOXCpQi7hWh/ldH8HdKGe0XN8E/BIyDfvBf3UVdpeuKKl3L3Vs98iGSzJohMJmd",
-	"GdL6ijSwrrUVvVptVN46MVT50d9q97FAvmaHZYmm0yVkESktu5DrCyG48BRceOzZ5zBNKYmMdrdlChEZ",
-	"kwiBXgHpCWgnwdGUMCgcaVWsIxwPhXM9XpVWmFAPZkqBsN3MjUQ7OnZKMqpISsE+MygtUoV1aDGcH5uV",
-	"fEkEYQzEEHLx3GGlBKT0xtK1EDfnpRhiQsEYRtlkokVSFt0JkZKwCcoBiMYEaNy3oflGqJrTXBDmg1eZ",
-	"h4ZoeKWD8zaFGdAyCKxF0cQmXAAqcGIPrcIVYTNMSTwkLM28kFgpyt8y4XyaXhThEc+UCXHtgZU3MXm5",
-	"iUvGWuO8wloSx++Aqa25ViUhFVaZi8qtevGPWp6L7fjHjcfhFvEdwyDPwmoHkHis2NHJsbXREWcKEwYC",
-	"JaCwq/CWcmhTDAhaQVtjKsaQcIb4ePyv9Vn1irCjUJB1cYAJNh8+BiATF8XWoxDJ6QxilGBGxiAVciPL",
-	"O8sp7j191sejaLe3F8N4/+mzTqfj2waYEvOUE+bZ6kXxrNlRdG2+3F6s2ZHTbzuHB6h2NOHlJjg9fPt7",
-	"0A+6mRRdyiNMu3JEWL/0f/Hv4oH5YP8dEeatkhQ2t0apMTHOIugQ2aqRjmfHmNDaZUeaUeq+72tOGEQF",
-	"ILkxNhvDan8I9VpDk5IvECNv9U7hiY6lLOK+rUzXCj5lkMEw5ZLY3ZcCGfdEJzSjjNAYmRnliw9lv6om",
-	"Y72V7JdCSJPi2BRpOZAskni9sx7j9syYItRcDc0rOz7de/b8n+HBbq+k3ISpZ/tBI1IKs1tL5A3P7uki",
-	"5EmBxdaDahjYTxFnM60V5h9Dn7YzFjgVA54/WzqMay4+EjYZxsSDzj/sQxQTAZEyxbrNOhR0cZpuhqI/",
-	"Ay1sWsH+hggyzzA97uX+Tfne3Uz5w5RslwuwWA4lw6mccrU6UcYoH4PgM5FKuhodkeUi3eZMebncW4kG",
-	"XSF3TR2qWeH2e6atP17ReG2Z91trte7OqVmp1getoiJLZFHi+erqbCsgnmrBoZRkwiBGg9PFBd7CH+TL",
-	"1zLeg15n99nzzm4YdnbDJt4xwdGavU8Oj5pvHvZs5NfHo34U92H8Dd7ZHZutcGB6jecSXea118sAXU+B",
-	"IXdMNe/s6rON8oPlIvjX1bzrdYdNVe27VLEbWQ9zXbLC9J+bq5S72/2nK+3+xlPVvmxjnSd3ZOdmsJnF",
-	"03QlEzy9Ew+9Db5rIw+liv99V/lNGalS6s9F1tj7n+cSXlF+Nsv1L1kb2RuDuI8uTk6QWx2NMoWKazaI",
-	"0c4R5VmMfp+nIGZEmmteRWbwRK9wljFG2ESvYAxepJ/QORL2+/WTT3Em7e56bmr+Wz/jfJqpmF8zM0dO",
-	"M4X0f4ZkzYLz5euXsEjqo9fczHGUtrTtqgUFdjhm8Wi+PLweQOxEmKGR9odScQHxk0tWiledpINW4CQW",
-	"tALLftAKcq70R0ud+WQ29pb07KXJvV0/lMs1UrVtwtxED+47qgwP7log8IVG7+qx0B0uqdZ149m2OP1s",
-	"pfzKDXhf6d9+wAuxsk3KN9lgjTQ5EGWCqPm5tukWnyPAAsRhZqVrjL0Jd8zXC5amSqXB7a0p0Y49SH6p",
-	"w14SocPTgYnbE8zwRFubixNEyRiieUQBZaacumQKTMPAm6NBe4S1ucmDR5NMEGVErUcnmOn1Ta1fSLtv",
-	"2Ol1TNsHT4HhlAT9YK+za24zNCoMi91Sq8wEjF5oDTWqMIiDfvCKSHXsxmgxy5Qzacf3wtDWYpkCW4rC",
-	"i3J8909p6wPWR5q73CZFcHdVuVT/vl3KsTRl2nkJc8UHAmKUM3PbCvbD3TsRt7Gc7iPhHcOZmnJBvkCs",
-	"N316R4l81aYDpkAwTJEEMQPhCsxlCAf991Xwvr+6vWoFMksSLOa56PxyS7n0oKDcDxhYbQOpfuXx/N74",
-	"9bUc3lZVWxum2yUQ3t8559hblrm7plyIzEJsC6f9K46REzfacdcTNpngonoX+r1Avx/uP/ympSv04uIE",
-	"cYamGq6GiIOHJ+KIszElkULtnBbXRIgwNUW6GkAeizk4c1QjnPOl3VS5A1Ivl7uKLs6b49c6jVoL/Xa8",
-	"R71v/w5upOCqdGn905Nsgs4xkRHXc0toaUc4Lb0pIBd6WkbRDYlvbaxEweZ/VQwdm+8Ll5NigRNQIKSh",
-	"aUVbL1p00RP9wETGeehqA8OqO2mVZFivslwtIXZ/ZQNLxuq+YQtG8bhmEL+jIaxVDzFblCQfEZrfFaeY",
-	"d63ctvwW7iWoHwua4faioLwt5nvC/LEg6iWoXEUKsWkrOC3aOVbByzV8POBBux08jJ/r7NNqtSV0brku",
-	"2LJTUTSF6KNlyBT/1qeRAztkG3GA7Vq5g/d35P909w0Sx4Ws1iWLA1cNfrhcsfJ+U6NUsXdvFDiAeYRs",
-	"bhlHeRuALUljOWfRk++RM/61s8J6J90j0qTTjFLzypBrA1n07pTtafdGxwcN4uRc29bGIu/OXrWBRTyG",
-	"2N2Grw5I3JN7jpbtgVlWfsKkSX5lRJUDY3Uw+g3nb9/vXLze+UvvN9cE8UvvN9sG8cve4eItz4cBS7gt",
-	"07zt6PURg08Hr6QqNGOaXGa3IdorRm0l4Ctlm41jvoLCn2Ffk7CvLK61kd+iGekBg7/aO+BbvipY4M0n",
-	"cHdz7a4c/1Zx32OBtEWRicDsC9qLelXFxjWsU5YwX3PBW6pDFqDbenCVb/woXZxpxjJv7rtAq+RHVsZa",
-	"Wz3rcLs2a+vh0aOGj4mQlkS3bEC6lE/K4VK9I1AATha93DonlJwC0rMQlujcENg+B6bQi5nmrnPJzkBl",
-	"gknTqUuxVOg1ooSBRDtabIJTCjEazdEHTdUHVED1SUtPYYi71+jp/JLpGYRlIJE0tBA2QQyu3YJkjD6M",
-	"OaX8+n81fj90TK/YSr14pXl9AN1orW5gtHQqjoQRin3VAcy7dWbfTxmI+WJj997fYqvipxB2Q29/0c3y",
-	"BYiRl1dceKxMYzVRBFPEM2XfJfQRYqXqJ2VFF38DE6Hgs+qCxknb0ldVlrpclwNkPnGMoZ3z8xdPfhqD",
-	"hr7EiKzQYqO9ToAek+A6L01bpDeaPrMD/tLuJm8//c4Q2/atKSlTQZgOQVk8mps7wkVf7+PqITEHueDM",
-	"mGDHlxf/+bOV+HctxX9p/C/O/m+uAREXAiJlu/0fVyG/FAKWVHnHvCCwaLxv5SnGxcmJ3yHYVmnZvbEf",
-	"BpvyzsWvtT5QtOVZJCftUWiZ602PwbW+b13DuMh/CPeRXj6YH21zLBiDXs6P/Va7/CvCjwGX91+g9P2O",
-	"cqPy5Fa1ongh5EfRim17IEdD3rpblsdjUVCLtJwTxWtFTOdQ1l7TXLgx27ikcUbhDlc0OQc/q9kNLmhK",
-	"wlp3PVOY5oe7nPkK23d/h5ujbKXl+3kt88Nfy8zyM1xYsYYXMQ8XeDS6hilCzu1ewlz8OP601An+CBtt",
-	"ZoWLWnX7s02Ahdszitu+97l4xHnRS8idbenOxyygV/R1Xr3iEaYohhlQnppfBbJjg1aQCereIe537a+U",
-	"TblU/efh8zC4vbr9TwAAAP//uJV6HbBlAAA=",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

@@ -1,34 +1,4 @@
 // Package paths provides centralized path construction for hypeman data directory.
-//
-// Directory Structure:
-//
-//	{dataDir}/
-//	  system/
-//	    kernel/{version}/{arch}/vmlinux
-//	    initrd/{arch}/{timestamp}/initrd
-//	    initrd/{arch}/latest -> {timestamp}
-//	    binaries/{version}/{arch}/cloud-hypervisor
-//	    oci-cache/
-//	    builds/{ref}/
-//	  images/
-//	    {repository}/{digest}/
-//	      rootfs.ext4
-//	      metadata.json
-//	    {repository}/{tag} -> {digest} (symlink)
-//	  guests/
-//	    {id}/
-//	      metadata.json
-//	      overlay.raw
-//	      config.ext4
-//	      ch.sock
-//	      vsock.sock
-//	      logs/
-//	      snapshots/
-//	        snapshot-latest/
-//	          config.json
-//	  devices/
-//	    {id}/
-//	      metadata.json
 package paths
 
 import "path/filepath"
@@ -41,6 +11,11 @@ type Paths struct {
 // New creates a new Paths instance for the given data directory.
 func New(dataDir string) *Paths {
 	return &Paths{dataDir: dataDir}
+}
+
+// DataDir returns the root data directory.
+func (p *Paths) DataDir() string {
+	return p.dataDir
 }
 
 // System path methods
@@ -73,6 +48,26 @@ func (p *Paths) SystemInitrdDir(arch string) string {
 // SystemOCICache returns the path to the OCI cache directory.
 func (p *Paths) SystemOCICache() string {
 	return filepath.Join(p.dataDir, "system", "oci-cache")
+}
+
+// OCICacheBlobDir returns the path to the OCI cache blobs directory.
+func (p *Paths) OCICacheBlobDir() string {
+	return filepath.Join(p.SystemOCICache(), "blobs", "sha256")
+}
+
+// OCICacheBlob returns the path to a specific blob in the OCI cache.
+func (p *Paths) OCICacheBlob(digestHex string) string {
+	return filepath.Join(p.OCICacheBlobDir(), digestHex)
+}
+
+// OCICacheIndex returns the path to the OCI cache index.json.
+func (p *Paths) OCICacheIndex() string {
+	return filepath.Join(p.SystemOCICache(), "index.json")
+}
+
+// OCICacheLayout returns the path to the OCI cache oci-layout file.
+func (p *Paths) OCICacheLayout() string {
+	return filepath.Join(p.SystemOCICache(), "oci-layout")
 }
 
 // SystemBuild returns the path to a system build directory.
@@ -139,6 +134,16 @@ func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")
 }
 
+// InstanceVolumeOverlay returns the path to a volume's overlay disk for an instance.
+func (p *Paths) InstanceVolumeOverlay(instanceID, volumeID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays", volumeID+".raw")
+}
+
+// InstanceVolumeOverlaysDir returns the directory for volume overlays.
+func (p *Paths) InstanceVolumeOverlaysDir(instanceID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays")
+}
+
 // InstanceSocket returns the path to instance API socket.
 func (p *Paths) InstanceSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "ch.sock")
@@ -195,4 +200,75 @@ func (p *Paths) DeviceDir(id string) string {
 // DeviceMetadata returns the path to device metadata.json.
 func (p *Paths) DeviceMetadata(id string) string {
 	return filepath.Join(p.DeviceDir(id), "metadata.json")
+}
+
+// Volume path methods
+
+// VolumesDir returns the root volumes directory.
+func (p *Paths) VolumesDir() string {
+	return filepath.Join(p.dataDir, "volumes")
+}
+
+// VolumeDir returns the directory for a volume.
+func (p *Paths) VolumeDir(id string) string {
+	return filepath.Join(p.dataDir, "volumes", id)
+}
+
+// VolumeData returns the path to the volume data file.
+func (p *Paths) VolumeData(id string) string {
+	return filepath.Join(p.VolumeDir(id), "data.raw")
+}
+
+// VolumeMetadata returns the path to volume metadata.json.
+func (p *Paths) VolumeMetadata(id string) string {
+	return filepath.Join(p.VolumeDir(id), "metadata.json")
+}
+
+// Caddy path methods
+
+// CaddyDir returns the caddy data directory.
+func (p *Paths) CaddyDir() string {
+	return filepath.Join(p.dataDir, "caddy")
+}
+
+// CaddyBinary returns the path to the caddy binary.
+func (p *Paths) CaddyBinary(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "caddy", version, arch, "caddy")
+}
+
+// CaddyConfig returns the path to the caddy config file.
+func (p *Paths) CaddyConfig() string {
+	return filepath.Join(p.CaddyDir(), "config.json")
+}
+
+// CaddyPIDFile returns the path to the caddy PID file.
+func (p *Paths) CaddyPIDFile() string {
+	return filepath.Join(p.CaddyDir(), "caddy.pid")
+}
+
+// CaddyLogFile returns the path to the caddy log file.
+func (p *Paths) CaddyLogFile() string {
+	return filepath.Join(p.CaddyDir(), "caddy.log")
+}
+
+// CaddyDataDir returns the path to Caddy's data directory (for certs, etc.).
+func (p *Paths) CaddyDataDir() string {
+	return filepath.Join(p.CaddyDir(), "data")
+}
+
+// CaddyConfigDir returns the path to Caddy's config directory.
+func (p *Paths) CaddyConfigDir() string {
+	return filepath.Join(p.CaddyDir(), "config")
+}
+
+// Ingress path methods
+
+// IngressesDir returns the root ingresses directory.
+func (p *Paths) IngressesDir() string {
+	return filepath.Join(p.dataDir, "ingresses")
+}
+
+// IngressMetadata returns the path to ingress metadata.json.
+func (p *Paths) IngressMetadata(id string) string {
+	return filepath.Join(p.IngressesDir(), id+".json")
 }

@@ -4,6 +4,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -18,6 +19,7 @@ type ApiService struct {
 	VolumeManager   volumes.Manager
 	NetworkManager  network.Manager
 	DeviceManager   devices.Manager
+	IngressManager  ingress.Manager
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -30,6 +32,7 @@ func New(
 	volumeManager volumes.Manager,
 	networkManager network.Manager,
 	deviceManager devices.Manager,
+	ingressManager ingress.Manager,
 ) *ApiService {
 	return &ApiService{
 		Config:          config,
@@ -38,6 +41,6 @@ func New(
 		VolumeManager:   volumeManager,
 		NetworkManager:  networkManager,
 		DeviceManager:   deviceManager,
+		IngressManager:  ingressManager,
 	}
 }
-

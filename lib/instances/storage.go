@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/images"
 )
 
 // Filesystem structure:
@@ -83,27 +84,22 @@ func (m *manager) saveMetadata(meta *metadata) error {
 // createOverlayDisk creates a sparse overlay disk for the instance
 func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
 	overlayPath := m.paths.InstanceOverlay(id)
+	return images.CreateEmptyExt4Disk(overlayPath, sizeBytes)
+}
 
-	// Create sparse file
-	file, err := os.Create(overlayPath)
-	if err != nil {
-		return fmt.Errorf("create overlay disk: %w", err)
-	}
-	file.Close()
-
-	// Truncate to specified size to create sparse file
-	if err := os.Truncate(overlayPath, sizeBytes); err != nil {
-		return fmt.Errorf("truncate overlay disk: %w", err)
-	}
-
-	// Format as ext4 (VM will mount this as writable overlay)
-	cmd := exec.Command("mkfs.ext4", "-F", overlayPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("mkfs.ext4 on overlay: %w, output: %s", err, output)
+// createVolumeOverlayDisk creates a sparse overlay disk for a volume attachment.
+// Cleanup note: If instance creation fails after this point, the overlay disk is
+// cleaned up automatically by deleteInstanceData() which removes the entire instance
+// directory (including vol-overlays/) via the cleanup stack in createInstance().
+func (m *manager) createVolumeOverlayDisk(instanceID, volumeID string, sizeBytes int64) error {
+	// Ensure vol-overlays directory exists
+	overlaysDir := m.paths.InstanceVolumeOverlaysDir(instanceID)
+	if err := os.MkdirAll(overlaysDir, 0755); err != nil {
+		return fmt.Errorf("create vol-overlays directory: %w", err)
 	}
 
-	return nil
+	overlayPath := m.paths.InstanceVolumeOverlay(instanceID, volumeID)
+	return images.CreateEmptyExt4Disk(overlayPath, sizeBytes)
 }
 
 // deleteInstanceData removes all instance data from disk

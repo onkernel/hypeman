@@ -10,19 +10,36 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
+	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Manager interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
-	GetInstance(ctx context.Context, id string) (*Instance, error)
+	// GetInstance returns an instance by ID, name, or ID prefix.
+	// Lookup order: exact ID match -> exact name match -> ID prefix match.
+	// Returns ErrAmbiguousName if prefix matches multiple instances.
+	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
+	StopInstance(ctx context.Context, id string) (*Instance, error)
+	StartInstance(ctx context.Context, id string) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
+}
+
+// ResourceLimits contains configurable resource limits for instances
+type ResourceLimits struct {
+	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
+	MaxVcpusPerInstance  int   // Maximum vCPUs per instance (0 = unlimited)
+	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
+	MaxTotalVcpus        int   // Maximum total vCPUs across all instances (0 = unlimited)
+	MaxTotalMemory       int64 // Maximum total memory in bytes across all instances (0 = unlimited)
 }
 
 type manager struct {
@@ -31,23 +48,37 @@ type manager struct {
 	systemManager  system.Manager
 	networkManager network.Manager
 	deviceManager  devices.Manager
-	maxOverlaySize int64           // Maximum overlay disk size in bytes
-	instanceLocks  sync.Map        // map[string]*sync.RWMutex - per-instance locks
-	hostTopology   *HostTopology   // Cached host CPU topology
+	volumeManager  volumes.Manager
+	limits         ResourceLimits
+	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
+	hostTopology   *HostTopology // Cached host CPU topology
+	metrics        *Metrics
 }
 
-// NewManager creates a new instances manager
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, maxOverlaySize int64) Manager {
-	return &manager{
+// NewManager creates a new instances manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		networkManager: networkManager,
 		deviceManager:  deviceManager,
-		maxOverlaySize: maxOverlaySize,
+		volumeManager:  volumeManager,
+		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newInstanceMetrics(meter, tracer, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -71,7 +102,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	
+
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
 		// Clean up the lock after successful deletion
@@ -96,6 +127,22 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	return m.restoreInstance(ctx, id)
 }
 
+// StopInstance gracefully stops a running instance
+func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.stopInstance(ctx, id)
+}
+
+// StartInstance starts a stopped instance
+func (m *manager) StartInstance(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.startInstance(ctx, id)
+}
+
 // ListInstances returns all instances
 func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
 	// No lock - eventual consistency is acceptable for list operations.
@@ -103,12 +150,54 @@ func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
 	return m.listInstances(ctx)
 }
 
-// GetInstance returns a single instance
-func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error) {
-	lock := m.getInstanceLock(id)
+// GetInstance returns an instance by ID, name, or ID prefix.
+// Lookup order: exact ID match -> exact name match -> ID prefix match.
+// Returns ErrAmbiguousName if prefix matches multiple instances.
+func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, error) {
+	// 1. Try exact ID match first (most common case)
+	lock := m.getInstanceLock(idOrName)
 	lock.RLock()
-	defer lock.RUnlock()
-	return m.getInstance(ctx, id)
+	inst, err := m.getInstance(ctx, idOrName)
+	lock.RUnlock()
+	if err == nil {
+		return inst, nil
+	}
+
+	// 2. List all instances for name and prefix matching
+	instances, err := m.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Try exact name match
+	var nameMatches []Instance
+	for _, inst := range instances {
+		if inst.Name == idOrName {
+			nameMatches = append(nameMatches, inst)
+		}
+	}
+	if len(nameMatches) == 1 {
+		return &nameMatches[0], nil
+	}
+	if len(nameMatches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	// 4. Try ID prefix match
+	var prefixMatches []Instance
+	for _, inst := range instances {
+		if len(idOrName) > 0 && len(inst.Id) >= len(idOrName) && inst.Id[:len(idOrName)] == idOrName {
+			prefixMatches = append(prefixMatches, inst)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return &prefixMatches[0], nil
+	}
+	if len(prefixMatches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return nil, ErrNotFound
 }
 
 // StreamInstanceLogs streams instance console logs

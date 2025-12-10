@@ -58,6 +58,24 @@ getcap ./bin/hypeman
 
 **Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary. For local testing, this is handled automatically in `make test`.
 
+**File Descriptor Limits:**
+
+Caddy (used for ingress) requires a higher file descriptor limit than the default on some systems. If you see "Too many open files" errors, increase the limit:
+
+```bash
+# Check current limit (also check with: sudo bash -c 'ulimit -n')
+ulimit -n
+
+# Increase temporarily (current session)
+ulimit -n 65536
+
+# For persistent changes, add to /etc/security/limits.conf:
+*  soft  nofile  65536
+*  hard  nofile  65536
+root  soft  nofile  65536
+root  hard  nofile  65536
+```
+
 ### Configuration
 
 #### Environment variables
@@ -75,6 +93,23 @@ Hypeman can be configured using the following environment variables:
 | `DNS_SERVER` | DNS server IP address for VMs | `1.1.1.1` |
 | `MAX_CONCURRENT_BUILDS` | Maximum number of concurrent image builds | `1` |
 | `MAX_OVERLAY_SIZE` | Maximum size for overlay filesystem | `100GB` |
+| `ENV` | Deployment environment (filters telemetry, e.g. your name for dev) | `unset` |
+| `OTEL_ENABLED` | Enable OpenTelemetry traces/metrics | `false` |
+| `OTEL_ENDPOINT` | OTLP gRPC endpoint | `127.0.0.1:4317` |
+| `OTEL_SERVICE_INSTANCE_ID` | Instance ID for telemetry (differentiates multiple servers) | hostname |
+| `LOG_LEVEL` | Default log level (debug, info, warn, error) | `info` |
+| `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC, CADDY) | inherits default |
+| `CADDY_LISTEN_ADDRESS` | Address for Caddy ingress listeners | `0.0.0.0` |
+| `CADDY_ADMIN_ADDRESS` | Address for Caddy admin API | `127.0.0.1` |
+| `CADDY_ADMIN_PORT` | Port for Caddy admin API | `2019` |
+| `CADDY_STOP_ON_SHUTDOWN` | Stop Caddy when hypeman shuts down (set to `true` for dev) | `false` |
+| `ACME_EMAIL` | Email for ACME certificate registration (required for TLS ingresses) | _(empty)_ |
+| `ACME_DNS_PROVIDER` | DNS provider for ACME challenges: `cloudflare` | _(empty)_ |
+| `ACME_CA` | ACME CA URL (empty = Let's Encrypt production) | _(empty)_ |
+| `TLS_ALLOWED_DOMAINS` | Comma-separated allowed domains for TLS (e.g., `*.example.com,api.other.com`) | _(empty)_ |
+| `DNS_PROPAGATION_TIMEOUT` | Max time to wait for DNS propagation (e.g., `2m`) | _(empty)_ |
+| `DNS_RESOLVERS` | Comma-separated DNS resolvers for propagation checking | _(empty)_ |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token (when using `cloudflare` provider) | _(empty)_ |
 
 **Important: Subnet Configuration**
 
@@ -83,7 +118,7 @@ The default subnet `10.100.0.0/16` is chosen to avoid common conflicts. Hypeman 
 If you need a different subnet, set `SUBNET_CIDR` in your environment. The gateway is automatically derived as the first IP in the subnet (e.g., `10.100.0.0/16` → `10.100.0.1`).
 
 **Alternative subnets if needed:**
-- `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and AWS (172.31.x.x) ranges
+- `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and cloud provider (172.31.x.x) ranges
 - `10.200.0.0/16` - Another private range option
 
 **Example:**
@@ -115,6 +150,39 @@ You can also inspect all routes:
 ip route show
 ```
 Pick the interface used by the default route (usually the line starting with `default`). Avoid using local bridges like `docker0`, `br-...`, `virbr0`, or `vmbr0` as the uplink; those are typically internal virtual networks, not your actual internet-facing interface.
+
+**TLS Ingress (HTTPS)**
+
+Hypeman uses Caddy with automatic ACME certificates for TLS termination. Certificates are issued via DNS-01 challenges (Cloudflare).
+
+To enable TLS ingresses:
+
+1. Configure ACME credentials in your `.env`:
+```bash
+# Required for any TLS ingress
+ACME_EMAIL=admin@example.com
+
+# For Cloudflare
+ACME_DNS_PROVIDER=cloudflare
+CLOUDFLARE_API_TOKEN=your-api-token
+```
+
+2. Create an ingress with TLS enabled:
+```bash
+curl -X POST http://localhost:8080/v1/ingresses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-https-app",
+    "rules": [{
+      "match": {"hostname": "app.example.com", "port": 443},
+      "target": {"instance": "my-instance", "port": 8080},
+      "tls": true,
+      "redirect_http": true
+    }]
+  }'
+```
+
+Certificates are stored in `$DATA_DIR/caddy/data/` and auto-renewed by Caddy.
 
 **Setup:**
 
@@ -158,6 +226,42 @@ make gen-jwt
 make dev
 ```
 The server will start on port 8080 (configurable via `PORT` environment variable).
+
+#### Local OpenTelemetry (optional)
+
+To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana, Tempo, Mimir):
+
+```bash
+# Start Grafana LGTM (UI at http://localhost:3000, login: admin/admin)
+# Note, if you are developing on a shared server, you can use the same LGTM stack as your peer(s)
+# You will be able to sort your metrics, traces, and logs using the ENV configuration (see below)
+docker run -d --name lgtm \
+  -p 127.0.0.1:3000:3000 \
+  -p 127.0.0.1:4317:4317 \
+  -p 127.0.0.1:4318:4318 \
+  -p 127.0.0.1:9090:9090 \
+  -p 127.0.0.1:4040:4040 \
+  grafana/otel-lgtm:latest
+
+# If developing on a remote server, forward the port to your local machine:
+# ssh -L 3001:localhost:3000 your-server  (then open http://localhost:3001)
+
+# Enable OTel in .env (set ENV to your name to filter your telemetry)
+echo "OTEL_ENABLED=true" >> .env
+echo "ENV=yourname" >> .env
+
+# Restart dev server
+make dev
+```
+
+Open http://localhost:3000 to view traces (Tempo), metrics (Mimir), and logs (Loki) in Grafana.
+
+**Import the Hypeman dashboard:**
+1. Go to Dashboards → New → Import
+2. Upload `dashboards/hypeman.json` or paste its contents
+3. Select the Prometheus datasource and click Import
+
+Use the Environment/Instance dropdowns to filter by `deployment.environment` or `service.instance.id`.
 
 ### Testing
 

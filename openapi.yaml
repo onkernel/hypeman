@@ -55,7 +55,7 @@ components:
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
     
-    VolumeAttachment:
+    VolumeMount:
       type: object
       required: [volume_id, mount_path]
       properties:
@@ -71,6 +71,14 @@ components:
           type: boolean
           description: Whether volume is mounted read-only
           default: false
+        overlay:
+          type: boolean
+          description: Create per-instance overlay for writes (requires readonly=true)
+          default: false
+        overlay_size:
+          type: string
+          description: Max overlay size as human-readable string (e.g., "1GB"). Required if overlay=true.
+          example: "1GB"
     
     PortMapping:
       type: object
@@ -146,6 +154,12 @@ components:
             type: string
           description: Device IDs or names to attach for GPU/PCI passthrough
           example: ["l4-gpu"]
+        volumes:
+          type: array
+          description: Volumes to attach to the instance at creation time
+          items:
+            $ref: "#/components/schemas/VolumeMount"
+        # Future: port_mappings, timeout_seconds
     
     Instance:
       type: object
@@ -208,6 +222,11 @@ components:
               description: Assigned MAC address (null if no network)
               example: "02:00:00:ab:cd:ef"
               nullable: true
+        volumes:
+          type: array
+          description: Volumes attached to the instance
+          items:
+            $ref: "#/components/schemas/VolumeMount"
         created_at:
           type: string
           format: date-time
@@ -321,6 +340,23 @@ components:
           description: Size in gigabytes
           example: 10
     
+    VolumeAttachment:
+      type: object
+      required: [instance_id, mount_path, readonly]
+      properties:
+        instance_id:
+          type: string
+          description: ID of the instance this volume is attached to
+          example: inst-abc123
+        mount_path:
+          type: string
+          description: Mount path in the guest
+          example: /mnt/data
+        readonly:
+          type: boolean
+          description: Whether the attachment is read-only
+          example: false
+    
     Volume:
       type: object
       required: [id, name, size_gb, created_at]
@@ -337,16 +373,11 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
-        attached_to:
-          type: string
-          description: Instance ID if attached
-          example: inst-abc123
-          nullable: true
-        mount_path:
-          type: string
-          description: Mount path if attached
-          example: /mnt/data
-          nullable: true
+        attachments:
+          type: array
+          description: List of current attachments (empty if not attached)
+          items:
+            $ref: "#/components/schemas/VolumeAttachment"
         created_at:
           type: string
           format: date-time
@@ -374,6 +405,102 @@ components:
           type: string
           enum: [ok]
           example: ok
+    
+    IngressMatch:
+      type: object
+      required: [hostname]
+      properties:
+        hostname:
+          type: string
+          description: |
+            Hostname to match. Can be:
+            - Literal: "api.example.com" (exact match on Host header)
+            - Pattern: "{instance}.example.com" (dynamic routing based on subdomain)
+            
+            Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
+            that extract parts of the hostname for routing. The extracted values can be
+            referenced in the target.instance field.
+          example: "{instance}.example.com"
+        port:
+          type: integer
+          description: Host port to listen on for this rule (default 80)
+          default: 80
+          example: 8080
+    
+    IngressTarget:
+      type: object
+      required: [instance, port]
+      properties:
+        instance:
+          type: string
+          description: |
+            Target instance name, ID, or capture reference.
+            - For literal hostnames: Use the instance name or ID directly (e.g., "my-api")
+            - For pattern hostnames: Reference a capture from the hostname (e.g., "{instance}")
+            
+            When using pattern hostnames, the instance is resolved dynamically at request time.
+          example: "{instance}"
+        port:
+          type: integer
+          description: Target port on the instance
+          example: 8080
+    
+    IngressRule:
+      type: object
+      required: [match, target]
+      properties:
+        match:
+          $ref: "#/components/schemas/IngressMatch"
+        target:
+          $ref: "#/components/schemas/IngressTarget"
+        tls:
+          type: boolean
+          description: Enable TLS termination (certificate auto-issued via ACME).
+          default: false
+        redirect_http:
+          type: boolean
+          description: Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
+          default: false
+    
+    CreateIngressRequest:
+      type: object
+      required: [name, rules]
+      properties:
+        name:
+          type: string
+          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: my-api-ingress
+        rules:
+          type: array
+          description: Routing rules for this ingress
+          items:
+            $ref: "#/components/schemas/IngressRule"
+          minItems: 1
+    
+    Ingress:
+      type: object
+      required: [id, name, rules, created_at]
+      properties:
+        id:
+          type: string
+          description: Auto-generated unique identifier
+          example: 2OgJqXsP7j1qLVVYvGJDNiYVlPO
+        name:
+          type: string
+          description: Human-readable name
+          example: my-api-ingress
+        rules:
+          type: array
+          description: Routing rules for this ingress
+          items:
+            $ref: "#/components/schemas/IngressRule"
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T10:00:00Z"
 
     DeviceType:
       type: string
@@ -693,6 +820,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance details
@@ -723,6 +851,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         204:
           description: Instance deleted
@@ -751,6 +880,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance in standby
@@ -789,6 +919,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
       responses:
         200:
           description: Instance restored
@@ -804,6 +935,84 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/stop:
+    post:
+      summary: Stop instance (graceful shutdown)
+      operationId: stopInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in correct state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/start:
+    post:
+      summary: Start a stopped instance
+      operationId: startInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in stopped state
           content:
             application/json:
               schema:
@@ -831,6 +1040,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: tail
           in: query
           required: false
@@ -877,11 +1087,13 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: volumeId
           in: path
           required: true
           schema:
             type: string
+          description: Volume ID or name
       requestBody:
         required: true
         content:
@@ -924,11 +1136,13 @@ paths:
           required: true
           schema:
             type: string
+          description: Instance ID or name
         - name: volumeId
           in: path
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         200:
           description: Volume detached
@@ -978,6 +1192,10 @@ paths:
                 $ref: "#/components/schemas/Error"
     post:
       summary: Create volume
+      description: |
+        Creates a new volume. Supports two modes:
+        - JSON body: Creates an empty volume of the specified size
+        - Multipart form: Creates a volume pre-populated with content from a tar.gz archive
       operationId: createVolume
       security:
         - bearerAuth: []
@@ -987,6 +1205,30 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateVolumeRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - name
+                - size_gb
+                - content
+              properties:
+                name:
+                  type: string
+                  description: Volume name
+                  example: my-data-volume
+                size_gb:
+                  type: integer
+                  description: Maximum size in GB (extraction fails if content exceeds this)
+                  example: 10
+                id:
+                  type: string
+                  description: Optional custom volume ID (auto-generated if not provided)
+                  example: vol-data-1
+                content:
+                  type: string
+                  format: binary
+                  description: tar.gz archive file containing the volume content
       responses:
         201:
           description: Volume created
@@ -995,13 +1237,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/Volume"
         400:
-          description: Bad request
+          description: Bad request (invalid data or archive too large)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - volume with this ID already exists
           content:
             application/json:
               schema:
@@ -1025,6 +1273,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         200:
           description: Volume details
@@ -1055,6 +1304,7 @@ paths:
           required: true
           schema:
             type: string
+          description: Volume ID or name
       responses:
         204:
           description: Volume deleted
@@ -1152,7 +1402,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /devices/available:
     get:
       summary: Discover passthrough-capable devices on host
@@ -1180,7 +1430,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /devices/{id}:
     get:
       summary: Get device details
@@ -1247,4 +1497,146 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /ingresses:
+    get:
+      summary: List ingresses
+      operationId: listIngresses
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of ingresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ingress"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create ingress
+      operationId: createIngress
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIngressRequest"
+      responses:
+        201:
+          description: Ingress created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ingress"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - ingress with this name already exists or hostname in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /ingresses/{id}:
+    get:
+      summary: Get ingress details
+      operationId: getIngress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Ingress ID, name, or ID prefix
+      responses:
+        200:
+          description: Ingress details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ingress"
+        404:
+          description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete ingress
+      operationId: deleteIngress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Ingress ID, name, or ID prefix
+      responses:
+        204:
+          description: Ingress deleted
+        404:
+          description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 
