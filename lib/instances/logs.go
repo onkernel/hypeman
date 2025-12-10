@@ -12,14 +12,29 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 )
 
+// LogSource represents a log source type
+type LogSource string
+
+const (
+	// LogSourceApp is the guest application log (serial console)
+	LogSourceApp LogSource = "app"
+	// LogSourceVMM is the Cloud Hypervisor VMM log
+	LogSourceVMM LogSource = "vmm"
+	// LogSourceHypeman is the hypeman operations log
+	LogSourceHypeman LogSource = "hypeman"
+)
+
 // ErrTailNotFound is returned when the tail command is not available
 var ErrTailNotFound = fmt.Errorf("tail command not found: required for log streaming")
 
-// StreamInstanceLogs streams instance console logs
+// ErrLogNotFound is returned when the requested log file doesn't exist
+var ErrLogNotFound = fmt.Errorf("log file not found")
+
+// streamInstanceLogs streams instance logs from the specified source
 // Returns last N lines, then continues following if follow=true
-func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error) {
+func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error) {
 	log := logger.FromContext(ctx)
-	log.DebugContext(ctx, "starting log stream", "id", id, "tail", tail, "follow", follow)
+	log.DebugContext(ctx, "starting log stream", "id", id, "tail", tail, "follow", follow, "source", source)
 
 	// Verify tail command is available
 	if _, err := exec.LookPath("tail"); err != nil {
@@ -30,7 +45,19 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 		return nil, err
 	}
 
-	logPath := m.paths.InstanceConsoleLog(id)
+	// Determine log path based on source
+	var logPath string
+	switch source {
+	case LogSourceApp:
+		logPath = m.paths.InstanceAppLog(id)
+	case LogSourceVMM:
+		logPath = m.paths.InstanceVMMLog(id)
+	case LogSourceHypeman:
+		logPath = m.paths.InstanceHypemanLog(id)
+	default:
+		// Default to app log for backwards compatibility
+		logPath = m.paths.InstanceAppLog(id)
+	}
 
 	// Build tail command
 	args := []string{"-n", strconv.Itoa(tail)}

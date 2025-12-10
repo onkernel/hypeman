@@ -25,7 +25,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 	// 1. Load instance metadata to get instance name and network status
 	meta, err := m.loadInstanceMetadata(instanceID)
 	if err != nil {
-		log.DebugContext(ctx, "failed to load instance metadata", "instance_id", instanceID, "error", err)
+		log.DebugContext(ctx, "failed to load instance metadata", "id", instanceID, "error", err)
 		return nil, err
 	}
 
@@ -183,4 +183,3 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-

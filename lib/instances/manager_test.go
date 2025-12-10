@@ -692,7 +692,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	}()
 
 	// Append marker to console log file
-	consoleLogPath := p.InstanceConsoleLog(inst.Id)
+	consoleLogPath := p.InstanceAppLog(inst.Id)
 	f, err := os.OpenFile(consoleLogPath, os.O_APPEND|os.O_WRONLY, 0644)
 	require.NoError(t, err)
 	_, err = fmt.Fprintln(f, marker)
@@ -899,12 +899,12 @@ func TestStandbyAndRestore(t *testing.T) {
 		t.Logf("  - %s (size: %d bytes)", entry.Name(), info.Size())
 	}
 
-	// DEBUG: Check console.log file size before restore
-	consoleLogPath := filepath.Join(tmpDir, "guests", inst.Id, "logs", "console.log")
+	// DEBUG: Check app.log file size before restore
+	consoleLogPath := filepath.Join(tmpDir, "guests", inst.Id, "logs", "app.log")
 	var consoleLogSizeBefore int64
 	if info, err := os.Stat(consoleLogPath); err == nil {
 		consoleLogSizeBefore = info.Size()
-		t.Logf("DEBUG: console.log size before restore: %d bytes", consoleLogSizeBefore)
+		t.Logf("DEBUG: app.log size before restore: %d bytes", consoleLogSizeBefore)
 	}
 
 	// Restore instance
@@ -914,13 +914,13 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
 
-	// DEBUG: Check console.log file size after restore
+	// DEBUG: Check app.log file size after restore
 	if info, err := os.Stat(consoleLogPath); err == nil {
 		consoleLogSizeAfter := info.Size()
-		t.Logf("DEBUG: console.log size after restore: %d bytes", consoleLogSizeAfter)
+		t.Logf("DEBUG: app.log size after restore: %d bytes", consoleLogSizeAfter)
 		t.Logf("DEBUG: File size diff: %d bytes", consoleLogSizeAfter-consoleLogSizeBefore)
 		if consoleLogSizeAfter < consoleLogSizeBefore {
-			t.Logf("DEBUG: WARNING! console.log was TRUNCATED (lost %d bytes)", consoleLogSizeBefore-consoleLogSizeAfter)
+			t.Logf("DEBUG: WARNING! app.log was TRUNCATED (lost %d bytes)", consoleLogSizeBefore-consoleLogSizeAfter)
 		}
 	}
 

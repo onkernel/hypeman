@@ -619,7 +619,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 	// Serial console configuration
 	serial := vmm.ConsoleConfig{
 		Mode: vmm.ConsoleConfigMode("File"),
-		File: ptr(m.paths.InstanceConsoleLog(inst.Id)),
+		File: ptr(m.paths.InstanceAppLog(inst.Id)),
 	}
 
 	// Console off (we use serial)

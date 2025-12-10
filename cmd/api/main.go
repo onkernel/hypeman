@@ -226,7 +226,8 @@ func run() error {
 		}
 
 		// Inject logger into request context for handlers to use
-		r.Use(mw.InjectLogger(accessLogger))
+		// Use app logger (not accessLogger) so the instance log handler is included
+		r.Use(mw.InjectLogger(logger))
 
 		// Access logger AFTER otelchi so trace context is available
 		r.Use(mw.AccessLogger(accessLogger))

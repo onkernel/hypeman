@@ -36,7 +36,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		// Failed to create client - this is unexpected if socket exists
 		errMsg := fmt.Sprintf("failed to create VMM client: %v", err)
 		log.WarnContext(ctx, "failed to determine instance state",
-			"instance_id", stored.Id,
+			"id", stored.Id,
 			"socket", stored.SocketPath,
 			"error", err,
 		)
@@ -48,7 +48,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		// Socket exists but VMM is unreachable - this is unexpected
 		errMsg := fmt.Sprintf("failed to query VMM: %v", err)
 		log.WarnContext(ctx, "failed to query VMM state",
-			"instance_id", stored.Id,
+			"id", stored.Id,
 			"socket", stored.SocketPath,
 			"error", err,
 		)
@@ -60,7 +60,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		body := string(resp.Body)
 		errMsg := fmt.Sprintf("VMM returned error (status %d): %s", resp.StatusCode(), body)
 		log.WarnContext(ctx, "VMM returned error response",
-			"instance_id", stored.Id,
+			"id", stored.Id,
 			"socket", stored.SocketPath,
 			"status_code", resp.StatusCode(),
 			"body", body,
@@ -82,7 +82,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		// Unknown CH state - log and return Unknown
 		errMsg := fmt.Sprintf("unexpected VMM state: %s", resp.JSON200.State)
 		log.WarnContext(ctx, "VMM returned unexpected state",
-			"instance_id", stored.Id,
+			"id", stored.Id,
 			"vmm_state", resp.JSON200.State,
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}

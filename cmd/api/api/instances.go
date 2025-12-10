@@ -466,6 +466,19 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 		follow = *request.Params.Follow
 	}
 
+	// Map source parameter to LogSource type (default to app)
+	source := instances.LogSourceApp
+	if request.Params.Source != nil {
+		switch *request.Params.Source {
+		case oapi.App:
+			source = instances.LogSourceApp
+		case oapi.Vmm:
+			source = instances.LogSourceVMM
+		case oapi.Hypeman:
+			source = instances.LogSourceHypeman
+		}
+	}
+
 	// Resolve to get the actual instance ID
 	resolved, err := s.InstanceManager.GetInstance(ctx, request.Id)
 	if err != nil {
@@ -488,13 +501,18 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 		}
 	}
 
-	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, resolved.Id, tail, follow)
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, resolved.Id, tail, follow, source)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrTailNotFound):
 			return oapi.GetInstanceLogs500JSONResponse{
 				Code:    "dependency_missing",
 				Message: "tail command not found on server - required for log streaming",
+			}, nil
+		case errors.Is(err, instances.ErrLogNotFound):
+			return oapi.GetInstanceLogs404JSONResponse{
+				Code:    "log_not_found",
+				Message: "requested log file does not exist yet",
 			}, nil
 		default:
 			return oapi.GetInstanceLogs500JSONResponse{

@@ -91,7 +91,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	// Capture console log on failure with exec-agent filtering
 	t.Cleanup(func() {
 		if t.Failed() {
-			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
+			consolePath := paths.New(svc.Config.DataDir).InstanceAppLog(inst.Id)
 			if consoleData, err := os.ReadFile(consolePath); err == nil {
 				lines := strings.Split(string(consoleData), "\n")
 
