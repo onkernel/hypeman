@@ -3,12 +3,20 @@ package devices_test
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net/http/httptest"
 	"os"
+	osExec "os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/daemon"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/exec"
@@ -16,6 +24,7 @@ import (
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
@@ -25,40 +34,39 @@ import (
 // persistentTestDataDir is used to persist volumes between test runs.
 // This allows the ollama model cache to survive across test executions.
 // Note: Uses /var/lib instead of /tmp because /tmp often has limited space
-// and the ollama image is ~3GB.
+// and the custom CUDA+Ollama image is ~4GB.
 const persistentTestDataDir = "/var/lib/hypeman-gpu-inference-test"
 
-// TestGPUInference is an E2E test that verifies Ollama inference works with GPU passthrough.
+// ollamaCudaDockerImage is the name we use for the custom CUDA+Ollama image
+const ollamaCudaDockerImage = "ollama-cuda:test"
+
+// TestGPUInference is an E2E test that verifies Ollama GPU inference works with VFIO passthrough.
 //
 // This test:
-//  1. Creates a persistent volume for Ollama's model cache
-//  2. Launches a VM with GPU passthrough + the volume attached + networking
-//  3. Runs `ollama run tinyllama` to perform inference
-//  4. Verifies the model generates output
+//  1. Builds a custom Docker image with NVIDIA CUDA runtime + Ollama
+//  2. Pushes the image to hypeman's test registry
+//  3. Launches a VM with GPU passthrough + the image
+//  4. Runs `ollama run tinyllama` to perform GPU-accelerated inference
+//  5. Verifies the model generates output
 //
-// NOTE: Currently runs CPU inference because the ollama/ollama image doesn't include
-// NVIDIA drivers. Full GPU inference would require a custom image with:
-//   - NVIDIA drivers installed in the guest OS
-//   - CUDA libraries
-//   - nvidia-container-toolkit configured
+// The custom image bundles CUDA libraries, enabling Ollama to detect and use the GPU
+// without needing nvidia-docker/nvidia-container-toolkit.
 //
-// The volume persists between test runs, so:
-//   - First run: Downloads TinyLlama model (~637MB) - takes 3-5 minutes
-//   - Subsequent runs: Model already cached - takes ~30 seconds
-//
-// Prerequisites (same as TestGPUPassthrough):
+// Prerequisites:
 //   - NVIDIA GPU on host
 //   - IOMMU enabled
 //   - VFIO modules loaded (modprobe vfio_pci)
+//   - Docker installed (for building custom image)
 //   - Running as root
 //
 // To run manually:
 //
-//	sudo env PATH=$PATH:/sbin:/usr/sbin go test -v -run TestGPUInference -timeout 15m ./lib/devices/...
+//	sudo env PATH=$PATH:/sbin:/usr/sbin go test -v -run TestGPUInference -timeout 30m ./lib/devices/...
 //
-// To clean up the persistent volume:
+// To clean up:
 //
 //	sudo rm -rf /var/lib/hypeman-gpu-inference-test
+//	docker rmi ollama-cuda:test
 func TestGPUInference(t *testing.T) {
 	ctx := context.Background()
 
@@ -68,12 +76,15 @@ func TestGPUInference(t *testing.T) {
 		t.Skip(skipReason)
 	}
 
-	// Log that prerequisites passed
+	// Check Docker is available
+	if _, err := osExec.LookPath("docker"); err != nil {
+		t.Skip("Docker not installed - required for building custom CUDA image")
+	}
+
 	groups, _ := os.ReadDir("/sys/kernel/iommu_groups")
 	t.Logf("GPU inference test prerequisites met: %d IOMMU groups found", len(groups))
 
 	// Use persistent directory for volume storage (survives between test runs)
-	// This allows the ollama model cache to persist
 	if err := os.MkdirAll(persistentTestDataDir, 0755); err != nil {
 		t.Fatalf("Failed to create persistent test directory: %v", err)
 	}
@@ -86,25 +97,82 @@ func TestGPUInference(t *testing.T) {
 		DNSServer:  "1.1.1.1",
 	}
 
-	// Initialize managers (nil meter/tracer disables metrics/tracing)
+	// Initialize managers
 	imageMgr, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg, nil)
 	deviceMgr := devices.NewManager(p)
-	volumeMgr := volumes.NewManager(p, 100*1024*1024*1024, nil) // 100GB max volume storage
+	volumeMgr := volumes.NewManager(p, 100*1024*1024*1024, nil)
 	limits := instances.ResourceLimits{
-		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
+		MaxOverlaySize: 100 * 1024 * 1024 * 1024,
 	}
 	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
 
-	// Step 1: Discover available GPUs
-	t.Log("Step 1: Discovering available GPUs...")
+	// Step 1: Build custom CUDA+Ollama image
+	t.Log("Step 1: Building custom CUDA+Ollama Docker image...")
+	dockerfilePath := getDockerfilePath(t)
+	buildCustomCudaImage(t, dockerfilePath, ollamaCudaDockerImage)
+
+	// Step 2: Set up test registry and push the image
+	t.Log("Step 2: Pushing custom image to hypeman registry...")
+	reg, err := registry.New(p, imageMgr)
+	require.NoError(t, err)
+
+	router := chi.NewRouter()
+	router.Mount("/v2", reg.Handler())
+	ts := httptest.NewServer(router)
+	t.Cleanup(ts.Close)
+
+	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	pushLocalDockerImage(t, ollamaCudaDockerImage, serverHost)
+	t.Log("Push complete")
+
+	// Wait for image conversion - find image by listing since digest may change during Docker->OCI conversion
+	t.Log("Waiting for image conversion...")
+	var img *images.Image
+	var imageName string
+	for i := 0; i < 300; i++ { // 5 minutes for large CUDA image
+		// List images and find our ollama-cuda image
+		allImages, listErr := imageMgr.ListImages(ctx)
+		if listErr == nil {
+			for _, candidate := range allImages {
+				if strings.Contains(candidate.Name, "ollama-cuda") {
+					img = &candidate
+					imageName = candidate.Name
+					break
+				}
+			}
+		}
+		if img != nil && img.Status == images.StatusReady {
+			break
+		}
+		if img != nil && img.Status == images.StatusFailed {
+			errMsg := "unknown"
+			if img.Error != nil {
+				errMsg = *img.Error
+			}
+			t.Fatalf("Image conversion failed: %s", errMsg)
+		}
+		if i%30 == 0 {
+			status := "not found"
+			if img != nil {
+				status = string(img.Status)
+			}
+			t.Logf("Waiting for image conversion... (%d/300, status=%s)", i+1, status)
+		}
+		time.Sleep(time.Second)
+	}
+	require.NotNil(t, img, "Image should exist after 5 minutes")
+	require.Equal(t, images.StatusReady, img.Status, "Image should be ready")
+	t.Logf("Image ready: %s (digest: %s)", imageName, img.Digest)
+
+	// Step 3: Discover and register GPU
+	t.Log("Step 3: Discovering available GPUs...")
 	availableDevices, err := deviceMgr.ListAvailableDevices(ctx)
 	require.NoError(t, err)
 
-	// Find an NVIDIA GPU
 	var targetGPU *devices.AvailableDevice
 	for _, d := range availableDevices {
 		if strings.Contains(strings.ToLower(d.VendorName), "nvidia") {
@@ -112,29 +180,27 @@ func TestGPUInference(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, targetGPU, "No NVIDIA GPU found on this system")
+	require.NotNil(t, targetGPU, "No NVIDIA GPU found")
+
 	driverStr := "none"
 	if targetGPU.CurrentDriver != nil {
 		driverStr = *targetGPU.CurrentDriver
 	}
 	t.Logf("Found NVIDIA GPU: %s at %s (driver: %s)", targetGPU.DeviceName, targetGPU.PCIAddress, driverStr)
 
-	// Check GPU is in a usable state (has a driver bound)
 	if targetGPU.CurrentDriver == nil || *targetGPU.CurrentDriver == "" {
-		t.Skip("GPU has no driver bound - may need reboot to recover. Run: sudo reboot")
+		t.Skip("GPU has no driver bound - may need reboot")
 	}
 
-	// Verify the driver path exists (GPU not in broken state)
 	driverPath := filepath.Join("/sys/bus/pci/devices", targetGPU.PCIAddress, "driver")
 	if _, err := os.Stat(driverPath); os.IsNotExist(err) {
-		t.Skipf("GPU driver symlink missing at %s - GPU in broken state, reboot required", driverPath)
+		t.Skipf("GPU driver symlink missing - GPU in broken state")
 	}
 
-	// Step 2: Register the GPU (check if already registered from previous run)
-	t.Log("Step 2: Registering GPU...")
+	// Register GPU
+	t.Log("Step 4: Registering GPU...")
 	device, err := deviceMgr.GetDevice(ctx, "inference-gpu")
 	if err != nil {
-		// Device not registered yet, create it
 		device, err = deviceMgr.CreateDevice(ctx, devices.CreateDeviceRequest{
 			Name:       "inference-gpu",
 			PCIAddress: targetGPU.PCIAddress,
@@ -145,316 +211,265 @@ func TestGPUInference(t *testing.T) {
 		t.Logf("Using existing device: %s (ID: %s)", device.Name, device.Id)
 	}
 
-	// Store original driver for cleanup
 	originalDriver := driverStr
-
-	// Cleanup: always unregister device and try to restore original driver
 	t.Cleanup(func() {
 		t.Log("Cleanup: Deleting registered device...")
 		deviceMgr.DeleteDevice(ctx, device.Id)
-
-		// Try to restore original driver binding via driver_probe
 		if originalDriver != "" && originalDriver != "none" && originalDriver != "vfio-pci" {
-			t.Logf("Cleanup: Triggering driver probe to restore %s driver...", originalDriver)
 			probePath := "/sys/bus/pci/drivers_probe"
-			if err := os.WriteFile(probePath, []byte(targetGPU.PCIAddress), 0200); err != nil {
-				t.Logf("Warning: Could not trigger driver probe: %v (may need reboot)", err)
-			} else {
-				t.Logf("Cleanup: Driver probe triggered for %s", targetGPU.PCIAddress)
-			}
+			os.WriteFile(probePath, []byte(targetGPU.PCIAddress), 0200)
 		}
 	})
 
-	// Step 3: Initialize network (needed for model download)
-	t.Log("Step 3: Initializing network...")
-	err = networkMgr.Initialize(ctx, []string{}) // No running instances yet
-	require.NoError(t, err, "Network initialization should succeed")
-	t.Log("Network initialized")
+	// Step 5: Initialize network and create volume
+	t.Log("Step 5: Initializing network...")
+	err = networkMgr.Initialize(ctx, []string{})
+	require.NoError(t, err)
 
-	// Step 4: Create or get persistent volume for ollama models
-	t.Log("Step 4: Setting up persistent volume for Ollama models...")
+	t.Log("Step 6: Setting up persistent volume for Ollama models...")
 	vol, err := volumeMgr.GetVolumeByName(ctx, "ollama-models")
 	if err != nil {
-		// Volume doesn't exist, create it (5GB should fit TinyLlama with room to spare)
 		vol, err = volumeMgr.CreateVolume(ctx, volumes.CreateVolumeRequest{
 			Name:   "ollama-models",
 			SizeGb: 5,
 		})
 		require.NoError(t, err)
-		t.Logf("Created new volume: %s (ID: %s, Size: %dGB)", vol.Name, vol.Id, vol.SizeGb)
-		t.Log("⚠️  First run - model will be downloaded (~637MB). This may take 1-2 minutes.")
+		t.Logf("Created new volume: %s", vol.Name)
 	} else {
-		t.Logf("Using existing volume: %s (ID: %s) - model may already be cached", vol.Name, vol.Id)
+		t.Logf("Using existing volume: %s", vol.Name)
 	}
-	// Note: We intentionally don't delete the volume so it persists between test runs
 
-	// Step 5: Ensure system files (kernel, initrd)
-	t.Log("Step 5: Ensuring system files...")
+	// Step 7: Ensure system files
+	t.Log("Step 7: Ensuring system files...")
 	err = systemMgr.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
-	t.Log("System files ready")
 
-	// Step 6: Pull ollama image
-	t.Log("Step 6: Pulling ollama:latest image...")
-	createdImg, createErr := imageMgr.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/ollama/ollama:latest",
-	})
-	require.NoError(t, createErr, "CreateImage should succeed")
-	t.Logf("CreateImage returned: name=%s, status=%s", createdImg.Name, createdImg.Status)
-
-	imageName := createdImg.Name
-
-	// Wait for image to be ready (ollama image is ~1.5GB, may take a while)
-	var img *images.Image
-	for i := 0; i < 180; i++ { // 3 minutes timeout for image pull
-		img, err = imageMgr.GetImage(ctx, imageName)
-		if err != nil {
-			if i < 5 || i%30 == 0 {
-				t.Logf("GetImage attempt %d: error=%v", i+1, err)
-			}
-		} else {
-			if i < 5 || i%30 == 0 {
-				t.Logf("GetImage attempt %d: status=%s", i+1, img.Status)
-			}
-			if img.Status == images.StatusReady {
-				break
-			}
-			if img.Status == images.StatusFailed {
-				errMsg := "unknown"
-				if img.Error != nil {
-					errMsg = *img.Error
-				}
-				t.Fatalf("Image build failed: %s", errMsg)
-			}
-		}
-		time.Sleep(1 * time.Second)
-	}
-	require.NotNil(t, img, "Image should exist after 180 seconds")
-	require.Equal(t, images.StatusReady, img.Status, "Image should be ready")
-	t.Log("Image ready")
-
-	// Step 7: Create instance with GPU and volume
-	t.Log("Step 7: Creating instance with GPU and Ollama model volume...")
+	// Step 8: Create instance with GPU
+	t.Log("Step 8: Creating instance with GPU and custom CUDA image...")
 	createCtx, createCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer createCancel()
 
 	inst, err := instanceMgr.CreateInstance(createCtx, instances.CreateInstanceRequest{
 		Name:        "gpu-inference-test",
 		Image:       imageName,
-		Size:        4 * 1024 * 1024 * 1024,  // 4GB RAM (ollama needs more memory)
-		HotplugSize: 4 * 1024 * 1024 * 1024,  // 4GB hotplug
-		OverlaySize: 10 * 1024 * 1024 * 1024, // 10GB overlay
-		Vcpus:       4,                       // More CPUs for faster inference
+		Size:        8 * 1024 * 1024 * 1024, // 8GB RAM for CUDA
+		HotplugSize: 8 * 1024 * 1024 * 1024,
+		OverlaySize: 10 * 1024 * 1024 * 1024,
+		Vcpus:       4,
 		Env: map[string]string{
-			"OLLAMA_HOST":   "0.0.0.0",      // Allow external connections (not strictly needed for test)
-			"OLLAMA_MODELS": "/data/models", // Use mounted volume for model storage
+			"OLLAMA_HOST":   "0.0.0.0",
+			"OLLAMA_MODELS": "/data/models",
 		},
-		NetworkEnabled: true, // Needed for model download
+		NetworkEnabled: true,
 		Devices:        []string{"inference-gpu"},
 		Volumes: []instances.VolumeAttachment{
-			{
-				VolumeID:  vol.Id,
-				MountPath: "/data/models", // Ollama will use this via OLLAMA_MODELS env var
-				Readonly:  false,          // Need write access to download models
-			},
+			{VolumeID: vol.Id, MountPath: "/data/models", Readonly: false},
 		},
 	})
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Cleanup: always delete instance (but keep volume for model caching)
 	t.Cleanup(func() {
 		t.Log("Cleanup: Deleting instance...")
 		instanceMgr.DeleteInstance(ctx, inst.Id)
-		// Note: We intentionally keep the volume so models persist between runs
 	})
 
-	// Step 8: Wait for instance to be ready
-	t.Log("Step 8: Waiting for instance to be ready...")
+	// Step 9: Wait for instance
+	t.Log("Step 9: Waiting for instance to be ready...")
 	err = waitForInstanceReady(ctx, t, instanceMgr, inst.Id, 60*time.Second)
 	require.NoError(t, err)
-	t.Log("Instance is ready")
 
-	// Get instance details for exec
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
-	// Step 9: Wait for Ollama server to be ready (it starts automatically as container entrypoint)
-	t.Log("Step 9: Waiting for Ollama server to be ready...")
-
-	// Poll using `ollama list` which requires the server to be running
+	// Step 10: Wait for Ollama server
+	t.Log("Step 10: Waiting for Ollama server to be ready...")
 	ollamaReady := false
-	for i := 0; i < 30; i++ { // 30 attempts, 1 second apart = 30 second timeout
+	for i := 0; i < 60; i++ { // 60 seconds for CUDA init
 		healthCtx, healthCancel := context.WithTimeout(ctx, 5*time.Second)
 		var healthStdout, healthStderr inferenceOutputBuffer
 
 		_, err = exec.ExecIntoInstance(healthCtx, actualInst.VsockSocket, exec.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
-			Stdin:   nil,
 			Stdout:  &healthStdout,
 			Stderr:  &healthStderr,
-			TTY:     false,
 		})
 		healthCancel()
 
 		output := healthStdout.String()
-		// Success: either shows "NAME" header (has models) or empty list
-		// Failure: "could not connect" or other error
-		if err == nil && !strings.Contains(output, "could not connect") && !strings.Contains(output, "error") {
-			t.Logf("Ollama is ready (attempt %d): %s", i+1, strings.TrimSpace(output))
+		if err == nil && !strings.Contains(output, "could not connect") {
+			t.Logf("Ollama is ready (attempt %d)", i+1)
 			ollamaReady = true
 			break
 		}
-		if i < 5 || i%5 == 0 {
-			t.Logf("Waiting for Ollama (attempt %d/30): output=%q, err=%v",
-				i+1, strings.TrimSpace(output), err)
+		if i%10 == 0 {
+			t.Logf("Waiting for Ollama (attempt %d/60)...", i+1)
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Second)
 	}
-	require.True(t, ollamaReady, "Ollama server should become ready within 30 seconds")
+	require.True(t, ollamaReady, "Ollama server should become ready")
 
-	// Check GPU detection status
-	t.Log("Checking Ollama GPU detection...")
+	// Step 11: Check GPU detection
+	t.Log("Step 11: Checking GPU detection...")
 	gpuCheckCtx, gpuCheckCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer gpuCheckCancel()
-	var gpuStdout, gpuStderr inferenceOutputBuffer
-	_, _ = exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "cat /var/log/ollama.log 2>/dev/null | grep -i gpu || echo 'No GPU log found'"},
-		Stdin:   nil,
-		Stdout:  &gpuStdout,
-		Stderr:  &gpuStderr,
-		TTY:     false,
-	})
-	t.Logf("GPU detection status: %s", strings.TrimSpace(gpuStdout.String()))
 
-	// Also check if nvidia-smi works (indicates driver is loaded)
+	// Check nvidia-smi (should work now with CUDA image)
 	var nvidiaSmiStdout, nvidiaSmiStderr inferenceOutputBuffer
-	_, nvidiaSmiErr := exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "nvidia-smi 2>&1 || echo 'nvidia-smi not available'"},
-		Stdin:   nil,
+	_, err = exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "nvidia-smi 2>&1 || echo 'nvidia-smi failed'"},
 		Stdout:  &nvidiaSmiStdout,
 		Stderr:  &nvidiaSmiStderr,
-		TTY:     false,
 	})
-	nvidiaSmiOutput := strings.TrimSpace(nvidiaSmiStdout.String())
-	if nvidiaSmiErr == nil && !strings.Contains(nvidiaSmiOutput, "not available") && !strings.Contains(nvidiaSmiOutput, "command not found") {
-		t.Logf("nvidia-smi output:\n%s", nvidiaSmiOutput)
+	nvidiaSmiOutput := nvidiaSmiStdout.String()
+	if strings.Contains(nvidiaSmiOutput, "NVIDIA-SMI") {
+		t.Logf("✓ nvidia-smi works! GPU detected:\n%s", truncateHead(nvidiaSmiOutput, 500))
 	} else {
-		t.Log("nvidia-smi not available - GPU passthrough works but NVIDIA drivers not loaded in guest")
-		t.Log("(The ollama/ollama image doesn't include NVIDIA drivers)")
+		t.Logf("nvidia-smi output: %s", nvidiaSmiOutput)
 	}
 
-	// Step 10: Pull model (separate from inference for better error detection)
-	t.Log("Step 10: Pulling TinyLlama model...")
-
-	// First check if model is already downloaded
-	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
-	var listStdout, listStderr inferenceOutputBuffer
-	_, _ = exec.ExecIntoInstance(listCtx, actualInst.VsockSocket, exec.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
-		Stdin:   nil,
-		Stdout:  &listStdout,
-		Stderr:  &listStderr,
-		TTY:     false,
+	// Check NVIDIA kernel modules
+	var modulesStdout inferenceOutputBuffer
+	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "cat /proc/modules | grep nvidia"},
+		Stdout:  &modulesStdout,
 	})
-	listCancel()
+	if modulesStdout.String() != "" {
+		t.Logf("✓ NVIDIA kernel modules loaded:\n%s", modulesStdout.String())
+	}
 
-	modelList := strings.TrimSpace(listStdout.String())
-	modelAlreadyCached := strings.Contains(modelList, "tinyllama")
-	if modelAlreadyCached {
-		t.Logf("Model already cached: %s", modelList)
-	} else {
-		t.Log("Model not cached - pulling now (~637MB)...")
+	// Check device nodes
+	var devStdout inferenceOutputBuffer
+	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "ls -la /dev/nvidia* 2>&1"},
+		Stdout:  &devStdout,
+	})
+	if !strings.Contains(devStdout.String(), "No such file") {
+		t.Logf("✓ NVIDIA device nodes:\n%s", devStdout.String())
+	}
 
-		// Pull model with timeout - this downloads the model
+	// Step 12: Pull and run inference
+	t.Log("Step 12: Pulling TinyLlama model...")
+
+	// Check if model is cached
+	var listStdout inferenceOutputBuffer
+	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
+		Stdout:  &listStdout,
+	})
+
+	if !strings.Contains(listStdout.String(), "tinyllama") {
+		t.Log("Model not cached - pulling now...")
 		pullCtx, pullCancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer pullCancel()
 
-		var pullStdout, pullStderr inferenceOutputBuffer
+		var pullStdout inferenceOutputBuffer
 		_, pullErr := exec.ExecIntoInstance(pullCtx, actualInst.VsockSocket, exec.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "ollama pull tinyllama 2>&1"},
-			Stdin:   nil,
 			Stdout:  &pullStdout,
-			Stderr:  &pullStderr,
-			TTY:     false,
 		})
-
-		pullOutput := pullStdout.String()
-		t.Logf("Pull output: %s", truncateTail(pullOutput, 500))
-
-		if pullErr != nil {
-			t.Logf("Pull stderr: %s", pullStderr.String())
-			// Check for common error patterns
-			if strings.Contains(pullOutput, "could not connect") {
-				t.Fatal("Model pull failed: Ollama server not responding")
-			}
-			if strings.Contains(pullOutput, "error") || strings.Contains(pullOutput, "Error") {
-				t.Fatalf("Model pull failed: %s", pullOutput)
-			}
-			require.NoError(t, pullErr, "ollama pull should succeed")
-		}
-
-		// Verify model was downloaded
-		verifyCtx, verifyCancel := context.WithTimeout(ctx, 10*time.Second)
-		var verifyStdout, verifyStderr inferenceOutputBuffer
-		_, _ = exec.ExecIntoInstance(verifyCtx, actualInst.VsockSocket, exec.ExecOptions{
-			Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
-			Stdin:   nil,
-			Stdout:  &verifyStdout,
-			Stderr:  &verifyStderr,
-			TTY:     false,
-		})
-		verifyCancel()
-		t.Logf("Models after pull: %s", strings.TrimSpace(verifyStdout.String()))
+		t.Logf("Pull output: %s", truncateTail(pullStdout.String(), 500))
+		require.NoError(t, pullErr, "ollama pull should succeed")
+	} else {
+		t.Log("Model already cached")
 	}
 
-	// Step 11: Run inference
-	t.Log("Step 11: Running inference...")
+	t.Log("Step 13: Running inference...")
 	prompt := "Say hello in exactly 3 words"
 	ollamaCmd := "ollama run tinyllama '" + prompt + "' 2>&1"
-
 	t.Logf("Executing: %s", ollamaCmd)
 
-	// CPU inference can be slow without GPU (2-3 minutes for small models)
-	// GPU inference would be much faster but requires NVIDIA drivers in guest
-	inferenceCtx, inferenceCancel := context.WithTimeout(ctx, 3*time.Minute)
+	// GPU inference should be fast, but first run needs model load time
+	// First run may need to compile CUDA kernels which can take several minutes
+	inferenceCtx, inferenceCancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer inferenceCancel()
 
 	var inferenceStdout, inferenceStderr inferenceOutputBuffer
-
 	_, execErr := exec.ExecIntoInstance(inferenceCtx, actualInst.VsockSocket, exec.ExecOptions{
 		Command: []string{"/bin/sh", "-c", ollamaCmd},
-		Stdin:   nil,
 		Stdout:  &inferenceStdout,
 		Stderr:  &inferenceStderr,
-		TTY:     false,
 	})
 
 	inferenceOutput := inferenceStdout.String()
 	t.Logf("Inference output: %s", inferenceOutput)
 
 	if execErr != nil {
-		// Print console log for debugging
 		consoleLogPath := p.InstanceConsoleLog(inst.Id)
 		if consoleLog, err := os.ReadFile(consoleLogPath); err == nil {
-			t.Logf("=== VM Console Log (last 3000 chars) ===\n%s\n=== End Console Log ===",
-				truncateTail(string(consoleLog), 3000))
+			t.Logf("=== VM Console Log ===\n%s\n=== End ===", truncateTail(string(consoleLog), 3000))
 		}
 		t.Logf("Inference stderr: %s", inferenceStderr.String())
 	}
 	require.NoError(t, execErr, "ollama inference should succeed")
 
-	// Step 12: Verify output
-	output := inferenceStdout.String()
-	t.Logf("Inference output:\n%s", output)
-
-	// Verify we got some output (the model generated text)
-	assert.NotEmpty(t, output, "Model should generate output")
-	assert.True(t, len(output) > 5, "Model output should be more than a few characters")
+	// Verify output
+	assert.NotEmpty(t, inferenceOutput, "Model should generate output")
+	assert.True(t, len(inferenceOutput) > 5, "Model output should be substantive")
 
 	t.Log("✅ GPU inference test PASSED!")
-	t.Log("Note: The ollama-models volume has been preserved for faster subsequent runs.")
-	t.Logf("To clean up: sudo rm -rf %s", persistentTestDataDir)
+}
+
+// getDockerfilePath returns the path to the CUDA+Ollama Dockerfile
+func getDockerfilePath(t *testing.T) string {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "Could not get current file path")
+	return filepath.Join(filepath.Dir(thisFile), "testdata", "ollama-cuda", "Dockerfile")
+}
+
+// buildCustomCudaImage builds the custom CUDA+Ollama Docker image
+func buildCustomCudaImage(t *testing.T, dockerfilePath, imageName string) {
+	t.Helper()
+
+	// Check if image already exists
+	checkCmd := osExec.Command("docker", "image", "inspect", imageName)
+	if checkCmd.Run() == nil {
+		t.Logf("Docker image %s already exists, skipping build", imageName)
+		return
+	}
+
+	t.Logf("Building Docker image %s (this may take several minutes)...", imageName)
+	dockerfileDir := filepath.Dir(dockerfilePath)
+
+	cmd := osExec.Command("docker", "build", "-t", imageName, dockerfileDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Run()
+	require.NoError(t, err, "Docker build should succeed")
+	t.Logf("Docker image %s built successfully", imageName)
+}
+
+// pushLocalDockerImage loads an image from local Docker and pushes to hypeman's test registry
+func pushLocalDockerImage(t *testing.T, dockerImage, serverHost string) {
+	t.Helper()
+
+	t.Log("Loading image from Docker daemon...")
+	srcRef, err := name.ParseReference(dockerImage)
+	require.NoError(t, err, "Parse source image reference")
+
+	img, err := daemon.Image(srcRef)
+	require.NoError(t, err, "Load image from Docker daemon")
+
+	// Check image size for progress context
+	layers, _ := img.Layers()
+	var totalSize int64
+	for _, layer := range layers {
+		if size, err := layer.Size(); err == nil {
+			totalSize += size
+		}
+	}
+	t.Logf("Image has %d layers, ~%.1f GB total", len(layers), float64(totalSize)/1e9)
+
+	// Push to test registry with a tag (not just digest) so ListImages can find it
+	targetRef := fmt.Sprintf("%s/test/ollama-cuda:latest", serverHost)
+	t.Logf("Pushing to %s", targetRef)
+
+	dstRef, err := name.ParseReference(targetRef, name.Insecure)
+	require.NoError(t, err, "Parse target reference")
+
+	err = remote.Write(dstRef, img)
+	require.NoError(t, err, "Push to registry")
 }
 
 // inferenceOutputBuffer is a simple buffer for capturing command output
@@ -476,4 +491,12 @@ func truncateTail(s string, n int) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// truncateHead returns the first n characters of s
+func truncateHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

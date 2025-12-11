@@ -53,7 +53,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 	// Create ext4 disk with config files
 	// Use ext4 for now (can switch to erofs when kernel supports it)
 	diskPath := m.paths.InstanceConfigDisk(inst.Id)
-	
+
 	// Calculate size (config files are tiny, use 1MB minimum)
 	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
 	if err != nil {
@@ -70,26 +70,26 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image, 
 	if len(imageInfo.Entrypoint) > 0 {
 		entrypoint = shellQuoteArray(imageInfo.Entrypoint)
 	}
-	
+
 	// Prepare cmd value
 	cmd := ""
 	if len(imageInfo.Cmd) > 0 {
 		cmd = shellQuoteArray(imageInfo.Cmd)
 	}
-	
+
 	// Prepare workdir value
 	workdir := shellQuote("/")
 	if imageInfo.WorkingDir != "" {
 		workdir = shellQuote(imageInfo.WorkingDir)
 	}
-	
+
 	// Build environment variable exports
 	var envLines strings.Builder
 	mergedEnv := mergeEnv(imageInfo.Env, inst.Env)
 	for key, value := range mergedEnv {
 		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
-	
+
 	// Build network configuration section
 	// Use netConfig directly instead of trying to derive it (VM hasn't started yet)
 	networkSection := ""
@@ -144,7 +144,7 @@ GUEST_DNS="%s"
 		volumeLines.WriteString("\"\n")
 		volumeSection = volumeLines.String()
 	}
-	
+
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
@@ -156,7 +156,7 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s%s%s`, 
+%s%s%s%s`,
 		inst.Id,
 		entrypoint,
 		cmd,
@@ -166,7 +166,7 @@ WORKDIR=%s
 		volumeSection,
 		gpuSection,
 	)
-	
+
 	return script
 }
 

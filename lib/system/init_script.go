@@ -89,27 +89,34 @@ if [ "${HAS_GPU:-0}" = "1" ]; then
       insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-drm.ko modeset=1 2>&1 || echo "overlay-init: nvidia-drm.ko load failed"
       echo "overlay-init: NVIDIA modules loaded for kernel $KVER"
       
-      # Create NVIDIA device nodes (normally done by nvidia-modprobe/udev)
-      # Get major numbers from /proc/devices
-      # nvidia-frontend is sometimes listed as just "nvidia"
-      NVIDIA_MAJOR=$(awk '/nvidia-frontend|^[0-9]+ nvidia$/ {print $1}' /proc/devices 2>/dev/null | head -1)
-      NVIDIA_UVM_MAJOR=$(awk '/nvidia-uvm/ {print $1}' /proc/devices 2>/dev/null)
-      
-      if [ -n "$NVIDIA_MAJOR" ]; then
-        mknod -m 666 /dev/nvidiactl c $NVIDIA_MAJOR 255
-        # Create device node for GPU 0 (minor 0)
-        # In a VM with passthrough, there's typically just one GPU
-        mknod -m 666 /dev/nvidia0 c $NVIDIA_MAJOR 0
-        echo "overlay-init: created /dev/nvidiactl and /dev/nvidia0 (major $NVIDIA_MAJOR)"
+      # Use nvidia-modprobe to create device nodes with correct major/minor numbers.
+      # nvidia-modprobe is the official NVIDIA utility that:
+      # 1. Loads kernel modules if needed (already done above)
+      # 2. Creates /dev/nvidiactl and /dev/nvidia0 with correct permissions
+      # 3. Creates /dev/nvidia-uvm and /dev/nvidia-uvm-tools
+      if [ -x /usr/bin/nvidia-modprobe ]; then
+        echo "overlay-init: running nvidia-modprobe to create device nodes"
+        /usr/bin/nvidia-modprobe 2>&1 || echo "overlay-init: nvidia-modprobe failed"
+        /usr/bin/nvidia-modprobe -u -c=0 2>&1 || echo "overlay-init: nvidia-modprobe -u failed"
+        echo "overlay-init: nvidia-modprobe completed"
+        ls -la /dev/nvidia* 2>/dev/null || true
       else
-        echo "overlay-init: WARNING - nvidia major number not found in /proc/devices"
-        cat /proc/devices | grep -i nvidia || true
-      fi
-      
-      if [ -n "$NVIDIA_UVM_MAJOR" ]; then
-        mknod -m 666 /dev/nvidia-uvm c $NVIDIA_UVM_MAJOR 0
-        mknod -m 666 /dev/nvidia-uvm-tools c $NVIDIA_UVM_MAJOR 1
-        echo "overlay-init: created /dev/nvidia-uvm* (major $NVIDIA_UVM_MAJOR)"
+        echo "overlay-init: nvidia-modprobe not found, falling back to manual mknod"
+        # Fallback: Manual device node creation
+        NVIDIA_MAJOR=$(awk '/nvidia-frontend|^[0-9]+ nvidia$/ {print $1}' /proc/devices 2>/dev/null | head -1)
+        NVIDIA_UVM_MAJOR=$(awk '/nvidia-uvm/ {print $1}' /proc/devices 2>/dev/null)
+        
+        if [ -n "$NVIDIA_MAJOR" ]; then
+          mknod -m 666 /dev/nvidiactl c $NVIDIA_MAJOR 255
+          mknod -m 666 /dev/nvidia0 c $NVIDIA_MAJOR 0
+          echo "overlay-init: created /dev/nvidiactl and /dev/nvidia0 (major $NVIDIA_MAJOR)"
+        fi
+        
+        if [ -n "$NVIDIA_UVM_MAJOR" ]; then
+          mknod -m 666 /dev/nvidia-uvm c $NVIDIA_UVM_MAJOR 0
+          mknod -m 666 /dev/nvidia-uvm-tools c $NVIDIA_UVM_MAJOR 1
+          echo "overlay-init: created /dev/nvidia-uvm* (major $NVIDIA_UVM_MAJOR)"
+        fi
       fi
     else
       echo "overlay-init: NVIDIA modules not found in /lib/modules/$KVER"

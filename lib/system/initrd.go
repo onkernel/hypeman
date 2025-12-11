@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -53,7 +54,7 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
-	
+
 	agentPath := filepath.Join(binDir, "exec-agent")
 	if err := os.WriteFile(agentPath, ExecAgentBinary, 0755); err != nil {
 		return "", fmt.Errorf("write exec-agent: %w", err)
@@ -76,13 +77,13 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 
 	// Generate timestamp for this build
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	
+
 	// Package as cpio.gz
 	outputPath := m.paths.SystemInitrdTimestamp(timestamp, arch)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
-	
+
 	if _, err := images.ExportRootfs(rootfsDir, outputPath, images.FormatCpio); err != nil {
 		return "", fmt.Errorf("export initrd: %w", err)
 	}
@@ -223,23 +224,126 @@ func (m *manager) addNvidiaModules(ctx context.Context, rootfsDir, arch string) 
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 				return fmt.Errorf("create parent dir: %w", err)
 			}
-			
+
 			outFile, err := os.Create(destPath)
 			if err != nil {
 				return fmt.Errorf("create file %s: %w", destPath, err)
 			}
-			
+
 			if _, err := io.Copy(outFile, tr); err != nil {
 				outFile.Close()
 				return fmt.Errorf("write file %s: %w", destPath, err)
 			}
 			outFile.Close()
-			
+
 			if err := os.Chmod(destPath, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("chmod %s: %w", destPath, err)
 			}
 		}
 	}
 
+	// Also add nvidia-modprobe utility for creating device nodes
+	if err := m.addNvidiaModprobe(ctx, rootfsDir, arch); err != nil {
+		fmt.Printf("initrd: warning: could not add nvidia-modprobe: %v\n", err)
+		// Don't fail - init script has fallback to manual mknod
+	}
+
+	return nil
+}
+
+// addNvidiaModprobe downloads the NVIDIA driver package and extracts nvidia-modprobe
+func (m *manager) addNvidiaModprobe(ctx context.Context, rootfsDir, arch string) error {
+	// Only x86_64 is supported for now
+	if arch != "x86_64" {
+		return fmt.Errorf("nvidia-modprobe only available for x86_64")
+	}
+
+	// Get driver version for current kernel
+	driverVersion, ok := NvidiaDriverVersion[DefaultKernelVersion]
+	if !ok {
+		return fmt.Errorf("no driver version for kernel %s", DefaultKernelVersion)
+	}
+
+	// Download URL for NVIDIA driver
+	driverURL := fmt.Sprintf("https://us.download.nvidia.com/XFree86/Linux-x86_64/%s/NVIDIA-Linux-x86_64-%s.run", driverVersion, driverVersion)
+
+	// Create temp directory for extraction
+	tempDir, err := os.MkdirTemp("", "nvidia-driver-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Download the .run file
+	client := &http.Client{}
+	req, err := http.NewRequestWithContext(ctx, "GET", driverURL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download driver: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	// Save the .run file
+	runFile := filepath.Join(tempDir, "nvidia-driver.run")
+	outFile, err := os.Create(runFile)
+	if err != nil {
+		return fmt.Errorf("create run file: %w", err)
+	}
+	if _, err := io.Copy(outFile, resp.Body); err != nil {
+		outFile.Close()
+		return fmt.Errorf("write run file: %w", err)
+	}
+	outFile.Close()
+
+	// Make executable and extract
+	if err := os.Chmod(runFile, 0755); err != nil {
+		return fmt.Errorf("chmod run file: %w", err)
+	}
+
+	extractDir := filepath.Join(tempDir, "extracted")
+	cmd := exec.CommandContext(ctx, runFile, "--extract-only", "--target", extractDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("extract driver: %w (output: %s)", err, string(output))
+	}
+
+	// Copy nvidia-modprobe to rootfs
+	srcPath := filepath.Join(extractDir, "nvidia-modprobe")
+	dstPath := filepath.Join(rootfsDir, "usr/bin/nvidia-modprobe")
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return fmt.Errorf("create bin dir: %w", err)
+	}
+
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open nvidia-modprobe: %w", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("create nvidia-modprobe: %w", err)
+	}
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		dstFile.Close()
+		return fmt.Errorf("copy nvidia-modprobe: %w", err)
+	}
+	dstFile.Close()
+
+	// Make executable
+	if err := os.Chmod(dstPath, 0755); err != nil {
+		return fmt.Errorf("chmod nvidia-modprobe: %w", err)
+	}
+
+	fmt.Printf("initrd: added nvidia-modprobe from driver %s\n", driverVersion)
 	return nil
 }

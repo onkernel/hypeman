@@ -2,12 +2,20 @@ package devices_test
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/daemon"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/exec"
@@ -15,6 +23,7 @@ import (
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/require"
@@ -268,4 +277,229 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	} else {
 		t.Errorf("\n=== FAILURE: NVIDIA module loading has issues ===")
 	}
+}
+
+// TestNVMLDetection tests if NVML can detect the GPU from userspace.
+// This uses the custom CUDA+Ollama image and runs a Python NVML test.
+//
+// To run manually:
+//
+//	sudo env PATH=$PATH:/sbin:/usr/sbin go test -v -run TestNVMLDetection -timeout 10m ./lib/devices/...
+func TestNVMLDetection(t *testing.T) {
+	ctx := context.Background()
+
+	skipReason := checkGPUTestPrerequisites()
+	if skipReason != "" {
+		t.Skip(skipReason)
+	}
+
+	groups, _ := os.ReadDir("/sys/kernel/iommu_groups")
+	t.Logf("Test prerequisites met: %d IOMMU groups found", len(groups))
+
+	// Use persistent test directory for image caching
+	const persistentTestDataDir = "/var/lib/hypeman-gpu-inference-test"
+	if err := os.MkdirAll(persistentTestDataDir, 0755); err != nil {
+		t.Fatalf("Failed to create persistent test dir: %v", err)
+	}
+
+	p := paths.New(persistentTestDataDir)
+	cfg := &config.Config{
+		DataDir:    persistentTestDataDir,
+		BridgeName: "vmbr0",
+		SubnetCIDR: "10.100.0.0/16",
+		DNSServer:  "1.1.1.1",
+	}
+
+	imageMgr, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	systemMgr := system.NewManager(p)
+	networkMgr := network.NewManager(p, cfg, nil)
+	deviceMgr := devices.NewManager(p)
+	volumeMgr := volumes.NewManager(p, 10*1024*1024*1024, nil)
+	limits := instances.ResourceLimits{MaxOverlaySize: 10 * 1024 * 1024 * 1024}
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+
+	// Step 1: Check if ollama-cuda:test image exists in Docker
+	t.Log("Step 1: Checking for ollama-cuda:test Docker image...")
+	checkCmd := osexec.Command("docker", "image", "inspect", "ollama-cuda:test")
+	if err := checkCmd.Run(); err != nil {
+		t.Fatal("Docker image ollama-cuda:test not found. Build it first with:\n" +
+			"  cd lib/devices/testdata/ollama-cuda && docker build -t ollama-cuda:test .")
+	}
+	t.Log("Docker image ollama-cuda:test exists")
+
+	// Step 2: Start registry and push image
+	t.Log("Step 2: Starting registry and pushing image...")
+	reg, err := registry.New(p, imageMgr)
+	require.NoError(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+		reg.Handler().ServeHTTP(w, r)
+	}))
+	defer server.Close()
+
+	serverHost := strings.TrimPrefix(server.URL, "http://")
+	pushLocalDockerImageForTest(t, "ollama-cuda:test", serverHost)
+	t.Log("Push complete")
+
+	// Wait for image conversion
+	t.Log("Waiting for image conversion...")
+	var img *images.Image
+	var imageName string
+	for i := 0; i < 180; i++ { // 3 minutes max
+		allImages, listErr := imageMgr.ListImages(ctx)
+		if listErr == nil {
+			for _, candidate := range allImages {
+				if strings.Contains(candidate.Name, "ollama-cuda") {
+					img = &candidate
+					imageName = candidate.Name
+					break
+				}
+			}
+		}
+		if img != nil && img.Status == images.StatusReady {
+			break
+		}
+		if i%30 == 0 {
+			status := "not found"
+			if img != nil {
+				status = string(img.Status)
+			}
+			t.Logf("Waiting for image... (%d/180, status=%s)", i+1, status)
+		}
+		time.Sleep(time.Second)
+	}
+	require.NotNil(t, img, "Image should exist after 3 minutes")
+	require.Equal(t, images.StatusReady, img.Status, "Image should be ready")
+	t.Logf("Image ready: %s", imageName)
+
+	// Step 3: Find and register GPU
+	t.Log("Step 3: Discovering GPUs...")
+	availableDevices, err := deviceMgr.ListAvailableDevices(ctx)
+	require.NoError(t, err)
+
+	var targetGPU *devices.AvailableDevice
+	for _, d := range availableDevices {
+		if strings.Contains(strings.ToLower(d.VendorName), "nvidia") {
+			targetGPU = &d
+			break
+		}
+	}
+	require.NotNil(t, targetGPU, "No NVIDIA GPU found")
+	t.Logf("Found GPU: %s at %s", targetGPU.DeviceName, targetGPU.PCIAddress)
+
+	device, err := deviceMgr.CreateDevice(ctx, devices.CreateDeviceRequest{
+		Name:       "nvml-test-gpu",
+		PCIAddress: targetGPU.PCIAddress,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		deviceMgr.DeleteDevice(ctx, device.Id)
+	})
+
+	// Step 4: Initialize network and system
+	require.NoError(t, networkMgr.Initialize(ctx, []string{}))
+	require.NoError(t, systemMgr.EnsureSystemFiles(ctx))
+
+	// Step 5: Create instance
+	t.Log("Step 4: Creating instance with CUDA image...")
+	inst, err := instanceMgr.CreateInstance(ctx, instances.CreateInstanceRequest{
+		Name:           "nvml-test",
+		Image:          imageName,
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          2,
+		NetworkEnabled: true,
+		Devices:        []string{"nvml-test-gpu"},
+		Env:            map[string]string{},
+	})
+	require.NoError(t, err)
+	t.Logf("Instance created: %s", inst.Id)
+
+	t.Cleanup(func() {
+		t.Log("Cleanup: Deleting instance...")
+		instanceMgr.DeleteInstance(ctx, inst.Id)
+	})
+
+	err = waitForInstanceReady(ctx, t, instanceMgr, inst.Id, 60*time.Second)
+	require.NoError(t, err)
+	time.Sleep(5 * time.Second)
+
+	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	// Step 5: Run NVML test
+	t.Log("Step 5: Running NVML detection test...")
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var stdout, stderr outputBuffer
+	_, err = exec.ExecIntoInstance(execCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-nvml.py 2>&1"},
+		Stdin:   nil,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+
+	t.Logf("NVML test output:\n%s", stdout.String())
+	if stderr.String() != "" {
+		t.Logf("NVML test stderr:\n%s", stderr.String())
+	}
+
+	require.NoError(t, err, "NVML test command should succeed")
+
+	output := stdout.String()
+	if strings.Contains(output, "GPU DETECTED") {
+		t.Log("✓ SUCCESS: NVML detected the GPU!")
+	} else if strings.Contains(output, "NVML_ERROR_LIB_RM_VERSION_MISMATCH") {
+		t.Log("✗ NVML version mismatch - container NVML library doesn't match kernel driver version")
+		t.Log("  Container has: 570.195.03")
+		t.Log("  Kernel driver: 570.86.16")
+		t.FailNow()
+	} else if strings.Contains(output, "NVML_ERROR_DRIVER_NOT_LOADED") {
+		t.Log("✗ NVML reports driver not loaded (but kernel modules are loaded)")
+		t.FailNow()
+	} else {
+		t.Errorf("✗ NVML test failed: %s", output)
+	}
+
+	// Step 6: Run CUDA test
+	t.Log("Step 6: Running CUDA driver test...")
+	stdout = outputBuffer{}
+	stderr = outputBuffer{}
+	_, err = exec.ExecIntoInstance(execCtx, actualInst.VsockSocket, exec.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-cuda.py 2>&1"},
+		Stdin:   nil,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+
+	t.Logf("CUDA test output:\n%s", stdout.String())
+	if strings.Contains(stdout.String(), "CUDA WORKS") {
+		t.Log("✓ SUCCESS: CUDA driver works!")
+	} else {
+		t.Logf("CUDA test may have issues: %s", stdout.String())
+	}
+}
+
+// pushLocalDockerImageForTest is a test helper that pushes a local Docker image to the registry
+func pushLocalDockerImageForTest(t *testing.T, dockerImage, serverHost string) {
+	t.Helper()
+
+	srcRef, err := name.ParseReference(dockerImage)
+	require.NoError(t, err)
+
+	img, err := daemon.Image(srcRef)
+	require.NoError(t, err)
+
+	targetRef := fmt.Sprintf("%s/test/ollama-cuda:latest", serverHost)
+	t.Logf("Pushing to %s", targetRef)
+
+	dstRef, err := name.ParseReference(targetRef, name.Insecure)
+	require.NoError(t, err)
+
+	err = remote.Write(dstRef, img)
+	require.NoError(t, err)
 }
