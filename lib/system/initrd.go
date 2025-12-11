@@ -1,10 +1,14 @@
 package system
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,7 +59,15 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("write exec-agent: %w", err)
 	}
 
+	// Add NVIDIA kernel modules (for GPU passthrough support)
+	if err := m.addNvidiaModules(ctx, rootfsDir, arch); err != nil {
+		// Log but don't fail - NVIDIA modules are optional (not available on all architectures)
+		fmt.Printf("initrd: skipping NVIDIA modules: %v\n", err)
+	}
+
 	// Write generated init script
+	// Note: The init script is generated at instance creation time with hasGPU flag,
+	// so we write a placeholder here that will be replaced per-instance
 	initScript := GenerateInitScript()
 	initPath := filepath.Join(rootfsDir, "init")
 	if err := os.WriteFile(initPath, []byte(initScript), 0755); err != nil {
@@ -135,10 +147,99 @@ func (m *manager) isInitrdStale(initrdPath string) bool {
 	return string(storedHash) != currentHash
 }
 
-// computeInitrdHash computes a hash of the embedded binary and init script
+// computeInitrdHash computes a hash of the embedded binary, init script, and NVIDIA version
 func computeInitrdHash() string {
 	h := sha256.New()
 	h.Write(ExecAgentBinary)
 	h.Write([]byte(GenerateInitScript()))
+	// Include NVIDIA driver version in hash so initrd is rebuilt when driver changes
+	if ver, ok := NvidiaDriverVersion[DefaultKernelVersion]; ok {
+		h.Write([]byte(ver))
+	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// addNvidiaModules downloads and extracts NVIDIA kernel modules into the rootfs
+func (m *manager) addNvidiaModules(ctx context.Context, rootfsDir, arch string) error {
+	// Check if NVIDIA modules are available for this architecture
+	archURLs, ok := NvidiaModuleURLs[DefaultKernelVersion]
+	if !ok {
+		return fmt.Errorf("no NVIDIA modules for kernel version %s", DefaultKernelVersion)
+	}
+	url, ok := archURLs[arch]
+	if !ok {
+		return fmt.Errorf("no NVIDIA modules for architecture %s", arch)
+	}
+
+	// Download the tarball
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download nvidia modules: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	// Extract tarball directly into rootfs
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("create gzip reader: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+
+		// Calculate destination path
+		destPath := filepath.Join(rootfsDir, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(destPath, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("create directory %s: %w", destPath, err)
+			}
+		case tar.TypeReg:
+			// Ensure parent directory exists
+			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+				return fmt.Errorf("create parent dir: %w", err)
+			}
+			
+			outFile, err := os.Create(destPath)
+			if err != nil {
+				return fmt.Errorf("create file %s: %w", destPath, err)
+			}
+			
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return fmt.Errorf("write file %s: %w", destPath, err)
+			}
+			outFile.Close()
+			
+			if err := os.Chmod(destPath, os.FileMode(header.Mode)); err != nil {
+				return fmt.Errorf("chmod %s: %w", destPath, err)
+			}
+		}
+	}
+
+	return nil
 }

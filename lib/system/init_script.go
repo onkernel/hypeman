@@ -7,8 +7,12 @@ package system
 // 1. Mounts essential filesystems (proc, sys, dev)
 // 2. Sets up overlay filesystem (lowerdir=rootfs, upperdir=overlay disk)
 // 3. Mounts and sources config disk (/dev/vdc)
-// 4. Configures networking (if enabled)
-// 5. Executes container entrypoint
+// 4. Loads NVIDIA kernel modules (if HAS_GPU=1 in config.sh)
+// 5. Configures networking (if enabled)
+// 6. Executes container entrypoint
+//
+// GPU support: When HAS_GPU=1 is set in the instance's config.sh, the init script
+// will load NVIDIA kernel modules before launching the container entrypoint.
 func GenerateInitScript() string {
 	return `#!/bin/sh
 set -xe
@@ -69,6 +73,50 @@ else
   echo "overlay-init: ERROR - config.sh not found!"
   /bin/sh -i
   exit 1
+fi
+
+# Load NVIDIA kernel modules for GPU passthrough (if HAS_GPU=1)
+if [ "${HAS_GPU:-0}" = "1" ]; then
+  echo "overlay-init: loading NVIDIA kernel modules for GPU passthrough"
+  if [ -d /lib/modules ]; then
+    # Find the kernel version directory
+    KVER=$(ls /lib/modules/ 2>/dev/null | head -1)
+    if [ -n "$KVER" ] && [ -d "/lib/modules/$KVER/kernel/drivers/gpu" ]; then
+      # Load modules in order (dependencies first)
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia.ko 2>&1 || echo "overlay-init: nvidia.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-uvm.ko 2>&1 || echo "overlay-init: nvidia-uvm.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-modeset.ko 2>&1 || echo "overlay-init: nvidia-modeset.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-drm.ko modeset=1 2>&1 || echo "overlay-init: nvidia-drm.ko load failed"
+      echo "overlay-init: NVIDIA modules loaded for kernel $KVER"
+      
+      # Create NVIDIA device nodes (normally done by nvidia-modprobe/udev)
+      # Get major numbers from /proc/devices
+      # nvidia-frontend is sometimes listed as just "nvidia"
+      NVIDIA_MAJOR=$(awk '/nvidia-frontend|^[0-9]+ nvidia$/ {print $1}' /proc/devices 2>/dev/null | head -1)
+      NVIDIA_UVM_MAJOR=$(awk '/nvidia-uvm/ {print $1}' /proc/devices 2>/dev/null)
+      
+      if [ -n "$NVIDIA_MAJOR" ]; then
+        mknod -m 666 /dev/nvidiactl c $NVIDIA_MAJOR 255
+        # Create device node for GPU 0 (minor 0)
+        # In a VM with passthrough, there's typically just one GPU
+        mknod -m 666 /dev/nvidia0 c $NVIDIA_MAJOR 0
+        echo "overlay-init: created /dev/nvidiactl and /dev/nvidia0 (major $NVIDIA_MAJOR)"
+      else
+        echo "overlay-init: WARNING - nvidia major number not found in /proc/devices"
+        cat /proc/devices | grep -i nvidia || true
+      fi
+      
+      if [ -n "$NVIDIA_UVM_MAJOR" ]; then
+        mknod -m 666 /dev/nvidia-uvm c $NVIDIA_UVM_MAJOR 0
+        mknod -m 666 /dev/nvidia-uvm-tools c $NVIDIA_UVM_MAJOR 1
+        echo "overlay-init: created /dev/nvidia-uvm* (major $NVIDIA_UVM_MAJOR)"
+      fi
+    else
+      echo "overlay-init: NVIDIA modules not found in /lib/modules/$KVER"
+    fi
+  else
+    echo "overlay-init: /lib/modules not found, skipping NVIDIA module loading"
+  fi
 fi
 
 # Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode[:overlay_device] ...")

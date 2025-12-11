@@ -105,6 +105,13 @@ GUEST_DNS="%s"
 `, netConfig.IP, cidr, netConfig.Gateway, netConfig.DNS)
 	}
 
+	// GPU passthrough configuration
+	// When devices are attached, set HAS_GPU=1 to trigger NVIDIA module loading in init
+	gpuSection := ""
+	if len(inst.Devices) > 0 {
+		gpuSection = "\n# GPU passthrough\nHAS_GPU=1\n"
+	}
+
 	// Build volume mounts section
 	// Volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
 	// For overlay volumes, two devices are used: base + overlay disk
@@ -149,7 +156,7 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s%s`, 
+%s%s%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
@@ -157,6 +164,7 @@ WORKDIR=%s
 		envLines.String(),
 		networkSection,
 		volumeSection,
+		gpuSection,
 	)
 	
 	return script
