@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries build-preview-cli release-prep
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries build-preview-cli release-prep clean
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -165,12 +165,8 @@ lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
 build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
-# Build exec CLI
-build-exec: | $(BIN_DIR)
-	go build -o $(BIN_DIR)/hypeman-exec ./cmd/exec
-
 # Build all binaries
-build-all: build build-exec
+build-all: build
 
 # Build preview CLI from stainless-sdks/hypeman-cli
 # Usage: make build-preview-cli                         - uses preview/<current-branch>
@@ -202,10 +198,8 @@ gen-jwt: $(GODOTENV)
 # Clean generated files and binaries
 clean:
 	rm -rf $(BIN_DIR)
-	rm -f lib/oapi/oapi.go
-	rm -f lib/vmm/vmm.go
-	rm -f lib/exec/exec.pb.go
-	rm -f lib/exec/exec_grpc.pb.go
+	rm -rf lib/vmm/binaries/cloud-hypervisor/
+	rm -rf lib/ingress/binaries/
 	rm -f lib/system/exec_agent/exec-agent
 
 # Prepare for release build (called by GoReleaser)
