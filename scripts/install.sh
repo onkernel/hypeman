@@ -37,6 +37,38 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# Find the most recent release that has a specific artifact available
+# Usage: find_release_with_artifact <repo> <archive_prefix> <os> <arch>
+# Returns: version tag (e.g., v0.5.0) or empty string if not found
+find_release_with_artifact() {
+    local repo="$1"
+    local archive_prefix="$2"
+    local os="$3"
+    local arch="$4"
+    
+    # Fetch recent release tags (up to 10)
+    local tags
+    tags=$(curl -fsSL "https://api.github.com/repos/${repo}/releases?per_page=10" 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4)
+    if [ -z "$tags" ]; then
+        return 1
+    fi
+    
+    # Check each release for the artifact
+    for tag in $tags; do
+        local version_num="${tag#v}"
+        local artifact_name="${archive_prefix}_${version_num}_${os}_${arch}.tar.gz"
+        local artifact_url="https://github.com/${repo}/releases/download/${tag}/${artifact_name}"
+        
+        # Check if artifact exists (follow redirects, fail silently)
+        if curl -fsSL --head "$artifact_url" >/dev/null 2>&1; then
+            echo "$tag"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # =============================================================================
 # Pre-flight checks - verify all requirements before doing anything
 # =============================================================================
@@ -97,6 +129,54 @@ esac
 info "Pre-flight checks passed"
 
 # =============================================================================
+# System Configuration - KVM access and network capabilities
+# =============================================================================
+
+# Get the installing user (for adding to groups)
+INSTALL_USER="${SUDO_USER:-$(whoami)}"
+
+# Ensure KVM access
+if [ -e /dev/kvm ]; then
+    if getent group kvm &>/dev/null; then
+        if ! groups "$INSTALL_USER" 2>/dev/null | grep -qw kvm; then
+            info "Adding user ${INSTALL_USER} to kvm group..."
+            $SUDO usermod -aG kvm "$INSTALL_USER"
+            warn "You may need to log out and back in for kvm group membership to take effect"
+        fi
+    fi
+else
+    warn "/dev/kvm not found - KVM may not be available on this system"
+fi
+
+# Enable IPv4 forwarding (required for VM networking)
+CURRENT_IP_FORWARD=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+if [ "$CURRENT_IP_FORWARD" != "1" ]; then
+    info "Enabling IPv4 forwarding..."
+    $SUDO sysctl -w net.ipv4.ip_forward=1 > /dev/null
+    
+    # Make it persistent across reboots
+    if [ -d /etc/sysctl.d ]; then
+        echo 'net.ipv4.ip_forward=1' | $SUDO tee /etc/sysctl.d/99-hypeman.conf > /dev/null
+    elif ! grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null; then
+        echo 'net.ipv4.ip_forward=1' | $SUDO tee -a /etc/sysctl.conf > /dev/null
+    fi
+fi
+
+# Increase file descriptor limit for Caddy (ingress)
+if [ -d /etc/security/limits.d ]; then
+    if [ ! -f /etc/security/limits.d/99-hypeman.conf ]; then
+        info "Configuring file descriptor limits for ingress..."
+        $SUDO tee /etc/security/limits.d/99-hypeman.conf > /dev/null << 'LIMITS'
+# Hypeman: Increased file descriptor limits for Caddy ingress
+*  soft  nofile  65536
+*  hard  nofile  65536
+root  soft  nofile  65536
+root  hard  nofile  65536
+LIMITS
+    fi
+fi
+
+# =============================================================================
 # Create temp directory
 # =============================================================================
 
@@ -149,10 +229,10 @@ if [ -n "$BRANCH" ]; then
 else
     # Download release mode
     if [ -z "$VERSION" ]; then
-        info "Fetching latest version..."
-        VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+        info "Fetching latest version with available artifacts..."
+        VERSION=$(find_release_with_artifact "$REPO" "hypeman" "$OS" "$ARCH")
         if [ -z "$VERSION" ]; then
-            error "Failed to fetch latest version"
+            error "Failed to find a release with artifacts for ${OS}/${ARCH}"
         fi
     fi
     info "Installing version: $VERSION"
@@ -326,11 +406,10 @@ $SUDO systemctl start "$SERVICE_NAME"
 CLI_REPO="onkernel/hypeman-cli"
 
 if [ -z "$CLI_VERSION" ]; then
-    info "Fetching latest CLI version..."
-    CLI_VERSION=$(curl -fsSL "https://api.github.com/repos/${CLI_REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    info "Fetching latest CLI version with available artifacts..."
+    CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$OS" "$ARCH")
     if [ -z "$CLI_VERSION" ]; then
-        warn "Failed to fetch latest CLI version, skipping CLI installation"
-        CLI_VERSION=""
+        warn "Failed to find a CLI release with artifacts for ${OS}/${ARCH}, skipping CLI installation"
     fi
 fi
 
