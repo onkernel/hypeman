@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,22 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
+
+// InstanceLivenessChecker provides a way to check if an instance is running.
+// This interface allows devices to query instance state without a circular dependency.
+type InstanceLivenessChecker interface {
+	// IsInstanceRunning returns true if the instance exists and is in a running state
+	// (i.e., has an active VMM process). Returns false if the instance doesn't exist
+	// or is stopped/standby/unknown.
+	IsInstanceRunning(ctx context.Context, instanceID string) bool
+
+	// GetInstanceDevices returns the list of device IDs attached to an instance.
+	// Returns nil if the instance doesn't exist.
+	GetInstanceDevices(ctx context.Context, instanceID string) []string
+
+	// ListAllInstanceDevices returns a map of instanceID -> []deviceIDs for all instances.
+	ListAllInstanceDevices(ctx context.Context) map[string][]string
+}
 
 // Manager provides device management operations
 type Manager interface {
@@ -47,20 +64,35 @@ type Manager interface {
 	// It detects devices with AttachedTo referencing non-existent instances
 	// and clears the orphaned attachment state.
 	ReconcileDevices(ctx context.Context) error
+
+	// SetLivenessChecker sets the instance liveness checker after construction.
+	// This allows breaking the circular dependency between device and instance managers.
+	SetLivenessChecker(checker InstanceLivenessChecker)
 }
 
 type manager struct {
-	paths      *paths.Paths
-	vfioBinder *VFIOBinder
-	mu         sync.RWMutex
+	paths           *paths.Paths
+	vfioBinder      *VFIOBinder
+	livenessChecker InstanceLivenessChecker
+	mu              sync.RWMutex
 }
 
-// NewManager creates a new device manager
+// NewManager creates a new device manager.
+// Use SetLivenessChecker after construction to enable accurate orphan detection.
 func NewManager(p *paths.Paths) Manager {
 	return &manager{
 		paths:      p,
 		vfioBinder: NewVFIOBinder(),
 	}
+}
+
+// SetLivenessChecker sets the instance liveness checker.
+// This enables accurate orphan detection during reconciliation.
+// If not set, orphan detection falls back to checking if the instance directory exists.
+func (m *manager) SetLivenessChecker(checker InstanceLivenessChecker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.livenessChecker = checker
 }
 
 func (m *manager) ListDevices(ctx context.Context) ([]Device, error) {
@@ -354,8 +386,12 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 }
 
 // ReconcileDevices cleans up stale device state on startup.
-// It scans all registered devices and clears AttachedTo for any device
-// that references an instance that no longer exists.
+// It performs safe-by-default reconciliation:
+// 1. Detects orphaned device attachments (instance missing or not running)
+// 2. Clears orphaned AttachedTo metadata
+// 3. Runs GPU-reset-lite for orphaned devices (unbind VFIO, clear override, probe driver)
+// 4. Logs mismatches between instance→device and device→instance references
+// 5. Detects suspicious cloud-hypervisor processes
 func (m *manager) ReconcileDevices(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "reconciling device state")
@@ -372,7 +408,9 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 		return fmt.Errorf("read devices dir: %w", err)
 	}
 
-	var reconciled int
+	// Load all devices
+	var allDevices []*Device
+	deviceByID := make(map[string]*Device)
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -386,44 +424,305 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 			)
 			continue
 		}
+		// Update VFIO binding status from system state
+		device.BoundToVFIO = m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
+		allDevices = append(allDevices, device)
+		deviceByID[device.Id] = device
+	}
 
-		// Skip devices that aren't attached to anything
+	// Build instance→device map if we have a liveness checker
+	var instanceDevices map[string][]string
+	if m.livenessChecker != nil {
+		instanceDevices = m.livenessChecker.ListAllInstanceDevices(ctx)
+	}
+
+	// Track stats
+	var stats reconcileStats
+
+	// Phase 1: Detect and handle orphaned device attachments
+	for _, device := range allDevices {
 		if device.AttachedTo == nil {
 			continue
 		}
 
-		// Check if the referenced instance still exists
 		instanceID := *device.AttachedTo
-		instanceDir := m.paths.InstanceDir(instanceID)
-		if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
-			// Instance no longer exists - clear the orphaned attachment
-			log.WarnContext(ctx, "clearing orphaned device attachment",
+		orphaned := m.isInstanceOrphaned(ctx, instanceID)
+
+		if orphaned {
+			log.WarnContext(ctx, "detected orphaned device attachment",
 				"device_id", device.Id,
 				"device_name", device.Name,
+				"pci_address", device.PCIAddress,
 				"orphaned_instance_id", instanceID,
 			)
 
+			// Clear the orphaned attachment
 			device.AttachedTo = nil
 			if err := m.saveDevice(device); err != nil {
 				log.ErrorContext(ctx, "failed to save device after clearing attachment",
 					"device_id", device.Id,
 					"error", err,
 				)
+				stats.errors++
 				continue
 			}
-			reconciled++
+			stats.orphanedCleared++
+
+			// Run GPU-reset-lite for orphaned device
+			m.resetOrphanedDevice(ctx, device, &stats)
 		}
 	}
 
-	if reconciled > 0 {
-		log.InfoContext(ctx, "device reconciliation complete",
-			"orphaned_attachments_cleared", reconciled,
-		)
-	} else {
-		log.InfoContext(ctx, "device reconciliation complete, no orphaned attachments found")
+	// Phase 2: Two-way reconciliation (log-only for mismatches)
+	if instanceDevices != nil {
+		for instanceID, deviceIDs := range instanceDevices {
+			for _, deviceID := range deviceIDs {
+				device, exists := deviceByID[deviceID]
+				if !exists {
+					// Instance references a device that doesn't exist in device metadata
+					log.WarnContext(ctx, "instance references unknown device (mismatch)",
+						"instance_id", instanceID,
+						"device_id", deviceID,
+					)
+					stats.mismatches++
+					continue
+				}
+
+				// Check if device's AttachedTo matches
+				if device.AttachedTo == nil {
+					log.WarnContext(ctx, "instance references device but device.AttachedTo is nil (mismatch)",
+						"instance_id", instanceID,
+						"device_id", deviceID,
+						"device_name", device.Name,
+					)
+					stats.mismatches++
+				} else if *device.AttachedTo != instanceID {
+					log.WarnContext(ctx, "instance references device but device.AttachedTo points elsewhere (mismatch)",
+						"instance_id", instanceID,
+						"device_id", deviceID,
+						"device_name", device.Name,
+						"device_attached_to", *device.AttachedTo,
+					)
+					stats.mismatches++
+				}
+
+				// Check VFIO binding state - if instance is running, device should be bound
+				if m.livenessChecker != nil && m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
+					if !device.BoundToVFIO {
+						log.WarnContext(ctx, "running instance has device not bound to VFIO (mismatch)",
+							"instance_id", instanceID,
+							"device_id", deviceID,
+							"device_name", device.Name,
+							"pci_address", device.PCIAddress,
+						)
+						stats.mismatches++
+					}
+				}
+			}
+		}
 	}
 
+	// Phase 3: Detect suspicious cloud-hypervisor processes (log-only)
+	m.detectSuspiciousVMMProcesses(ctx, &stats)
+
+	// Log summary
+	log.InfoContext(ctx, "device reconciliation complete",
+		"orphaned_cleared", stats.orphanedCleared,
+		"reset_attempted", stats.resetAttempted,
+		"reset_succeeded", stats.resetSucceeded,
+		"reset_failed", stats.resetFailed,
+		"mismatches", stats.mismatches,
+		"suspicious_vmm", stats.suspiciousVMM,
+		"errors", stats.errors,
+	)
+
 	return nil
+}
+
+// reconcileStats tracks reconciliation metrics
+type reconcileStats struct {
+	orphanedCleared int
+	resetAttempted  int
+	resetSucceeded  int
+	resetFailed     int
+	mismatches      int
+	suspiciousVMM   int
+	errors          int
+}
+
+// isInstanceOrphaned checks if an instance should be considered orphaned
+// (device attachment should be cleared).
+func (m *manager) isInstanceOrphaned(ctx context.Context, instanceID string) bool {
+	// If we have a liveness checker, use it for more accurate detection
+	if m.livenessChecker != nil {
+		// Instance is orphaned if it's not running (stopped, standby, unknown, or missing)
+		return !m.livenessChecker.IsInstanceRunning(ctx, instanceID)
+	}
+
+	// Fallback: just check if instance directory exists
+	instanceDir := m.paths.InstanceDir(instanceID)
+	_, err := os.Stat(instanceDir)
+	return os.IsNotExist(err)
+}
+
+// resetOrphanedDevice performs GPU-reset-lite for an orphaned device.
+// This is safe because we've already confirmed the device is orphaned.
+// Steps mirror gpu-reset.sh but are per-device and non-destructive.
+func (m *manager) resetOrphanedDevice(ctx context.Context, device *Device, stats *reconcileStats) {
+	log := logger.FromContext(ctx)
+	stats.resetAttempted++
+
+	log.InfoContext(ctx, "running GPU-reset-lite for orphaned device",
+		"device_id", device.Id,
+		"device_name", device.Name,
+		"pci_address", device.PCIAddress,
+		"bound_to_vfio", device.BoundToVFIO,
+	)
+
+	// Step 1: If bound to VFIO, unbind
+	if device.BoundToVFIO {
+		log.DebugContext(ctx, "unbinding orphaned device from VFIO", "pci_address", device.PCIAddress)
+		if err := m.vfioBinder.unbindFromDriver(device.PCIAddress, "vfio-pci"); err != nil {
+			log.WarnContext(ctx, "failed to unbind device from VFIO during reset",
+				"device_id", device.Id,
+				"pci_address", device.PCIAddress,
+				"error", err,
+			)
+			// Continue with other steps
+		}
+	}
+
+	// Step 2: Clear driver_override
+	log.DebugContext(ctx, "clearing driver_override", "pci_address", device.PCIAddress)
+	if err := m.vfioBinder.setDriverOverride(device.PCIAddress, ""); err != nil {
+		log.WarnContext(ctx, "failed to clear driver_override during reset",
+			"device_id", device.Id,
+			"pci_address", device.PCIAddress,
+			"error", err,
+		)
+		// Continue with other steps
+	}
+
+	// Step 3: Trigger driver probe to rebind to original driver
+	log.DebugContext(ctx, "triggering driver probe", "pci_address", device.PCIAddress)
+	if err := m.vfioBinder.triggerDriverProbe(device.PCIAddress); err != nil {
+		log.WarnContext(ctx, "failed to trigger driver probe during reset",
+			"device_id", device.Id,
+			"pci_address", device.PCIAddress,
+			"error", err,
+		)
+	}
+
+	// Step 4: For NVIDIA devices, restart nvidia-persistenced
+	if device.VendorID == "10de" {
+		log.DebugContext(ctx, "restarting nvidia-persistenced", "pci_address", device.PCIAddress)
+		if err := m.vfioBinder.startNvidiaPersistenced(); err != nil {
+			log.WarnContext(ctx, "failed to restart nvidia-persistenced during reset",
+				"device_id", device.Id,
+				"error", err,
+			)
+		}
+	}
+
+	// Verify the device is now unbound from VFIO
+	stillBoundToVFIO := m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
+	if stillBoundToVFIO {
+		log.WarnContext(ctx, "device still bound to VFIO after reset-lite",
+			"device_id", device.Id,
+			"pci_address", device.PCIAddress,
+		)
+		stats.resetFailed++
+	} else {
+		log.InfoContext(ctx, "GPU-reset-lite completed for orphaned device",
+			"device_id", device.Id,
+			"device_name", device.Name,
+			"pci_address", device.PCIAddress,
+		)
+		stats.resetSucceeded++
+	}
+
+	// Update device metadata to reflect new VFIO state
+	device.BoundToVFIO = stillBoundToVFIO
+	if err := m.saveDevice(device); err != nil {
+		log.WarnContext(ctx, "failed to save device after reset-lite",
+			"device_id", device.Id,
+			"error", err,
+		)
+	}
+}
+
+// detectSuspiciousVMMProcesses logs warnings about cloud-hypervisor processes
+// that don't match known instances. This is log-only (no killing).
+func (m *manager) detectSuspiciousVMMProcesses(ctx context.Context, stats *reconcileStats) {
+	log := logger.FromContext(ctx)
+
+	// Find all cloud-hypervisor processes
+	cmd := exec.Command("pgrep", "-a", "cloud-hypervisor")
+	output, err := cmd.Output()
+	if err != nil {
+		// pgrep returns exit code 1 if no processes found - that's fine
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return
+	}
+
+	// Get list of running instance sockets if we have liveness checker
+	var runningInstances map[string]bool
+	if m.livenessChecker != nil {
+		instanceDevices := m.livenessChecker.ListAllInstanceDevices(ctx)
+		runningInstances = make(map[string]bool)
+		for instanceID := range instanceDevices {
+			if m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
+				runningInstances[instanceID] = true
+			}
+		}
+	}
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		// Try to extract socket path from command line to match against known instances
+		// cloud-hypervisor command typically includes --api-socket <path>
+		socketPath := ""
+		parts := strings.Fields(line)
+		for i, part := range parts {
+			if part == "--api-socket" && i+1 < len(parts) {
+				socketPath = parts[i+1]
+				break
+			}
+		}
+
+		// Check if this socket path matches any instance directory
+		matched := false
+		if socketPath != "" {
+			// Socket path is typically like /var/lib/hypeman/guests/<id>/ch.sock
+			// Try to extract instance ID
+			if strings.Contains(socketPath, "/guests/") {
+				pathParts := strings.Split(socketPath, "/guests/")
+				if len(pathParts) > 1 {
+					instancePath := pathParts[1]
+					instanceID := strings.Split(instancePath, "/")[0]
+					if runningInstances != nil && runningInstances[instanceID] {
+						matched = true
+					}
+				}
+			}
+		}
+
+		if !matched {
+			log.WarnContext(ctx, "detected untracked cloud-hypervisor process",
+				"process_info", line,
+				"socket_path", socketPath,
+				"remediation", "Run lib/devices/scripts/gpu-reset.sh for manual recovery if needed",
+			)
+			stats.suspiciousVMM++
+		}
+	}
 }
 
 // Helper methods

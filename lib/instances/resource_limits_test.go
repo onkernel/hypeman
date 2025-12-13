@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -159,9 +160,10 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg, nil)
+	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil)
 
-	return NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits, nil, nil).(*manager)
+	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil).(*manager)
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {
@@ -251,6 +253,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg, nil)
+	deviceManager := devices.NewManager(p)
 	volumeManager := volumes.NewManager(p, 0, nil)
 
 	// Set small aggregate limits:
@@ -264,7 +267,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 		MaxTotalMemory:       2 * 1024 * 1024 * 1024,   // aggregate: only 2GB total
 	}
 
-	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
 
 	// Cleanup any orphaned processes on test end
 	t.Cleanup(func() {

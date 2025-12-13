@@ -249,7 +249,7 @@ func TestGPUPassthrough(t *testing.T) {
 	if execErr != nil {
 		// Print console log for debugging
 		p := paths.New(tmpDir)
-		consoleLogPath := p.InstanceConsoleLog(inst.Id)
+		consoleLogPath := p.InstanceAppLog(inst.Id)
 		if consoleLog, err := os.ReadFile(consoleLogPath); err == nil {
 			t.Logf("=== VM Console Log ===\n%s\n=== End Console Log ===", string(consoleLog))
 		} else {

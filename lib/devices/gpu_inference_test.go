@@ -400,7 +400,7 @@ func TestGPUInference(t *testing.T) {
 
 	if err != nil {
 		// Log console for debugging
-		consoleLogPath := p.InstanceConsoleLog(inst.Id)
+		consoleLogPath := p.InstanceAppLog(inst.Id)
 		if consoleLog, readErr := os.ReadFile(consoleLogPath); readErr == nil {
 			t.Logf("=== VM Console Log ===\n%s\n=== End ===", truncateTail(string(consoleLog), 3000))
 		}
