@@ -248,7 +248,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	req := CreateInstanceRequest{
 		Name:           "test-nginx",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           512 * 1024 * 1024,       // 512MB
+		Size:           2 * 1024 * 1024 * 1024,  // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,       // 512MB
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:          1,
@@ -862,7 +862,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	req := CreateInstanceRequest{
 		Name:           "test-standby",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,

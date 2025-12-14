@@ -189,7 +189,7 @@ func TestGPUPassthrough(t *testing.T) {
 	inst, err := instanceMgr.CreateInstance(createCtx, instances.CreateInstanceRequest{
 		Name:           "gpu-test",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
