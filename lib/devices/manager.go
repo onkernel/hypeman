@@ -669,18 +669,6 @@ func (m *manager) detectSuspiciousVMMProcesses(ctx context.Context, stats *recon
 		return
 	}
 
-	// Get list of running instance sockets if we have liveness checker
-	var runningInstances map[string]bool
-	if m.livenessChecker != nil {
-		instanceDevices := m.livenessChecker.ListAllInstanceDevices(ctx)
-		runningInstances = make(map[string]bool)
-		for instanceID := range instanceDevices {
-			if m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
-				runningInstances[instanceID] = true
-			}
-		}
-	}
-
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -697,9 +685,12 @@ func (m *manager) detectSuspiciousVMMProcesses(ctx context.Context, stats *recon
 			}
 		}
 
-		// Check if this socket path matches any instance directory
+		// Check if this socket path matches any running instance
+		// We use IsInstanceRunning directly rather than ListAllInstanceDevices because
+		// the latter only returns instances with devices attached, which would cause
+		// false positives for instances without GPU passthrough.
 		matched := false
-		if socketPath != "" {
+		if socketPath != "" && m.livenessChecker != nil {
 			// Socket path is typically like /var/lib/hypeman/guests/<id>/ch.sock
 			// Try to extract instance ID
 			if strings.Contains(socketPath, "/guests/") {
@@ -707,7 +698,7 @@ func (m *manager) detectSuspiciousVMMProcesses(ctx context.Context, stats *recon
 				if len(pathParts) > 1 {
 					instancePath := pathParts[1]
 					instanceID := strings.Split(instancePath, "/")[0]
-					if runningInstances != nil && runningInstances[instanceID] {
+					if m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
 						matched = true
 					}
 				}
