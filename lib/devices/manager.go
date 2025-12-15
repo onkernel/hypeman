@@ -800,5 +800,3 @@ func (m *manager) findByPCIAddress(pciAddress string) (*Device, error) {
 
 	return nil, ErrNotFound
 }
-
-

@@ -202,7 +202,29 @@ func (m *manager) createInstance(
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
 	// 9. Validate, resolve, and auto-bind devices (GPU passthrough)
+	// Track devices we've marked as attached for cleanup on error.
+	// The cleanup closure captures this slice by reference, so it will see
+	// whatever devices have been attached when cleanup runs.
+	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
+
+	// Setup cleanup stack early so device attachment errors trigger cleanup
+	cu := cleanup.Make(func() {
+		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
+		m.deleteInstanceData(id)
+	})
+	defer cu.Clean()
+
+	// Add device detachment cleanup - closure captures attachedDeviceIDs by reference
+	if m.deviceManager != nil {
+		cu.Add(func() {
+			for _, deviceID := range attachedDeviceIDs {
+				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
+				m.deviceManager.MarkDetached(ctx, deviceID)
+			}
+		})
+	}
+
 	if len(req.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceRef := range req.Devices {
 			device, err := m.deviceManager.GetDevice(ctx, deviceRef)
@@ -222,6 +244,12 @@ func (m *manager) createInstance(
 					return nil, fmt.Errorf("bind device %s to VFIO: %w", deviceRef, err)
 				}
 			}
+			// Mark device as attached to this instance
+			if err := m.deviceManager.MarkAttached(ctx, device.Id, id); err != nil {
+				log.ErrorContext(ctx, "failed to mark device as attached", "device", deviceRef, "error", err)
+				return nil, fmt.Errorf("mark device %s as attached: %w", deviceRef, err)
+			}
+			attachedDeviceIDs = append(attachedDeviceIDs, device.Id)
 			resolvedDeviceIDs = append(resolvedDeviceIDs, device.Id)
 		}
 		log.DebugContext(ctx, "validated devices for passthrough", "id", id, "devices", resolvedDeviceIDs)
@@ -250,28 +278,21 @@ func (m *manager) createInstance(
 		Devices:        resolvedDeviceIDs,
 	}
 
-	// Setup cleanup stack for automatic rollback on errors
-	cu := cleanup.Make(func() {
-		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		m.deleteInstanceData(id)
-	})
-	defer cu.Clean()
-
-	// 8. Ensure directories
+	// 11. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 9. Create overlay disk with specified size
+	// 12. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 14. Allocate network (if network enabled)
+	// 13. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
@@ -296,7 +317,7 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// 15. Validate and attach volumes
+	// 14. Validate and attach volumes
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "instance_id", id, "count", len(req.Volumes))
 		for _, volAttach := range req.Volumes {
@@ -336,7 +357,7 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 16. Create config disk (needs Instance for buildVMConfig)
+	// 15. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
 	if err := m.createConfigDisk(inst, imageInfo, netConfig); err != nil {
@@ -344,7 +365,7 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 12. Save metadata
+	// 16. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -352,14 +373,14 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 13. Start VMM and boot VM
+	// 17. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
 
-	// 14. Update timestamp after VM is running
+	// 18. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 
