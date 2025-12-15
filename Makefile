@@ -168,12 +168,6 @@ build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 # Build all binaries
 build-all: build
 
-# Build preview CLI from stainless-sdks/hypeman-cli
-# Usage: make build-preview-cli                         - uses preview/<current-branch>
-#        make build-preview-cli CLI_BRANCH=preview/xyz  - uses specific branch
-build-preview-cli:
-	@./scripts/build-preview-cli.sh $(CLI_BRANCH)
-
 # Run in development mode with hot reload
 dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
 	@rm -f ./tmp/main
