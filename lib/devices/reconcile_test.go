@@ -38,6 +38,10 @@ func (m *mockLivenessChecker) ListAllInstanceDevices(ctx context.Context) map[st
 	return m.instanceDevices
 }
 
+func (m *mockLivenessChecker) DetectSuspiciousVMMProcesses(ctx context.Context) int {
+	return 0 // Mock returns no suspicious processes
+}
+
 func (m *mockLivenessChecker) setRunning(instanceID string, running bool) {
 	m.runningInstances[instanceID] = running
 }
@@ -561,21 +565,6 @@ func TestResetOrphanedDevice_NonExistentPCIAddress(t *testing.T) {
 	
 	// May fail due to non-existent device, that's expected
 	// The key is it doesn't panic
-}
-
-// TestDetectSuspiciousVMMProcesses_NoPgrep tests that detection handles
-// missing pgrep gracefully (e.g., in minimal containers)
-func TestDetectSuspiciousVMMProcesses_NoPgrep(t *testing.T) {
-	mgr, _, _ := setupTestManager(t)
-	ctx := context.Background()
-	
-	stats := &reconcileStats{}
-	
-	// This test just verifies no panic when pgrep isn't available
-	// or returns no results
-	mgr.detectSuspiciousVMMProcesses(ctx, stats)
-	
-	// No assertions needed - we just want to ensure no panic
 }
 
 // Helper function for testing: verify device directory structure

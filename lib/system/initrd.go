@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/logger"
 )
 
 const alpineBaseImage = "alpine:3.22"
@@ -62,7 +63,8 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	// Add NVIDIA kernel modules (for GPU passthrough support)
 	if err := m.addNvidiaModules(ctx, rootfsDir, arch); err != nil {
 		// Log but don't fail - NVIDIA modules are optional (not available on all architectures)
-		fmt.Printf("initrd: skipping NVIDIA modules: %v\n", err)
+		log := logger.FromContext(ctx)
+		log.InfoContext(ctx, "skipping NVIDIA modules", "error", err)
 	}
 
 	// Write generated init script
@@ -205,7 +207,8 @@ func (m *manager) addNvidiaModules(ctx context.Context, rootfsDir, arch string) 
 	// Add userspace driver libraries (libcuda.so, libnvidia-ml.so, nvidia-smi, etc.)
 	// These are injected into containers at boot time - see lib/devices/GPU.md
 	if err := m.addNvidiaDriverLibs(ctx, rootfsDir, arch); err != nil {
-		fmt.Printf("initrd: warning: could not add nvidia driver libs: %v\n", err)
+		log := logger.FromContext(ctx)
+		log.WarnContext(ctx, "could not add nvidia driver libs", "error", err)
 		// Don't fail - kernel modules can still work, but containers won't have driver libs
 	}
 
@@ -252,7 +255,8 @@ func (m *manager) addNvidiaDriverLibs(ctx context.Context, rootfsDir, arch strin
 		return fmt.Errorf("extract nvidia driver libs: %w", err)
 	}
 
-	fmt.Printf("initrd: added NVIDIA driver libraries from %s\n", url)
+	log := logger.FromContext(ctx)
+	log.InfoContext(ctx, "added NVIDIA driver libraries", "url", url)
 	return nil
 }
 
