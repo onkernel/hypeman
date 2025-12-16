@@ -396,6 +396,9 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "reconciling device state")
 
+	// Validate GPU prerequisites and log warnings
+	m.validatePrerequisites(ctx)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -537,6 +540,54 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+// validatePrerequisites checks GPU passthrough prerequisites and logs warnings.
+// This helps operators debug configuration issues.
+func (m *manager) validatePrerequisites(ctx context.Context) {
+	log := logger.FromContext(ctx)
+
+	// Check IOMMU availability
+	iommuGroupsDir := "/sys/kernel/iommu_groups"
+	entries, err := os.ReadDir(iommuGroupsDir)
+	if err != nil {
+		log.WarnContext(ctx, "IOMMU not available - GPU passthrough will not work",
+			"error", err,
+			"hint", "enable IOMMU in BIOS and kernel (intel_iommu=on or amd_iommu=on)",
+		)
+	} else if len(entries) == 0 {
+		log.WarnContext(ctx, "no IOMMU groups found - GPU passthrough will not work",
+			"hint", "enable IOMMU in BIOS and kernel (intel_iommu=on or amd_iommu=on)",
+		)
+	}
+
+	// Check VFIO modules
+	vfioModules := []string{"vfio_pci", "vfio_iommu_type1"}
+	for _, module := range vfioModules {
+		modulePath := "/sys/module/" + module
+		if _, err := os.Stat(modulePath); os.IsNotExist(err) {
+			log.WarnContext(ctx, "VFIO module not loaded - GPU passthrough will not work",
+				"module", module,
+				"hint", "run: modprobe "+module,
+			)
+		}
+	}
+
+	// Check huge pages (info-level hint if devices exist but no huge pages)
+	hugePagesPath := "/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+	if data, err := os.ReadFile(hugePagesPath); err == nil {
+		count := strings.TrimSpace(string(data))
+		if count == "0" || count == "" {
+			// Only warn if we have registered devices
+			if devicesDir := m.paths.DevicesDir(); devicesDir != "" {
+				if entries, err := os.ReadDir(devicesDir); err == nil && len(entries) > 0 {
+					log.InfoContext(ctx, "huge pages not configured - GPU performance may be reduced",
+						"hint", "run: echo 1024 > /proc/sys/vm/nr_hugepages",
+					)
+				}
+			}
+		}
+	}
 }
 
 // reconcileStats tracks reconciliation metrics
