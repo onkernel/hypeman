@@ -33,7 +33,18 @@ mkdir -p /dev/pts /dev/shm
 mount -t devpts devpts /dev/pts
 chmod 1777 /dev/shm
 
-echo "overlay-init: mounted proc/sys/dev" > /dev/kmsg
+# Mount cgroup v2 (unified hierarchy) - needed for container runtimes like runc/buildkit
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || {
+  # Fallback: mount cgroup v1 controllers if v2 not supported
+  mount -t tmpfs cgroup /sys/fs/cgroup
+  for ctrl in cpu cpuacct memory devices freezer blkio pids; do
+    mkdir -p /sys/fs/cgroup/$ctrl
+    mount -t cgroup -o $ctrl cgroup /sys/fs/cgroup/$ctrl 2>/dev/null || true
+  done
+}
+
+echo "overlay-init: mounted proc/sys/dev/cgroup" > /dev/kmsg
 
 # Redirect all output to serial console
 exec >/dev/ttyS0 2>&1
@@ -225,6 +236,10 @@ mount --bind /proc /overlay/newroot/proc
 mount --bind /sys /overlay/newroot/sys
 mount --bind /dev /overlay/newroot/dev
 mount --bind /dev/pts /overlay/newroot/dev/pts
+
+# Ensure cgroups are available in the container (needed for runc/buildkit)
+mkdir -p /overlay/newroot/sys/fs/cgroup
+mount --bind /sys/fs/cgroup /overlay/newroot/sys/fs/cgroup 2>/dev/null || true
 
 echo "overlay-init: bound mounts to new root"
 

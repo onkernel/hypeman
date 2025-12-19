@@ -7,8 +7,16 @@ FROM moby/buildkit:rootless AS buildkit
 FROM golang:1.25-alpine AS agent-builder
 
 WORKDIR /app
-COPY lib/builds/builder_agent/ ./
-RUN go build -ldflags="-s -w" -o /builder-agent .
+
+# Copy go.mod and go.sum first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy only the builder_agent source
+COPY lib/builds/builder_agent/ ./lib/builds/builder_agent/
+
+# Build the agent
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /builder-agent ./lib/builds/builder_agent
 
 # Final builder image
 FROM python:3.12-slim

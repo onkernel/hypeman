@@ -73,7 +73,7 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 
 		// Update the context with user ID
 		newCtx := context.WithValue(ctx, userIDKey, userID)
-		
+
 		// Update the request with the new context
 		*input.RequestValidationInput.Request = *input.RequestValidationInput.Request.WithContext(newCtx)
 
@@ -86,10 +86,10 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 func OapiErrorHandler(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	// Return a simple JSON error response matching our Error schema
-	fmt.Fprintf(w, `{"code":"%s","message":"%s"}`, 
-		http.StatusText(statusCode), 
+	fmt.Fprintf(w, `{"code":"%s","message":"%s"}`,
+		http.StatusText(statusCode),
 		message)
 }
 
@@ -116,11 +116,39 @@ func GetUserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// isInternalVMRequest checks if the request is from an internal VM network (10.102.x.x)
+// This is used to allow builder VMs to push images without authentication
+func isInternalVMRequest(r *http.Request) bool {
+	// Get the real client IP (RealIP middleware sets X-Real-IP)
+	ip := r.Header.Get("X-Real-IP")
+	if ip == "" {
+		// Fall back to RemoteAddr
+		ip = r.RemoteAddr
+		// Remove port if present
+		if idx := strings.LastIndex(ip, ":"); idx != -1 {
+			ip = ip[:idx]
+		}
+	}
+
+	// Check if it's from the VM network (10.102.x.x)
+	return strings.HasPrefix(ip, "10.102.")
+}
+
 // JwtAuth creates a chi middleware that validates JWT bearer tokens
 func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.FromContext(r.Context())
+
+			// Allow internal VM network (10.102.x.x) to bypass auth for registry pushes
+			// This enables builder VMs to push images without authentication
+			if isInternalVMRequest(r) {
+				log.DebugContext(r.Context(), "allowing internal VM request without auth", "remote_addr", r.RemoteAddr)
+				// Set a system user ID for internal requests
+				ctx := context.WithValue(r.Context(), userIDKey, "internal-builder")
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 
 			// Extract token from Authorization header
 			authHeader := r.Header.Get("Authorization")
@@ -174,4 +202,3 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 		})
 	}
 }
-

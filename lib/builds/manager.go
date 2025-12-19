@@ -2,13 +2,16 @@ package builds
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/nrednav/cuid2"
+	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/volumes"
@@ -17,6 +20,10 @@ import (
 
 // Manager interface for the build system
 type Manager interface {
+	// Start starts the build manager's background services (vsock handler, etc.)
+	// This should be called once when the API server starts.
+	Start(ctx context.Context) error
+
 	// CreateBuild starts a new build job
 	CreateBuild(ctx context.Context, req CreateBuildRequest, sourceData []byte) (*Build, error)
 
@@ -58,7 +65,7 @@ func DefaultConfig() Config {
 		MaxConcurrentBuilds: 2,
 		BuilderImage:        "hypeman/builder:latest",
 		RegistryURL:         "localhost:8080",
-		DefaultTimeout:       600, // 10 minutes
+		DefaultTimeout:      600, // 10 minutes
 	}
 }
 
@@ -113,6 +120,21 @@ func NewManager(
 	m.RecoverPendingBuilds()
 
 	return m, nil
+}
+
+// Start starts the build manager's background services
+func (m *manager) Start(ctx context.Context) error {
+	// Start the vsock handler in a goroutine
+	go func() {
+		if err := m.vsockHandler.ListenAndServe(ctx); err != nil {
+			if ctx.Err() == nil {
+				m.logger.Error("vsock handler error", "error", err)
+			}
+		}
+	}()
+
+	m.logger.Info("build manager started", "vsock_port", BuildAgentVsockPort)
+	return nil
 }
 
 // CreateBuild starts a new build job
@@ -280,6 +302,37 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 	defer m.volumeManager.DeleteVolume(ctx, sourceVolID)
 
+	// Create config volume with build.json for the builder agent
+	configVolID := fmt.Sprintf("build-config-%s", id)
+	configVolPath, err := m.createBuildConfigVolume(id, configVolID)
+	if err != nil {
+		return nil, fmt.Errorf("create config volume: %w", err)
+	}
+	defer os.Remove(configVolPath) // Clean up the config disk file
+
+	// Register the config volume with the volume manager
+	_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+		Id:     &configVolID,
+		Name:   configVolID,
+		SizeGb: 1,
+	})
+	if err != nil {
+		// If volume creation fails, try to use the disk file directly
+		// by copying it to the expected location
+		volPath := m.paths.VolumeData(configVolID)
+		if copyErr := copyFile(configVolPath, volPath); copyErr != nil {
+			return nil, fmt.Errorf("setup config volume: %w", err)
+		}
+	} else {
+		// Copy our config disk over the empty volume
+		volPath := m.paths.VolumeData(configVolID)
+		if err := copyFile(configVolPath, volPath); err != nil {
+			m.volumeManager.DeleteVolume(ctx, configVolID)
+			return nil, fmt.Errorf("write config to volume: %w", err)
+		}
+	}
+	defer m.volumeManager.DeleteVolume(ctx, configVolID)
+
 	// Create builder instance
 	builderName := fmt.Sprintf("builder-%s", id)
 	networkEnabled := policy.NetworkMode == "egress"
@@ -294,6 +347,11 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 			{
 				VolumeID:  sourceVolID,
 				MountPath: "/src",
+				Readonly:  false, // Builder needs to write generated Dockerfile
+			},
+			{
+				VolumeID:  configVolID,
+				MountPath: "/config",
 				Readonly:  true,
 			},
 		},
@@ -527,3 +585,58 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// createBuildConfigVolume creates an ext4 disk containing the build.json config file
+// Returns the path to the disk file
+func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error) {
+	// Read the build config
+	configPath := m.paths.BuildConfig(buildID)
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("read build config: %w", err)
+	}
+
+	// Create temp directory with config file
+	tmpDir, err := os.MkdirTemp("", "hypeman-build-config-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write build.json to temp directory
+	buildJSONPath := filepath.Join(tmpDir, "build.json")
+	if err := os.WriteFile(buildJSONPath, configData, 0644); err != nil {
+		return "", fmt.Errorf("write build.json: %w", err)
+	}
+
+	// Also write a metadata file for debugging
+	metadata := map[string]interface{}{
+		"build_id":   buildID,
+		"created_at": time.Now().Format(time.RFC3339),
+	}
+	metadataData, _ := json.MarshalIndent(metadata, "", "  ")
+	metadataPath := filepath.Join(tmpDir, "metadata.json")
+	os.WriteFile(metadataPath, metadataData, 0644)
+
+	// Create ext4 disk from the directory
+	diskPath := filepath.Join(os.TempDir(), fmt.Sprintf("build-config-%s.ext4", buildID))
+	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
+	if err != nil {
+		return "", fmt.Errorf("create config disk: %w", err)
+	}
+
+	return diskPath, nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}

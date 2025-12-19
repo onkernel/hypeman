@@ -7,31 +7,36 @@ The build system provides source-to-image builds inside ephemeral Cloud Hypervis
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Hypeman API                              │
-│  POST /v1/builds  →  BuildManager  →  BuildQueue                │
+│  POST /builds  →  BuildManager  →  BuildQueue                   │
+│                        │                                         │
+│              Start() → VsockHandler (port 5001)                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Builder MicroVM                              │
 │  ┌─────────────────────────────────────────────────────────────┐│
+│  │  Volumes Mounted:                                            ││
+│  │  - /src (source code, read-write)                           ││
+│  │  - /config/build.json (build configuration, read-only)      ││
+│  ├─────────────────────────────────────────────────────────────┤│
 │  │  Builder Agent                                               ││
 │  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  ││
 │  │  │ Load Config │→ │ Generate     │→ │ Run BuildKit       │  ││
-│  │  │ from disk   │  │ Dockerfile   │  │ (rootless)         │  ││
+│  │  │ /config/    │  │ Dockerfile   │  │ (buildctl)         │  ││
 │  │  └─────────────┘  └──────────────┘  └────────────────────┘  ││
 │  │                                              │               ││
 │  │                                              ▼               ││
 │  │                                     Push to Registry         ││
-│  │                                              │               ││
-│  │                                              ▼               ││
-│  │                                     Report via vsock         ││
+│  │                                     (HTTP, insecure)         ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       OCI Registry                               │
-│              localhost:8080/builds/{build-id}                    │
+│              {REGISTRY_URL}/builds/{build-id}                    │
+│              (default: 10.102.0.1:8083 from VM)                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,10 +86,15 @@ builds/
 Orchestrates the build lifecycle:
 
 1. Validate request and store source
-2. Enqueue build job
-3. Create builder VM with source volume attached
-4. Wait for result via vsock
-5. Update metadata and cleanup
+2. Write build config to disk
+3. Enqueue build job
+4. Create source volume from archive
+5. Create config volume with `build.json`
+6. Create builder VM with both volumes attached
+7. Wait for build completion
+8. Update metadata and cleanup
+
+**Important**: The `Start()` method must be called to start the vsock handler for builder communication.
 
 ### Dockerfile Templates (`templates/`)
 
@@ -120,26 +130,32 @@ key, _ := gen.GenerateCacheKey("my-tenant", "nodejs20", lockfileHashes)
 Guest binary that runs inside builder VMs:
 
 1. Reads config from `/config/build.json`
-2. Fetches secrets from host via vsock
+2. Fetches secrets from host via vsock (if any)
 3. Generates Dockerfile (if not provided)
-4. Runs `buildctl-daemonless.sh` with cache flags
+4. Runs `buildctl-daemonless.sh` with cache and insecure registry flags
 5. Computes provenance (lockfile hashes, source hash)
 6. Reports result back via vsock
+
+**Key Details**:
+- Config path: `/config/build.json`
+- Source path: `/src`
+- Uses `registry.insecure=true` for HTTP registries
+- Inherits `BUILDKITD_FLAGS` from environment
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/v1/builds` | Submit build (multipart form) |
-| `GET` | `/v1/builds` | List all builds |
-| `GET` | `/v1/builds/{id}` | Get build details |
-| `DELETE` | `/v1/builds/{id}` | Cancel build |
-| `GET` | `/v1/builds/{id}/logs` | Stream logs (SSE) |
+| `POST` | `/builds` | Submit build (multipart form) |
+| `GET` | `/builds` | List all builds |
+| `GET` | `/builds/{id}` | Get build details |
+| `DELETE` | `/builds/{id}` | Cancel build |
+| `GET` | `/builds/{id}/logs` | Stream logs (SSE) |
 
 ### Submit Build Example
 
 ```bash
-curl -X POST http://localhost:8080/v1/builds \
+curl -X POST http://localhost:8083/builds \
   -H "Authorization: Bearer $TOKEN" \
   -F "runtime=nodejs20" \
   -F "source=@source.tar.gz" \
@@ -168,6 +184,17 @@ curl -X POST http://localhost:8080/v1/builds \
 | `REGISTRY_URL` | `localhost:8080` | Registry for built images |
 | `BUILD_TIMEOUT` | `600` | Default timeout (seconds) |
 
+### Registry URL Configuration
+
+The `REGISTRY_URL` must be accessible from inside builder VMs. Since `localhost` in the VM refers to the VM itself, you need to use the host's gateway IP:
+
+```bash
+# In .env
+REGISTRY_URL=10.102.0.1:8083  # Gateway IP accessible from VM network
+```
+
+The middleware allows unauthenticated registry pushes from the VM network (10.102.x.x).
+
 ## Build Status Flow
 
 ```
@@ -194,12 +221,76 @@ Builder images are in `images/`:
 - `nodejs20/Dockerfile` - Node.js 20 + BuildKit + agent
 - `python312/Dockerfile` - Python 3.12 + BuildKit + agent
 
-Build and push:
+### Required Components
+
+Builder images must include:
+
+| Component | Source | Purpose |
+|-----------|--------|---------|
+| `buildctl` | `moby/buildkit:rootless` | BuildKit CLI |
+| `buildctl-daemonless.sh` | `moby/buildkit:rootless` | Daemonless wrapper |
+| `buildkitd` | `moby/buildkit:rootless` | BuildKit daemon |
+| `buildkit-runc` | `moby/buildkit:rootless` | Container runtime (as `/usr/bin/runc`) |
+| `builder-agent` | Built from `builder_agent/main.go` | Hypeman agent |
+| `fuse-overlayfs` | apk/apt | Overlay filesystem support |
+
+### Build and Push (OCI Format)
+
+Builder images must be pushed in OCI format (not Docker v2 manifest):
 
 ```bash
-cd lib/builds/images/nodejs20
-docker build -t hypeman/builder-nodejs20:latest -f Dockerfile ../../../..
+# Build with OCI output
+docker buildx build --platform linux/amd64 \
+  -t myregistry/builder-nodejs20:latest \
+  -f lib/builds/images/nodejs20/Dockerfile \
+  --output type=oci,dest=/tmp/builder.tar \
+  .
+
+# Extract and push with crane
+mkdir -p /tmp/oci-builder
+tar -xf /tmp/builder.tar -C /tmp/oci-builder
+crane push /tmp/oci-builder myregistry/builder-nodejs20:latest
 ```
+
+### Environment Variables
+
+The builder image should set:
+
+```dockerfile
+# Empty or minimal flags - cgroups are mounted in microVM
+ENV BUILDKITD_FLAGS=""
+ENV HOME=/home/builder
+ENV XDG_RUNTIME_DIR=/home/builder/.local/share
+```
+
+## MicroVM Requirements
+
+Builder VMs require specific kernel and init script features:
+
+### Cgroups
+
+The init script mounts cgroups for BuildKit/runc:
+
+```bash
+# Cgroup v2 (preferred)
+mount -t cgroup2 none /sys/fs/cgroup
+
+# Or cgroup v1 fallback
+mount -t tmpfs cgroup /sys/fs/cgroup
+for ctrl in cpu cpuacct memory devices freezer blkio pids; do
+  mkdir -p /sys/fs/cgroup/$ctrl
+  mount -t cgroup -o $ctrl cgroup /sys/fs/cgroup/$ctrl
+done
+```
+
+### Volume Mounts
+
+Two volumes are attached to builder VMs:
+
+1. **Source volume** (`/src`, read-write): Contains extracted source tarball
+2. **Config volume** (`/config`, read-only): Contains `build.json`
+
+The source is mounted read-write so the generated Dockerfile can be written.
 
 ## Provenance
 
@@ -220,6 +311,8 @@ Each build records provenance for reproducibility:
 
 ## Testing
 
+### Unit Tests
+
 ```bash
 # Run unit tests
 go test ./lib/builds/... -v
@@ -230,3 +323,104 @@ go test ./lib/builds/cache_test.go ./lib/builds/cache.go ./lib/builds/types.go .
 go test ./lib/builds/templates/... -v
 ```
 
+### E2E Testing
+
+1. **Start the server**:
+   ```bash
+   make dev
+   ```
+
+2. **Ensure builder image is available**:
+   ```bash
+   TOKEN=$(make gen-jwt | tail -1)
+   curl -X POST http://localhost:8083/images \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"name": "hirokernel/builder-nodejs20:latest"}'
+   ```
+
+3. **Create test source**:
+   ```bash
+   mkdir -p /tmp/test-app
+   echo '{"name": "test", "version": "1.0.0", "dependencies": {}}' > /tmp/test-app/package.json
+   echo '{"lockfileVersion": 3, "packages": {}}' > /tmp/test-app/package-lock.json
+   echo 'console.log("Hello!");' > /tmp/test-app/index.js
+   tar -czf /tmp/source.tar.gz -C /tmp/test-app .
+   ```
+
+4. **Submit build**:
+   ```bash
+   curl -X POST http://localhost:8083/builds \
+     -H "Authorization: Bearer $TOKEN" \
+     -F "runtime=nodejs20" \
+     -F "source=@/tmp/source.tar.gz"
+   ```
+
+5. **Poll for completion**:
+   ```bash
+   BUILD_ID="<id-from-response>"
+   curl http://localhost:8083/builds/$BUILD_ID \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+6. **Run the built image**:
+   ```bash
+   curl -X POST http://localhost:8083/instances \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "test-app",
+       "image": "builds/'$BUILD_ID':latest",
+       "size": "1GB",
+       "vcpus": 1
+     }'
+   ```
+
+## Troubleshooting
+
+### Common Issues
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `image not found` | Builder image not in OCI format | Push with `crane` after `docker buildx --output type=oci` |
+| `no cgroup mount found` | Cgroups not mounted in VM | Update init script to mount cgroups |
+| `http: server gave HTTP response to HTTPS client` | BuildKit using HTTPS for HTTP registry | Add `registry.insecure=true` to output flags |
+| `connection refused` to localhost:8080 | Registry URL not accessible from VM | Use gateway IP (10.102.0.1) instead of localhost |
+| `authorization header required` | Registry auth blocking VM push | Ensure auth bypass for 10.102.x.x IPs |
+| `No space left on device` | Instance memory too small for image | Use at least 1GB RAM for Node.js images |
+| `can't enable NoProcessSandbox without Rootless` | Wrong BUILDKITD_FLAGS | Use empty flags or remove the flag |
+
+### Debug Builder VM
+
+Check logs of the builder instance:
+
+```bash
+# List instances
+curl http://localhost:8083/instances -H "Authorization: Bearer $TOKEN" | jq
+
+# Get builder instance logs
+INSTANCE_ID="<builder-instance-id>"
+curl http://localhost:8083/instances/$INSTANCE_ID/logs \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Verify Build Config
+
+Check the config volume contents:
+
+```bash
+cat $DATA_DIR/builds/$BUILD_ID/config.json
+```
+
+Expected format:
+```json
+{
+  "job_id": "abc123",
+  "runtime": "nodejs20",
+  "registry_url": "10.102.0.1:8083",
+  "cache_scope": "my-tenant",
+  "source_path": "/src",
+  "timeout_seconds": 300,
+  "network_mode": "egress"
+}
+```

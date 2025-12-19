@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	configPath     = "/config/build.json"
-	vsockPort      = 5001 // Build agent port (different from exec agent)
-	hostCID        = 2    // VMADDR_CID_HOST
+	configPath = "/config/build.json"
+	vsockPort  = 5001 // Build agent port (different from exec agent)
+	hostCID    = 2    // VMADDR_CID_HOST
 )
 
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
@@ -71,9 +71,9 @@ type BuildProvenance struct {
 
 // VsockMessage is the envelope for vsock communication
 type VsockMessage struct {
-	Type   string          `json:"type"`
-	Result *BuildResult    `json:"result,omitempty"`
-	Log    string          `json:"log,omitempty"`
+	Type   string       `json:"type"`
+	Result *BuildResult `json:"result,omitempty"`
+	Log    string       `json:"log,omitempty"`
 }
 
 func main() {
@@ -273,20 +273,21 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	outputRef := fmt.Sprintf("%s/builds/%s", config.RegistryURL, config.JobID)
 
 	// Build arguments
+	// Use registry.insecure=true for internal HTTP registries
 	args := []string{
 		"build",
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
 		"--local", "dockerfile=" + config.SourcePath,
-		"--output", fmt.Sprintf("type=image,name=%s,push=true", outputRef),
+		"--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true", outputRef),
 		"--metadata-file", "/tmp/build-metadata.json",
 	}
 
 	// Add cache if scope is set
 	if config.CacheScope != "" {
 		cacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
-		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s", cacheRef))
-		args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max", cacheRef))
+		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", cacheRef))
+		args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", cacheRef))
 	}
 
 	// Add secret mounts
@@ -306,7 +307,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	cmd := exec.CommandContext(ctx, "buildctl-daemonless.sh", args...)
 	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
-	cmd.Env = append(os.Environ(), "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox")
+	// Use BUILDKITD_FLAGS from environment (set in Dockerfile) or empty for default
+	cmd.Env = os.Environ()
 
 	if err := cmd.Run(); err != nil {
 		return "", buildLogs.String(), fmt.Errorf("buildctl failed: %w", err)
@@ -494,4 +496,3 @@ func sendResult(result BuildResult) {
 func dialVsock() (net.Conn, error) {
 	return vsock.Dial(hostCID, vsockPort, nil)
 }
-
