@@ -273,7 +273,7 @@ func (m *manager) createInstance(
 		KernelVersion:     string(kernelVer),
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
 		HypervisorVersion: string(vmm.V49_0), // Use latest
-		SocketPath:        m.paths.InstanceSocket(id),
+		SocketPath:        m.paths.InstanceSocket(id, string(hypervisor.TypeCloudHypervisor)),
 		DataDir:           m.paths.InstanceDir(id),
 		VsockCID:          vsockCID,
 		VsockSocket:       vsockSocket,

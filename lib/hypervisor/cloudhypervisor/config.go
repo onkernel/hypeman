@@ -40,7 +40,7 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	}
 
 	// Disk configuration
-	var disks []vmm.DiskConfig
+	disks := make([]vmm.DiskConfig, 0, len(cfg.Disks))
 	for _, d := range cfg.Disks {
 		disk := vmm.DiskConfig{
 			Path: ptr(d.Path),

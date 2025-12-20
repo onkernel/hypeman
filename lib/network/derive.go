@@ -16,6 +16,7 @@ import (
 type instanceMetadata struct {
 	Name           string
 	NetworkEnabled bool
+	HypervisorType string
 }
 
 // deriveAllocation derives network allocation from CH or snapshot
@@ -48,7 +49,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
 	// 4. Try to derive from running VM first
-	socketPath := m.paths.InstanceSocket(instanceID)
+	socketPath := m.paths.InstanceSocket(instanceID, meta.HypervisorType)
 	if fileExists(socketPath) {
 		client, err := vmm.NewVMM(socketPath)
 		if err == nil {

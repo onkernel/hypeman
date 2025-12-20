@@ -5,6 +5,7 @@ package cloudhypervisor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/vmm"
@@ -12,8 +13,7 @@ import (
 
 // CloudHypervisor implements hypervisor.Hypervisor for Cloud Hypervisor VMM.
 type CloudHypervisor struct {
-	client     *vmm.VMM
-	socketPath string
+	client *vmm.VMM
 }
 
 // New creates a new Cloud Hypervisor client for an existing VMM socket.
@@ -23,8 +23,7 @@ func New(socketPath string) (*CloudHypervisor, error) {
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
 	return &CloudHypervisor{
-		client:     client,
-		socketPath: socketPath,
+		client: client,
 	}, nil
 }
 
@@ -114,7 +113,10 @@ func (c *CloudHypervisor) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, er
 		return nil, fmt.Errorf("unknown vm state: %s", resp.JSON200.State)
 	}
 
-	return &hypervisor.VMInfo{State: state}, nil
+	return &hypervisor.VMInfo{
+		State:            state,
+		MemoryActualSize: resp.JSON200.MemoryActualSize,
+	}, nil
 }
 
 // Pause suspends VM execution.
@@ -182,6 +184,59 @@ func (c *CloudHypervisor) ResizeMemory(ctx context.Context, bytes int64) error {
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("resize memory failed with status %d", resp.StatusCode())
 	}
+	return nil
+}
+
+// ResizeMemoryAndWait changes the VM's memory allocation and waits for it to stabilize.
+// It polls until the actual memory size stabilizes (stops changing) or timeout is reached.
+func (c *CloudHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
+	// First, request the resize
+	if err := c.ResizeMemory(ctx, bytes); err != nil {
+		return err
+	}
+
+	// Poll until memory stabilizes
+	const pollInterval = 20 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	var lastSize int64 = -1
+	stableCount := 0
+	const requiredStableChecks = 3 // Require 3 consecutive stable readings
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		info, err := c.GetVMInfo(ctx)
+		if err != nil {
+			return fmt.Errorf("poll memory size: %w", err)
+		}
+
+		if info.MemoryActualSize == nil {
+			// No memory info available, just return after resize
+			return nil
+		}
+
+		currentSize := *info.MemoryActualSize
+
+		if currentSize == lastSize {
+			stableCount++
+			if stableCount >= requiredStableChecks {
+				// Memory has stabilized
+				return nil
+			}
+		} else {
+			stableCount = 0
+			lastSize = currentSize
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	// Timeout reached, but resize was requested successfully
 	return nil
 }
 

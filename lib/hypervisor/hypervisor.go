@@ -5,6 +5,7 @@ package hypervisor
 
 import (
 	"context"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/paths"
 )
@@ -58,6 +59,11 @@ type Hypervisor interface {
 	// ResizeMemory changes the VM's memory allocation.
 	// Check Capabilities().SupportsHotplugMemory before calling.
 	ResizeMemory(ctx context.Context, bytes int64) error
+
+	// ResizeMemoryAndWait changes the VM's memory allocation and waits for it to stabilize.
+	// This polls until the actual memory size matches the target or stabilizes.
+	// Check Capabilities().SupportsHotplugMemory before calling.
+	ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error
 
 	// Capabilities returns what features this hypervisor supports.
 	Capabilities() Capabilities

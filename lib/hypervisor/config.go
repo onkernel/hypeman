@@ -55,7 +55,8 @@ type NetworkConfig struct {
 
 // VMInfo contains current VM state information
 type VMInfo struct {
-	State VMState
+	State            VMState
+	MemoryActualSize *int64 // Current actual memory size in bytes (if available)
 }
 
 // VMState represents the VM execution state
