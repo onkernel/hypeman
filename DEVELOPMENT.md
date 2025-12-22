@@ -252,15 +252,19 @@ To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana
 # Start Grafana LGTM (UI at http://localhost:3000, login: admin/admin)
 # Note, if you are developing on a shared server, you can use the same LGTM stack as your peer(s)
 # You will be able to sort your metrics, traces, and logs using the ENV configuration (see below)
+BIND=127.0.0.1
+# YOLO=1  # Uncomment to expose ports externally
+if [ -n "$YOLO" ]; then BIND=0.0.0.0; fi
+
 docker run -d --name lgtm \
-  -p 127.0.0.1:3000:3000 \
-  -p 127.0.0.1:4317:4317 \
-  -p 127.0.0.1:4318:4318 \
-  -p 127.0.0.1:9090:9090 \
-  -p 127.0.0.1:4040:4040 \
+  -p $BIND:3000:3000 \
+  -p $BIND:4317:4317 \
+  -p $BIND:4318:4318 \
+  -p $BIND:9090:9090 \
+  -p $BIND:4040:4040 \
   grafana/otel-lgtm:latest
 
-# If developing on a remote server, forward the port to your local machine:
+# If developing on a remote server, forward the port to your local machine (or YOLO):
 # ssh -L 3001:localhost:3000 your-server  (then open http://localhost:3001)
 
 # Enable OTel in .env (set ENV to your name to filter your telemetry)
