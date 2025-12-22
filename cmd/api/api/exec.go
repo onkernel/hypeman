@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	mw "github.com/onkernel/hypeman/lib/middleware"
@@ -111,7 +111,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
 	// Execute via vsock
-	exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
 		Command: execReq.Command,
 		Stdin:   wsConn,
 		Stdout:  wsConn,

@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// execWithRetry runs a command with retries until exec-agent is ready
+// execWithRetry runs a command with retries until guest-agent is ready
 func execWithRetry(ctx context.Context, vsockSocket string, command []string) (string, int, error) {
 	var output string
 	var code int
@@ -105,9 +105,9 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Writer instance created: %s", writerInst.Id)
 
-	// Wait for exec-agent
-	err = waitForExecAgent(ctx, manager, writerInst.Id, 15*time.Second)
-	require.NoError(t, err, "exec-agent should be ready")
+	// Wait for guest-agent
+	err = waitForGuestAgent(ctx, manager, writerInst.Id, 15*time.Second)
+	require.NoError(t, err, "guest-agent should be ready")
 
 	// Write test file, sync, and verify in one command to ensure data persistence
 	t.Log("Writing test file to volume...")
@@ -168,12 +168,12 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, vol.Attachments, 2, "Volume should have 2 attachments")
 
-	// Wait for exec-agent on both readers
-	err = waitForExecAgent(ctx, manager, reader1.Id, 15*time.Second)
-	require.NoError(t, err, "reader-1 exec-agent should be ready")
+	// Wait for guest-agent on both readers
+	err = waitForGuestAgent(ctx, manager, reader1.Id, 15*time.Second)
+	require.NoError(t, err, "reader-1 guest-agent should be ready")
 
-	err = waitForExecAgent(ctx, manager, reader2.Id, 15*time.Second)
-	require.NoError(t, err, "reader-2 exec-agent should be ready")
+	err = waitForGuestAgent(ctx, manager, reader2.Id, 15*time.Second)
+	require.NoError(t, err, "reader-2 guest-agent should be ready")
 
 	// Verify data is readable from reader-1
 	t.Log("Verifying data from reader-1...")
@@ -406,9 +406,9 @@ func TestVolumeFromArchive(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Wait for exec-agent
-	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
-	require.NoError(t, err, "exec-agent should be ready")
+	// Wait for guest-agent
+	err = waitForGuestAgent(ctx, manager, inst.Id, 15*time.Second)
+	require.NoError(t, err, "guest-agent should be ready")
 
 	// Verify files from archive are present
 	t.Log("Verifying archive files are accessible...")
