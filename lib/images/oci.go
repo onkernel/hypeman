@@ -80,14 +80,21 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
-	descriptor, err := remote.Head(ref,
+	// WithPlatform ensures we resolve multi-arch tags/digests to the
+	// platform-specific manifest digest that pullToOCILayout will actually pull.
+	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(currentPlatform()))
 	if err != nil {
-		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+		return "", fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
 	}
 
-	return descriptor.Digest.String(), nil
+	d, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("compute image digest: %w", err)
+	}
+	return d.String(), nil
 }
 
 // pullResult contains the metadata and digest from pulling an image
