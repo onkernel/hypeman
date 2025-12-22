@@ -5,19 +5,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/digitalocean/go-qemu/qemu"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 )
 
 // QEMU implements hypervisor.Hypervisor for QEMU VMM.
 type QEMU struct {
-	client *QMPClient
+	client *Client
 }
 
 // New creates a new QEMU client for an existing QMP socket.
 func New(socketPath string) (*QEMU, error) {
-	client, err := NewQMPClient(socketPath)
+	client, err := NewClient(socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("create qmp client: %w", err)
+		return nil, fmt.Errorf("create qemu client: %w", err)
 	}
 	return &QEMU{client: client}, nil
 }
@@ -67,28 +68,31 @@ func (q *QEMU) Shutdown(ctx context.Context) error {
 
 // GetVMInfo returns current VM state.
 func (q *QEMU) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
-	status, running, err := q.client.QueryStatus()
+	status, err := q.client.Status()
 	if err != nil {
 		return nil, fmt.Errorf("query status: %w", err)
 	}
 
+	// Map qemu.Status to hypervisor.VMState using typed enum comparison
 	var state hypervisor.VMState
-	switch {
-	case running:
+	switch status {
+	case qemu.StatusRunning:
 		state = hypervisor.StateRunning
-	case status == "paused":
+	case qemu.StatusPaused:
 		state = hypervisor.StatePaused
-	case status == "shutdown":
+	case qemu.StatusShutdown:
 		state = hypervisor.StateShutdown
-	case status == "prelaunch":
+	case qemu.StatusPreLaunch:
 		state = hypervisor.StateCreated
+	case qemu.StatusInMigrate, qemu.StatusPostMigrate, qemu.StatusFinishMigrate:
+		state = hypervisor.StatePaused
+	case qemu.StatusSuspended:
+		state = hypervisor.StatePaused
+	case qemu.StatusGuestPanicked, qemu.StatusIOError, qemu.StatusInternalError, qemu.StatusWatchdog:
+		// Error states - report as running so caller can investigate
+		state = hypervisor.StateRunning
 	default:
-		// Map other QEMU states to appropriate hypervisor states
-		if status == "inmigrate" || status == "postmigrate" {
-			state = hypervisor.StatePaused
-		} else {
-			state = hypervisor.StateRunning
-		}
+		state = hypervisor.StateRunning
 	}
 
 	return &hypervisor.VMInfo{

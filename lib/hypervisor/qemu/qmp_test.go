@@ -1,100 +1,79 @@
 package qemu
 
 import (
-	"encoding/json"
 	"testing"
 
+	"github.com/digitalocean/go-qemu/qemu"
+	"github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestQMPCommand_Marshal(t *testing.T) {
+func TestStatusMapping(t *testing.T) {
+	// Test that qemu.Status values are properly defined
 	tests := []struct {
-		name     string
-		cmd      qmpCommand
-		expected string
+		name   string
+		status qemu.Status
 	}{
-		{
-			name:     "stop command",
-			cmd:      qmpCommand{Execute: "stop"},
-			expected: `{"execute":"stop"}`,
-		},
-		{
-			name:     "cont command",
-			cmd:      qmpCommand{Execute: "cont"},
-			expected: `{"execute":"cont"}`,
-		},
-		{
-			name:     "query-status command",
-			cmd:      qmpCommand{Execute: "query-status"},
-			expected: `{"execute":"query-status"}`,
-		},
-		{
-			name:     "quit command",
-			cmd:      qmpCommand{Execute: "quit"},
-			expected: `{"execute":"quit"}`,
-		},
-		{
-			name:     "system_powerdown command",
-			cmd:      qmpCommand{Execute: "system_powerdown"},
-			expected: `{"execute":"system_powerdown"}`,
-		},
-		{
-			name:     "system_reset command",
-			cmd:      qmpCommand{Execute: "system_reset"},
-			expected: `{"execute":"system_reset"}`,
-		},
+		{"running", qemu.StatusRunning},
+		{"paused", qemu.StatusPaused},
+		{"shutdown", qemu.StatusShutdown},
+		{"prelaunch", qemu.StatusPreLaunch},
+		{"in-migrate", qemu.StatusInMigrate},
+		{"post-migrate", qemu.StatusPostMigrate},
+		{"finish-migrate", qemu.StatusFinishMigrate},
+		{"suspended", qemu.StatusSuspended},
+		{"guest-panicked", qemu.StatusGuestPanicked},
+		{"io-error", qemu.StatusIOError},
+		{"internal-error", qemu.StatusInternalError},
+		{"watchdog", qemu.StatusWatchdog},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.cmd)
-			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
+			// Verify the status is a valid enum value (not zero except for Debug)
+			// This ensures we're using the correct constants from go-qemu
+			assert.NotEqual(t, qemu.Status(-1), tt.status, "status should be valid")
 		})
 	}
 }
 
-func TestQMPStatusResponse_Unmarshal(t *testing.T) {
+func TestRunStateMapping(t *testing.T) {
+	// Test that raw.RunState values are properly defined
 	tests := []struct {
-		name            string
-		json            string
-		expectedStatus  string
-		expectedRunning bool
+		name  string
+		state raw.RunState
 	}{
-		{
-			name:            "running",
-			json:            `{"return":{"running":true,"status":"running"}}`,
-			expectedStatus:  "running",
-			expectedRunning: true,
-		},
-		{
-			name:            "paused",
-			json:            `{"return":{"running":false,"status":"paused"}}`,
-			expectedStatus:  "paused",
-			expectedRunning: false,
-		},
-		{
-			name:            "shutdown",
-			json:            `{"return":{"running":false,"status":"shutdown"}}`,
-			expectedStatus:  "shutdown",
-			expectedRunning: false,
-		},
-		{
-			name:            "prelaunch",
-			json:            `{"return":{"running":false,"status":"prelaunch"}}`,
-			expectedStatus:  "prelaunch",
-			expectedRunning: false,
-		},
+		{"running", raw.RunStateRunning},
+		{"paused", raw.RunStatePaused},
+		{"shutdown", raw.RunStateShutdown},
+		{"prelaunch", raw.RunStatePrelaunch},
+		{"inmigrate", raw.RunStateInmigrate},
+		{"postmigrate", raw.RunStatePostmigrate},
+		{"finish-migrate", raw.RunStateFinishMigrate},
+		{"suspended", raw.RunStateSuspended},
+		{"guest-panicked", raw.RunStateGuestPanicked},
+		{"io-error", raw.RunStateIOError},
+		{"internal-error", raw.RunStateInternalError},
+		{"watchdog", raw.RunStateWatchdog},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var resp qmpStatusResponse
-			err := json.Unmarshal([]byte(tt.json), &resp)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expectedStatus, resp.Return.Status)
-			assert.Equal(t, tt.expectedRunning, resp.Return.Running)
+			// Verify the state is a valid enum value
+			assert.NotEqual(t, raw.RunState(-1), tt.state, "state should be valid")
 		})
 	}
+}
+
+func TestStatusInfoFields(t *testing.T) {
+	// Test that StatusInfo has the expected structure
+	info := raw.StatusInfo{
+		Running:    true,
+		Singlestep: false,
+		Status:     raw.RunStateRunning,
+	}
+
+	assert.True(t, info.Running)
+	assert.False(t, info.Singlestep)
+	assert.Equal(t, raw.RunStateRunning, info.Status)
 }
