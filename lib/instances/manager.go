@@ -8,6 +8,7 @@ import (
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/hypervisor/cloudhypervisor"
+	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -57,12 +58,19 @@ type manager struct {
 	metrics        *Metrics
 
 	// Hypervisor support
-	processManagers map[hypervisor.Type]hypervisor.ProcessManager
+	processManagers   map[hypervisor.Type]hypervisor.ProcessManager
+	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 }
 
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+// defaultHypervisor specifies which hypervisor to use when not specified in requests.
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, meter metric.Meter, tracer trace.Tracer) Manager {
+	// Validate and default the hypervisor type
+	if defaultHypervisor == "" {
+		defaultHypervisor = hypervisor.TypeCloudHypervisor
+	}
+
 	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
@@ -75,7 +83,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
 		processManagers: map[hypervisor.Type]hypervisor.ProcessManager{
 			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewProcessManager(),
+			hypervisor.TypeQEMU:            qemu.NewProcessManager(),
 		},
+		defaultHypervisor: defaultHypervisor,
 	}
 
 	// Initialize metrics if meter is provided
@@ -94,6 +104,8 @@ func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hype
 	switch hvType {
 	case hypervisor.TypeCloudHypervisor:
 		return cloudhypervisor.New(socketPath)
+	case hypervisor.TypeQEMU:
+		return qemu.New(socketPath)
 	default:
 		return nil, fmt.Errorf("unsupported hypervisor type: %s", hvType)
 	}

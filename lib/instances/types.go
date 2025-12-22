@@ -97,6 +97,7 @@ type CreateInstanceRequest struct {
 	NetworkEnabled bool               // Whether to enable networking (uses default network)
 	Devices        []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes        []VolumeAttachment // Volumes to attach at creation time
+	Hypervisor     hypervisor.Type    // Optional: hypervisor type (defaults to config)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

@@ -57,7 +57,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -766,7 +766,7 @@ func TestStorageOperations(t *testing.T) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

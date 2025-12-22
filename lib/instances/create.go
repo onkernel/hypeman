@@ -203,11 +203,14 @@ func (m *manager) createInstance(
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
 	// 9. Get process manager for hypervisor type (needed for socket name)
-	hvType := hypervisor.TypeCloudHypervisor
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
+	}
 	pm, err := m.getProcessManager(hvType)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get process manager", "error", err)
-		return nil, fmt.Errorf("get process manager: %w", err)
+		log.ErrorContext(ctx, "failed to get process manager", "hypervisor", hvType, "error", err)
+		return nil, fmt.Errorf("get process manager for %s: %w", hvType, err)
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)

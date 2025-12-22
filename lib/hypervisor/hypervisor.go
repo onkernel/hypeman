@@ -16,7 +16,8 @@ type Type string
 const (
 	// TypeCloudHypervisor is the Cloud Hypervisor VMM
 	TypeCloudHypervisor Type = "cloud-hypervisor"
-	// Future: TypeQEMU Type = "qemu"
+	// TypeQEMU is the QEMU VMM
+	TypeQEMU Type = "qemu"
 )
 
 // socketNames maps hypervisor types to their socket filenames.

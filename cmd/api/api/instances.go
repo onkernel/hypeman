@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	mw "github.com/onkernel/hypeman/lib/middleware"
@@ -136,6 +137,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}
 	}
 
+	// Convert hypervisor type from API enum to domain type
+	var hvType hypervisor.Type
+	if request.Body.Hypervisor != nil {
+		hvType = hypervisor.Type(*request.Body.Hypervisor)
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:           request.Body.Name,
 		Image:          request.Body.Image,
@@ -147,6 +154,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		NetworkEnabled: networkEnabled,
 		Devices:        deviceRefs,
 		Volumes:        volumes,
+		Hypervisor:     hvType,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -469,6 +477,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		netObj.Mac = lo.ToPtr(inst.MAC)
 	}
 
+	// Convert hypervisor type
+	hvType := oapi.InstanceHypervisor(inst.HypervisorType)
+
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
 		Name:        inst.Name,
@@ -484,6 +495,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
 		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
+		Hypervisor:  &hvType,
 	}
 
 	if len(inst.Env) > 0 {

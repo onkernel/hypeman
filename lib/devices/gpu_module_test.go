@@ -77,7 +77,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 10*1024*1024*1024, nil)
 	limits := instances.ResourceLimits{MaxOverlaySize: 10 * 1024 * 1024 * 1024}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Find an NVIDIA GPU
 	t.Log("Step 1: Discovering available GPUs...")
@@ -318,7 +318,7 @@ func TestNVMLDetection(t *testing.T) {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 10*1024*1024*1024, nil)
 	limits := instances.ResourceLimits{MaxOverlaySize: 10 * 1024 * 1024 * 1024}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Check if ollama-cuda:test image exists in Docker
 	t.Log("Step 1: Checking for ollama-cuda:test Docker image...")
