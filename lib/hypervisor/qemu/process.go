@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"syscall"
 	"time"
@@ -61,6 +62,30 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 	}
 
 	return "", fmt.Errorf("%s not found; install with: %s", binaryName, qemuInstallHint())
+}
+
+// GetVersion returns the version of the installed QEMU binary.
+// Parses the output of "qemu-system-* --version" to extract the version string.
+func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
+	binaryPath, err := s.GetBinaryPath(p, "")
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command(binaryPath, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("get qemu version: %w", err)
+	}
+
+	// Parse "QEMU emulator version 8.2.0 (Debian ...)" -> "8.2.0"
+	re := regexp.MustCompile(`version (\d+\.\d+(?:\.\d+)?)`)
+	matches := re.FindStringSubmatch(string(output))
+	if len(matches) >= 2 {
+		return matches[1], nil
+	}
+
+	return "", fmt.Errorf("could not parse QEMU version from: %s", string(output))
 }
 
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.

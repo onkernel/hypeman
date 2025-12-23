@@ -40,6 +40,12 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 	return vmm.GetBinaryPath(p, chVersion)
 }
 
+// GetVersion returns the latest supported Cloud Hypervisor version.
+// Cloud Hypervisor binaries are embedded, so we return the latest known version.
+func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
+	return string(vmm.V49_0), nil
+}
+
 // StartVM launches Cloud Hypervisor, configures the VM, and boots it.
 // Returns the process ID and a Hypervisor client for subsequent operations.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {

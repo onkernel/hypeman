@@ -53,6 +53,11 @@ type VMStarter interface {
 	// GetBinaryPath returns the path to the hypervisor binary, extracting if needed.
 	GetBinaryPath(p *paths.Paths, version string) (string, error)
 
+	// GetVersion returns the version of the hypervisor binary.
+	// For embedded binaries (Cloud Hypervisor), returns the latest supported version.
+	// For system binaries (QEMU), queries the installed binary for its version.
+	GetVersion(p *paths.Paths) (string, error)
+
 	// StartVM launches the hypervisor process and boots the VM.
 	// Returns the process ID and a Hypervisor client for subsequent operations.
 	StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config VMConfig) (pid int, hv Hypervisor, err error)

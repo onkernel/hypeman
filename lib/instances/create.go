@@ -15,7 +15,6 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
-	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -225,6 +224,13 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
 	}
 
+	// Get hypervisor version
+	hvVersion, err := starter.GetVersion(m.paths)
+	if err != nil {
+		log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", err)
+		hvVersion = "unknown"
+	}
+
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
 	// Track devices we've marked as attached for cleanup on error.
 	// The cleanup closure captures this slice by reference, so it will see
@@ -295,7 +301,7 @@ func (m *manager) createInstance(
 		StoppedAt:         nil,
 		KernelVersion:     string(kernelVer),
 		HypervisorType:    hvType,
-		HypervisorVersion: string(vmm.V49_0), // Use latest
+		HypervisorVersion: hvVersion,
 		SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
 		DataDir:           m.paths.InstanceDir(id),
 		VsockCID:          vsockCID,
