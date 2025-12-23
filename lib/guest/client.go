@@ -559,17 +559,17 @@ func CopyFromInstance(ctx context.Context, vsockSocketPath string, opts CopyFrom
 		case *CopyFromGuestResponse_End:
 			if currentFile != nil {
 				currentFile.Close()
-				// Set modification time
-				if currentHeader != nil && currentHeader.Mtime > 0 {
-					targetPath, err := securejoin.SecureJoin(opts.DstPath, currentHeader.Path)
-					if err == nil {
-						mtime := time.Unix(currentHeader.Mtime, 0)
-						os.Chtimes(targetPath, mtime, mtime)
-					}
-				}
 				currentFile = nil
-				currentHeader = nil
 			}
+			// Set modification time for files and directories
+			if currentHeader != nil && currentHeader.Mtime > 0 {
+				targetPath, err := securejoin.SecureJoin(opts.DstPath, currentHeader.Path)
+				if err == nil {
+					mtime := time.Unix(currentHeader.Mtime, 0)
+					os.Chtimes(targetPath, mtime, mtime)
+				}
+			}
+			currentHeader = nil
 			if r.End.Final {
 				receivedFinal = true
 				return nil
