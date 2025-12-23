@@ -419,4 +419,3 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 	}
 	return bytesReceived, nil
 }
-
