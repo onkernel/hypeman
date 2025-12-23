@@ -3,6 +3,7 @@ package qemu
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"time"
@@ -158,7 +159,16 @@ func newVsockConn(fd int, remoteCID, remotePort uint32) (*vsockConn, error) {
 }
 
 func (c *vsockConn) Read(b []byte) (int, error) {
-	return unix.Read(c.fd, b)
+	n, err := unix.Read(c.fd, b)
+	// Ensure we never return negative n (violates io.Reader contract)
+	// This can happen when the vsock fd becomes invalid (VM died)
+	if n < 0 {
+		if err == nil {
+			err = io.EOF
+		}
+		return 0, err
+	}
+	return n, err
 }
 
 func (c *vsockConn) Write(b []byte) (int, error) {

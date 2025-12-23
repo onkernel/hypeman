@@ -46,12 +46,14 @@ func GetOrCreate(socketPath string) (*QEMU, error) {
 
 // Remove closes and removes a client from the pool.
 // Called automatically on errors to allow fresh reconnection.
+// Close is done asynchronously to avoid blocking if the connection is in a bad state.
 func Remove(socketPath string) {
 	clientPool.Lock()
 	defer clientPool.Unlock()
 
 	if client, ok := clientPool.clients[socketPath]; ok {
-		client.client.Close()
 		delete(clientPool.clients, socketPath)
+		// Close asynchronously to avoid blocking on stuck connections
+		go client.client.Close()
 	}
 }
