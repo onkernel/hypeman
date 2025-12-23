@@ -56,16 +56,33 @@ func (m *manager) restoreInstance(
 
 	// 4. Recreate TAP device if network enabled
 	if stored.NetworkEnabled {
+		var networkSpan trace.Span
+		if m.metrics != nil && m.metrics.tracer != nil {
+			ctx, networkSpan = m.metrics.tracer.Start(ctx, "RestoreNetwork")
+		}
 		log.DebugContext(ctx, "recreating network for restore", "instance_id", id, "network", "default")
 		if err := m.networkManager.RecreateAllocation(ctx, id); err != nil {
+			if networkSpan != nil {
+				networkSpan.End()
+			}
 			log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("recreate network: %w", err)
+		}
+		if networkSpan != nil {
+			networkSpan.End()
 		}
 	}
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
-	log.DebugContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
+	var restoreSpan trace.Span
+	if m.metrics != nil && m.metrics.tracer != nil {
+		ctx, restoreSpan = m.metrics.tracer.Start(ctx, "RestoreFromSnapshot")
+	}
+	log.DebugContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
 	pid, hv, err := m.restoreFromSnapshot(ctx, stored, snapshotDir)
+	if restoreSpan != nil {
+		restoreSpan.End()
+	}
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
 		// Cleanup network on failure
@@ -80,8 +97,15 @@ func (m *manager) restoreInstance(
 	stored.HypervisorPID = &pid
 
 	// 6. Transition: Paused → Running (resume)
+	var resumeSpan trace.Span
+	if m.metrics != nil && m.metrics.tracer != nil {
+		ctx, resumeSpan = m.metrics.tracer.Start(ctx, "ResumeVM")
+	}
 	log.DebugContext(ctx, "resuming VM", "instance_id", id)
 	if err := hv.Resume(ctx); err != nil {
+		if resumeSpan != nil {
+			resumeSpan.End()
+		}
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
@@ -90,6 +114,9 @@ func (m *manager) restoreInstance(
 			m.networkManager.ReleaseAllocation(ctx, netAlloc)
 		}
 		return nil, fmt.Errorf("resume vm failed: %w", err)
+	}
+	if resumeSpan != nil {
+		resumeSpan.End()
 	}
 
 	// 8. Delete snapshot after successful restore

@@ -16,6 +16,7 @@ import (
 
 	"github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
@@ -185,6 +186,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 // RestoreVM starts QEMU and restores VM state from a snapshot.
 // The VM is in paused state after restore; caller should call Resume() to continue execution.
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	log := logger.FromContext(ctx)
+	startTime := time.Now()
+
 	// Get binary path
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
@@ -201,10 +205,12 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	// Load saved VM config from snapshot directory
 	// QEMU requires exact same command-line args as when snapshot was taken
+	configLoadStart := time.Now()
 	config, err := loadVMConfig(snapshotPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("load vm config from snapshot: %w", err)
 	}
+	log.DebugContext(ctx, "loaded VM config from snapshot", "duration_ms", time.Since(configLoadStart).Milliseconds())
 
 	instanceDir := filepath.Dir(socketPath)
 
@@ -249,11 +255,13 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	cmd.Stdout = vmmLogFile
 	cmd.Stderr = vmmLogFile
 
+	processStartTime := time.Now()
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("start qemu: %w", err)
 	}
 
 	pid := cmd.Process.Pid
+	log.DebugContext(ctx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
@@ -262,6 +270,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	defer cu.Clean()
 
 	// Wait for socket to be ready
+	socketWaitStart := time.Now()
 	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
 		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
@@ -269,6 +278,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		}
 		return 0, nil, err
 	}
+	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
 	// Create QMP client
 	hv, err := New(socketPath)
@@ -279,12 +289,15 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// Wait for incoming migration to complete
 	// QEMU loads the migration data from the exec subprocess
 	// After loading, VM is in paused state and ready for 'cont'
+	migrationWaitStart := time.Now()
 	if err := waitForMigrationComplete(hv.client, 30*time.Second); err != nil {
 		return 0, nil, fmt.Errorf("wait for migration: %w", err)
 	}
+	log.DebugContext(ctx, "migration complete", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
 	// Success - release cleanup to prevent killing the process
 	cu.Release()
+	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil
 }
 

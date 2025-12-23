@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"syscall"
+	"time"
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"gvisor.dev/gvisor/pkg/cleanup"
@@ -100,6 +102,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 // RestoreVM starts Cloud Hypervisor and restores VM state from a snapshot.
 // The VM is in paused state after restore; caller should call Resume() to continue execution.
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	log := logger.FromContext(ctx)
+	startTime := time.Now()
+
 	// Validate version
 	chVersion := vmm.CHVersion(version)
 	if !vmm.IsVersionSupported(chVersion) {
@@ -107,10 +112,12 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	// 1. Start the Cloud Hypervisor process
+	processStartTime := time.Now()
 	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
+	log.DebugContext(ctx, "CH process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
@@ -125,6 +132,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	// 3. Restore from snapshot via HTTP API
+	restoreAPIStart := time.Now()
 	sourceURL := "file://" + snapshotPath
 	restoreConfig := vmm.RestoreConfig{
 		SourceUrl: sourceURL,
@@ -137,9 +145,11 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if resp.StatusCode() != 204 {
 		return 0, nil, fmt.Errorf("restore failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
+	log.DebugContext(ctx, "CH restore API complete", "duration_ms", time.Since(restoreAPIStart).Milliseconds())
 
 	// Success - release cleanup to prevent killing the process
 	cu.Release()
+	log.DebugContext(ctx, "CH restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil
 }
 
