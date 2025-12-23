@@ -1,12 +1,22 @@
 package qemu
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
 	"github.com/digitalocean/go-qemu/qmp"
 	"github.com/digitalocean/go-qemu/qmp/raw"
+)
+
+// QMP client timeout constants
+const (
+	// qmpConnectTimeout is the timeout for connecting to the QMP socket
+	qmpConnectTimeout = 1 * time.Second
+
+	// qmpPollInterval is how often to poll status in WaitMigration and WaitVMReady
+	qmpPollInterval = 50 * time.Millisecond
 )
 
 // Client wraps go-qemu's Domain and raw.Monitor with convenience methods.
@@ -18,7 +28,7 @@ type Client struct {
 
 // NewClient creates a new QEMU client connected to the given socket.
 func NewClient(socketPath string) (*Client, error) {
-	mon, err := qmp.NewSocketMonitor("unix", socketPath, 2*time.Second)
+	mon, err := qmp.NewSocketMonitor("unix", socketPath, qmpConnectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("create socket monitor: %w", err)
 	}
@@ -93,4 +103,107 @@ func (c *Client) Events() (chan qmp.Event, chan struct{}, error) {
 // Run executes a raw QMP command (for commands not yet wrapped).
 func (c *Client) Run(cmd qmp.Command) ([]byte, error) {
 	return c.domain.Run(cmd)
+}
+
+// Migrate initiates a migration to the given URI (typically "file:///path").
+// This is used for saving VM state to a file for snapshot/standby.
+func (c *Client) Migrate(uri string) error {
+	// Migrate(uri, blk, inc, detach) - we use nil for optional params
+	return c.raw.Migrate(uri, nil, nil, nil)
+}
+
+// QueryMigration returns the current migration status.
+func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
+	return c.raw.QueryMigrate()
+}
+
+// WaitMigration polls until an outgoing migration completes or times out.
+// Used for snapshot/standby operations where we initiate the migration.
+// Returns nil if migration completed successfully, error otherwise.
+func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		info, err := c.QueryMigration()
+		if err != nil {
+			// Ignore transient errors during migration, keep polling
+			time.Sleep(qmpPollInterval)
+			continue
+		}
+
+		// Check migration status (Status is a pointer in MigrationInfo)
+		if info.Status == nil {
+			// Status not available yet, continue polling
+			time.Sleep(qmpPollInterval)
+			continue
+		}
+
+		switch *info.Status {
+		case raw.MigrationStatusCompleted:
+			return nil
+		case raw.MigrationStatusFailed:
+			if info.ErrorDesc != nil && *info.ErrorDesc != "" {
+				return fmt.Errorf("migration failed: %s", *info.ErrorDesc)
+			}
+			return fmt.Errorf("migration failed")
+		case raw.MigrationStatusCancelled:
+			return fmt.Errorf("migration cancelled")
+		case raw.MigrationStatusNone, raw.MigrationStatusActive, raw.MigrationStatusSetup, raw.MigrationStatusPreSwitchover, raw.MigrationStatusDevice:
+			// Still in progress or not started yet, continue polling
+		}
+
+		time.Sleep(qmpPollInterval)
+	}
+
+	return fmt.Errorf("migration timeout after %v", timeout)
+}
+
+// WaitVMReady polls until the VM is ready after an incoming migration.
+// Used for restore operations where QEMU was started with -incoming.
+// The VM transitions from "inmigrate" to "paused" when migration data is loaded.
+// Returns nil when VM is ready for resume, error on timeout or failure.
+func (c *Client) WaitVMReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		status, err := c.Status()
+		if err != nil {
+			// Ignore transient errors, keep polling
+			time.Sleep(qmpPollInterval)
+			continue
+		}
+
+		switch status {
+		case qemu.StatusPaused, qemu.StatusPostMigrate:
+			// VM has finished loading migration data and is ready for resume
+			return nil
+		case qemu.StatusInMigrate, qemu.StatusRestoreVM:
+			// Still loading migration data, continue polling
+		case qemu.StatusRunning:
+			// Already running (shouldn't happen, but not an error)
+			return nil
+		case qemu.StatusGuestPanicked, qemu.StatusInternalError, qemu.StatusIOError:
+			return fmt.Errorf("VM in error state: %v", status)
+		case qemu.StatusShutdown:
+			return fmt.Errorf("VM shut down during migration")
+		default:
+			// Other states - keep polling
+		}
+
+		time.Sleep(qmpPollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for VM ready after %v", timeout)
 }
