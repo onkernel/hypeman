@@ -14,6 +14,10 @@ type Metrics struct {
 	execDuration           metric.Float64Histogram
 	execBytesSentTotal     metric.Int64Counter
 	execBytesReceivedTotal metric.Int64Counter
+
+	cpSessionsTotal metric.Int64Counter
+	cpDuration      metric.Float64Histogram
+	cpBytesTotal    metric.Int64Counter
 }
 
 // GuestMetrics is the global metrics instance for the guest package.
@@ -67,11 +71,40 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 
+	cpSessionsTotal, err := meter.Int64Counter(
+		"hypeman_cp_sessions_total",
+		metric.WithDescription("Total number of cp (copy) sessions"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cpDuration, err := meter.Float64Histogram(
+		"hypeman_cp_duration_seconds",
+		metric.WithDescription("Copy operation duration"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cpBytesTotal, err := meter.Int64Counter(
+		"hypeman_cp_bytes_total",
+		metric.WithDescription("Total bytes transferred during copy operations"),
+		metric.WithUnit("By"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
 		execSessionsTotal:      execSessionsTotal,
 		execDuration:           execDuration,
 		execBytesSentTotal:     execBytesSentTotal,
 		execBytesReceivedTotal: execBytesReceivedTotal,
+		cpSessionsTotal:        cpSessionsTotal,
+		cpDuration:             cpDuration,
+		cpBytesTotal:           cpBytesTotal,
 	}, nil
 }
 
@@ -101,6 +134,39 @@ func (m *Metrics) RecordExecSession(ctx context.Context, start time.Time, exitCo
 	}
 	if bytesReceived > 0 {
 		m.execBytesReceivedTotal.Add(ctx, bytesReceived)
+	}
+}
+
+// RecordCpSession records metrics for a completed cp (copy) session.
+// direction should be "to" (copy to instance) or "from" (copy from instance).
+func (m *Metrics) RecordCpSession(ctx context.Context, start time.Time, direction string, success bool, bytesTransferred int64) {
+	if m == nil {
+		return
+	}
+
+	duration := time.Since(start).Seconds()
+	status := "success"
+	if !success {
+		status = "error"
+	}
+
+	m.cpSessionsTotal.Add(ctx, 1,
+		metric.WithAttributes(
+			attribute.String("direction", direction),
+			attribute.String("status", status),
+		))
+
+	m.cpDuration.Record(ctx, duration,
+		metric.WithAttributes(
+			attribute.String("direction", direction),
+			attribute.String("status", status),
+		))
+
+	if bytesTransferred > 0 {
+		m.cpBytesTotal.Add(ctx, bytesTransferred,
+			metric.WithAttributes(
+				attribute.String("direction", direction),
+			))
 	}
 }
 

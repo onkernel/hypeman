@@ -14,6 +14,10 @@ import (
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	mw "github.com/onkernel/hypeman/lib/middleware"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // cpErrorSent wraps an error that has already been sent to the client.
@@ -139,6 +143,18 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Start OTEL span for tracing (WebSocket bypasses otelchi middleware)
+	tracer := otel.Tracer("hypeman/cp")
+	ctx, span := tracer.Start(ctx, "cp.session",
+		trace.WithAttributes(
+			attribute.String("instance_id", inst.Id),
+			attribute.String("direction", cpReq.Direction),
+			attribute.String("guest_path", cpReq.GuestPath),
+			attribute.String("subject", subject),
+		),
+	)
+	defer span.End()
+
 	log.InfoContext(ctx, "cp session started",
 		"instance_id", inst.Id,
 		"subject", subject,
@@ -147,18 +163,33 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	var cpErr error
+	var bytesTransferred int64
 	switch cpReq.Direction {
 	case "to":
-		cpErr = s.handleCopyTo(ctx, ws, inst, cpReq)
+		bytesTransferred, cpErr = s.handleCopyTo(ctx, ws, inst, cpReq)
 	case "from":
-		cpErr = s.handleCopyFrom(ctx, ws, inst, cpReq)
+		bytesTransferred, cpErr = s.handleCopyFrom(ctx, ws, inst, cpReq)
 	default:
 		cpErr = fmt.Errorf("invalid direction: %s (must be 'to' or 'from')", cpReq.Direction)
 	}
 
 	duration := time.Since(startTime)
+	success := cpErr == nil
+
+	// Record metrics
+	if guest.GuestMetrics != nil {
+		guest.GuestMetrics.RecordCpSession(ctx, startTime, cpReq.Direction, success, bytesTransferred)
+	}
+
+	// Update span with result
+	span.SetAttributes(
+		attribute.Int64("bytes_transferred", bytesTransferred),
+		attribute.Bool("success", success),
+	)
 
 	if cpErr != nil {
+		span.RecordError(cpErr)
+		span.SetStatus(codes.Error, cpErr.Error())
 		log.ErrorContext(ctx, "cp failed",
 			"error", cpErr,
 			"instance_id", inst.Id,
@@ -174,25 +205,28 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	span.SetStatus(codes.Ok, "")
 	log.InfoContext(ctx, "cp session ended",
 		"instance_id", inst.Id,
 		"subject", subject,
 		"direction", cpReq.Direction,
 		"duration_ms", duration.Milliseconds(),
+		"bytes_transferred", bytesTransferred,
 	)
 }
 
 // handleCopyTo handles copying files from client to guest
-func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) error {
+// Returns the number of bytes transferred and any error.
+func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) (int64, error) {
 	grpcConn, err := guest.GetOrCreateConnPublic(ctx, inst.VsockSocket)
 	if err != nil {
-		return fmt.Errorf("get grpc connection: %w", err)
+		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
 
 	client := guest.NewGuestServiceClient(grpcConn)
 	stream, err := client.CopyToGuest(ctx)
 	if err != nil {
-		return fmt.Errorf("start copy stream: %w", err)
+		return 0, fmt.Errorf("start copy stream: %w", err)
 	}
 
 	// Send start message
@@ -215,18 +249,19 @@ func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst 
 			},
 		},
 	}); err != nil {
-		return fmt.Errorf("send start: %w", err)
+		return 0, fmt.Errorf("send start: %w", err)
 	}
 
 	// Read data chunks from WebSocket and forward to guest
 	var receivedEndMessage bool
+	var bytesSent int64
 	for {
 		msgType, data, err := ws.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				break
 			}
-			return fmt.Errorf("read websocket: %w", err)
+			return bytesSent, fmt.Errorf("read websocket: %w", err)
 		}
 
 		if msgType == websocket.TextMessage {
@@ -243,27 +278,28 @@ func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst 
 			if err := stream.Send(&guest.CopyToGuestRequest{
 				Request: &guest.CopyToGuestRequest_Data{Data: data},
 			}); err != nil {
-				return fmt.Errorf("send data: %w", err)
+				return bytesSent, fmt.Errorf("send data: %w", err)
 			}
+			bytesSent += int64(len(data))
 		}
 	}
 
 	// If the WebSocket closed without receiving an end message, the transfer is incomplete
 	if !receivedEndMessage {
-		return fmt.Errorf("client disconnected before completing transfer")
+		return bytesSent, fmt.Errorf("client disconnected before completing transfer")
 	}
 
 	// Send end message to guest
 	if err := stream.Send(&guest.CopyToGuestRequest{
 		Request: &guest.CopyToGuestRequest_End{End: &guest.CopyToGuestEnd{}},
 	}); err != nil {
-		return fmt.Errorf("send end: %w", err)
+		return bytesSent, fmt.Errorf("send end: %w", err)
 	}
 
 	// Get response
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
-		return fmt.Errorf("close stream: %w", err)
+		return bytesSent, fmt.Errorf("close stream: %w", err)
 	}
 
 	// Send result to client
@@ -278,16 +314,17 @@ func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst 
 
 	if !resp.Success {
 		// Return a wrapped error so the caller logs it correctly but doesn't send a duplicate
-		return &cpErrorSent{err: fmt.Errorf("copy to guest failed: %s", resp.Error)}
+		return resp.BytesWritten, &cpErrorSent{err: fmt.Errorf("copy to guest failed: %s", resp.Error)}
 	}
-	return nil
+	return resp.BytesWritten, nil
 }
 
 // handleCopyFrom handles copying files from guest to client
-func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) error {
+// Returns the number of bytes transferred and any error.
+func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) (int64, error) {
 	grpcConn, err := guest.GetOrCreateConnPublic(ctx, inst.VsockSocket)
 	if err != nil {
-		return fmt.Errorf("get grpc connection: %w", err)
+		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
 
 	client := guest.NewGuestServiceClient(grpcConn)
@@ -296,10 +333,11 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 		FollowLinks: req.FollowLinks,
 	})
 	if err != nil {
-		return fmt.Errorf("start copy stream: %w", err)
+		return 0, fmt.Errorf("start copy stream: %w", err)
 	}
 
 	var receivedFinal bool
+	var bytesReceived int64
 
 	// Stream responses to WebSocket client
 	for {
@@ -308,7 +346,7 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("receive: %w", err)
+			return bytesReceived, fmt.Errorf("receive: %w", err)
 		}
 
 		switch r := resp.Response.(type) {
@@ -327,13 +365,14 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 			}
 			headerJSON, _ := json.Marshal(header)
 			if err := ws.WriteMessage(websocket.TextMessage, headerJSON); err != nil {
-				return fmt.Errorf("write header: %w", err)
+				return bytesReceived, fmt.Errorf("write header: %w", err)
 			}
 
 		case *guest.CopyFromGuestResponse_Data:
 			if err := ws.WriteMessage(websocket.BinaryMessage, r.Data); err != nil {
-				return fmt.Errorf("write data: %w", err)
+				return bytesReceived, fmt.Errorf("write data: %w", err)
 			}
+			bytesReceived += int64(len(r.Data))
 
 		case *guest.CopyFromGuestResponse_End:
 			endMarker := CpEndMarker{
@@ -342,11 +381,11 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 			}
 			endJSON, _ := json.Marshal(endMarker)
 			if err := ws.WriteMessage(websocket.TextMessage, endJSON); err != nil {
-				return fmt.Errorf("write end: %w", err)
+				return bytesReceived, fmt.Errorf("write end: %w", err)
 			}
 			if r.End.Final {
 				receivedFinal = true
-				return nil
+				return bytesReceived, nil
 			}
 
 		case *guest.CopyFromGuestResponse_Error:
@@ -358,13 +397,13 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 			errJSON, _ := json.Marshal(cpErr)
 			ws.WriteMessage(websocket.TextMessage, errJSON)
 			// Return a wrapped error so the caller logs it correctly but doesn't send a duplicate
-			return &cpErrorSent{err: fmt.Errorf("copy from guest failed: %s", r.Error.Message)}
+			return bytesReceived, &cpErrorSent{err: fmt.Errorf("copy from guest failed: %s", r.Error.Message)}
 		}
 	}
 
 	if !receivedFinal {
-		return fmt.Errorf("copy stream ended without completion marker")
+		return bytesReceived, fmt.Errorf("copy stream ended without completion marker")
 	}
-	return nil
+	return bytesReceived, nil
 }
 
