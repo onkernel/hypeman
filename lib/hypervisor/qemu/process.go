@@ -21,6 +21,24 @@ import (
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
+// Timeout constants for QEMU operations
+const (
+	// socketWaitTimeout is how long to wait for QMP socket to become available after process start
+	socketWaitTimeout = 10 * time.Second
+
+	// migrationTimeout is how long to wait for incoming migration to complete during restore
+	migrationTimeout = 30 * time.Second
+
+	// migrationPollInterval is how often to poll migration status
+	migrationPollInterval = 50 * time.Millisecond
+
+	// socketPollInterval is how often to check if socket is ready
+	socketPollInterval = 50 * time.Millisecond
+
+	// socketDialTimeout is timeout for individual socket connection attempts
+	socketDialTimeout = 100 * time.Millisecond
+)
+
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeQEMU, "qemu.sock")
 }
@@ -94,6 +112,8 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
 // QEMU receives all configuration via command-line arguments at process start.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	log := logger.FromContext(ctx)
+
 	// Get binary path
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
@@ -157,7 +177,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	defer cu.Clean()
 
 	// Wait for socket to be ready
-	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
+	if err := waitForSocket(socketPath, socketWaitTimeout); err != nil {
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
 		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
 			return 0, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
@@ -175,7 +195,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	// QEMU migration files only contain memory state, not device config
 	if err := saveVMConfig(instanceDir, config); err != nil {
 		// Non-fatal - restore just won't work
-		// Log would be nice but we don't have logger here
+		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
 	}
 
 	// Success - release cleanup to prevent killing the process
@@ -290,7 +310,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// QEMU loads the migration data from the exec subprocess
 	// After loading, VM is in paused state and ready for 'cont'
 	migrationWaitStart := time.Now()
-	if err := waitForMigrationComplete(hv.client, 30*time.Second); err != nil {
+	if err := waitForMigrationComplete(hv.client, migrationTimeout); err != nil {
 		return 0, nil, fmt.Errorf("wait for migration: %w", err)
 	}
 	log.DebugContext(ctx, "migration complete", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
@@ -308,13 +328,13 @@ func waitForMigrationComplete(client *Client, timeout time.Duration) error {
 		info, err := client.QueryMigration()
 		if err != nil {
 			// Ignore errors during migration
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(migrationPollInterval)
 			continue
 		}
 
 		if info.Status == nil {
 			// No migration status yet, might be loading
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(migrationPollInterval)
 			continue
 		}
 
@@ -330,7 +350,7 @@ func waitForMigrationComplete(client *Client, timeout time.Duration) error {
 			return nil
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(migrationPollInterval)
 	}
 	return fmt.Errorf("migration timeout")
 }
@@ -392,7 +412,7 @@ func qemuInstallHint() string {
 
 // isSocketInUse checks if a Unix socket is actively being used
 func isSocketInUse(socketPath string) bool {
-	conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+	conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
 	if err != nil {
 		return false
 	}
@@ -404,12 +424,12 @@ func isSocketInUse(socketPath string) bool {
 func waitForSocket(socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(socketPollInterval)
 	}
 	return fmt.Errorf("timeout waiting for socket")
 }

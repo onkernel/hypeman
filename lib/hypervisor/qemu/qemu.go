@@ -135,7 +135,7 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	}
 
 	// Wait for migration to complete
-	if err := q.client.WaitMigration(ctx, 30*time.Second); err != nil {
+	if err := q.client.WaitMigration(ctx, migrationTimeout); err != nil {
 		Remove(q.socketPath)
 		return fmt.Errorf("wait migration: %w", err)
 	}

@@ -10,6 +10,15 @@ import (
 	"github.com/digitalocean/go-qemu/qmp/raw"
 )
 
+// QMP client timeout constants
+const (
+	// qmpConnectTimeout is the timeout for connecting to the QMP socket
+	qmpConnectTimeout = 1 * time.Second
+
+	// qmpMigrationPollInterval is how often to poll migration status in WaitMigration
+	qmpMigrationPollInterval = 50 * time.Millisecond
+)
+
 // Client wraps go-qemu's Domain and raw.Monitor with convenience methods.
 type Client struct {
 	domain *qemu.Domain
@@ -19,7 +28,7 @@ type Client struct {
 
 // NewClient creates a new QEMU client connected to the given socket.
 func NewClient(socketPath string) (*Client, error) {
-	mon, err := qmp.NewSocketMonitor("unix", socketPath, 2*time.Second)
+	mon, err := qmp.NewSocketMonitor("unix", socketPath, qmpConnectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("create socket monitor: %w", err)
 	}
@@ -112,7 +121,6 @@ func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
 // Returns nil if migration completed successfully, error otherwise.
 func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	pollInterval := 50 * time.Millisecond
 
 	for time.Now().Before(deadline) {
 		select {
@@ -129,7 +137,7 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 		// Check migration status (Status is a pointer in MigrationInfo)
 		if info.Status == nil {
 			// Status not available yet, continue polling
-			time.Sleep(pollInterval)
+			time.Sleep(qmpMigrationPollInterval)
 			continue
 		}
 
@@ -146,7 +154,7 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 			// Unknown or "none" status - might not have started yet
 		}
 
-		time.Sleep(pollInterval)
+		time.Sleep(qmpMigrationPollInterval)
 	}
 
 	return fmt.Errorf("migration timeout after %v", timeout)
