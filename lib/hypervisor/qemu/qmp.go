@@ -118,6 +118,7 @@ func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
 }
 
 // WaitMigration polls until migration completes or times out.
+// Works for both outgoing (snapshot) and incoming (restore) migrations.
 // Returns nil if migration completed successfully, error otherwise.
 func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -131,7 +132,9 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 
 		info, err := c.QueryMigration()
 		if err != nil {
-			return fmt.Errorf("query migration: %w", err)
+			// Ignore transient errors during migration, keep polling
+			time.Sleep(qmpMigrationPollInterval)
+			continue
 		}
 
 		// Check migration status (Status is a pointer in MigrationInfo)
@@ -144,14 +147,18 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 		switch *info.Status {
 		case raw.MigrationStatusCompleted:
 			return nil
+		case raw.MigrationStatusNone:
+			// No active migration - for incoming this means complete, for outgoing it transitions quickly
+			return nil
 		case raw.MigrationStatusFailed:
+			if info.ErrorDesc != nil && *info.ErrorDesc != "" {
+				return fmt.Errorf("migration failed: %s", *info.ErrorDesc)
+			}
 			return fmt.Errorf("migration failed")
 		case raw.MigrationStatusCancelled:
 			return fmt.Errorf("migration cancelled")
 		case raw.MigrationStatusActive, raw.MigrationStatusSetup, raw.MigrationStatusPreSwitchover, raw.MigrationStatusDevice:
 			// Still in progress, continue polling
-		default:
-			// Unknown or "none" status - might not have started yet
 		}
 
 		time.Sleep(qmpMigrationPollInterval)

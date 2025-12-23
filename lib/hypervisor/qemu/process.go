@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -26,11 +25,8 @@ const (
 	// socketWaitTimeout is how long to wait for QMP socket to become available after process start
 	socketWaitTimeout = 10 * time.Second
 
-	// migrationTimeout is how long to wait for incoming migration to complete during restore
+	// migrationTimeout is how long to wait for migration to complete
 	migrationTimeout = 30 * time.Second
-
-	// migrationPollInterval is how often to poll migration status
-	migrationPollInterval = 50 * time.Millisecond
 
 	// socketPollInterval is how often to check if socket is ready
 	socketPollInterval = 50 * time.Millisecond
@@ -310,7 +306,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// QEMU loads the migration data from the exec subprocess
 	// After loading, VM is in paused state and ready for 'cont'
 	migrationWaitStart := time.Now()
-	if err := waitForMigrationComplete(hv.client, migrationTimeout); err != nil {
+	if err := hv.client.WaitMigration(ctx, migrationTimeout); err != nil {
 		return 0, nil, fmt.Errorf("wait for migration: %w", err)
 	}
 	log.DebugContext(ctx, "migration complete", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
@@ -319,40 +315,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	cu.Release()
 	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil
-}
-
-// waitForMigrationComplete waits for incoming migration to finish loading
-func waitForMigrationComplete(client *Client, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		info, err := client.QueryMigration()
-		if err != nil {
-			// Ignore errors during migration
-			time.Sleep(migrationPollInterval)
-			continue
-		}
-
-		if info.Status == nil {
-			// No migration status yet, might be loading
-			time.Sleep(migrationPollInterval)
-			continue
-		}
-
-		switch *info.Status {
-		case raw.MigrationStatusCompleted:
-			return nil
-		case raw.MigrationStatusFailed:
-			return fmt.Errorf("migration failed")
-		case raw.MigrationStatusCancelled:
-			return fmt.Errorf("migration cancelled")
-		case raw.MigrationStatusNone:
-			// No active migration - incoming may have completed
-			return nil
-		}
-
-		time.Sleep(migrationPollInterval)
-	}
-	return fmt.Errorf("migration timeout")
 }
 
 // vmConfigFile is the name of the file where VM config is saved for restore.
