@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/paths"
 	"gvisor.dev/gvisor/pkg/cleanup"
@@ -216,8 +217,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	args = append(args, BuildArgs(config)...)
 
 	// Add incoming migration flag to restore from snapshot
-	// The snapshot file is named "memory" in the snapshot directory
-	incomingURI := "file://" + filepath.Join(snapshotPath, "memory")
+	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat < path" instead
+	memoryFile := filepath.Join(snapshotPath, "memory")
+	incomingURI := "exec:cat < " + memoryFile
 	args = append(args, "-incoming", incomingURI)
 
 	// Create command
@@ -274,9 +276,50 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("create client: %w", err)
 	}
 
+	// Wait for incoming migration to complete
+	// QEMU loads the migration data from the exec subprocess
+	// After loading, VM is in paused state and ready for 'cont'
+	if err := waitForMigrationComplete(hv.client, 30*time.Second); err != nil {
+		return 0, nil, fmt.Errorf("wait for migration: %w", err)
+	}
+
 	// Success - release cleanup to prevent killing the process
 	cu.Release()
 	return pid, hv, nil
+}
+
+// waitForMigrationComplete waits for incoming migration to finish loading
+func waitForMigrationComplete(client *Client, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		info, err := client.QueryMigration()
+		if err != nil {
+			// Ignore errors during migration
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if info.Status == nil {
+			// No migration status yet, might be loading
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		switch *info.Status {
+		case raw.MigrationStatusCompleted:
+			return nil
+		case raw.MigrationStatusFailed:
+			return fmt.Errorf("migration failed")
+		case raw.MigrationStatusCancelled:
+			return fmt.Errorf("migration cancelled")
+		case raw.MigrationStatusNone:
+			// No active migration - incoming may have completed
+			return nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("migration timeout")
 }
 
 // vmConfigFile is the name of the file where VM config is saved for restore.

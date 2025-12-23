@@ -126,8 +126,9 @@ func (q *QEMU) Resume(ctx context.Context) error {
 // The VM config is copied to destPath for restore (QEMU requires exact arg match).
 func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	// QEMU uses migrate to file for snapshots
-	// The file URI must be absolute path
-	uri := "file://" + destPath + "/memory"
+	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat > path" instead
+	memoryFile := destPath + "/memory"
+	uri := "exec:cat > " + memoryFile
 	if err := q.client.Migrate(uri); err != nil {
 		Remove(q.socketPath)
 		return fmt.Errorf("migrate: %w", err)
