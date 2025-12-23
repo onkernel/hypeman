@@ -105,32 +105,33 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 	return "", fmt.Errorf("could not parse QEMU version from: %s", string(output))
 }
 
-// StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
-// QEMU receives all configuration via command-line arguments at process start.
-func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+// buildQMPArgs returns the base QMP socket arguments for QEMU.
+func buildQMPArgs(socketPath string) []string {
+	return []string{
+		"-chardev", fmt.Sprintf("socket,id=qmp,path=%s,server=on,wait=off", socketPath),
+		"-mon", "chardev=qmp,mode=control",
+	}
+}
+
+// startQEMUProcess handles the common QEMU process startup logic.
+// Returns the PID, hypervisor client, and a cleanup function.
+// The cleanup function must be called on error; call cleanup.Release() on success.
+func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
 	log := logger.FromContext(ctx)
 
 	// Get binary path
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
-		return 0, nil, fmt.Errorf("get binary: %w", err)
+		return 0, nil, nil, fmt.Errorf("get binary: %w", err)
 	}
 
 	// Check if socket is already in use
 	if isSocketInUse(socketPath) {
-		return 0, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
+		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
 	// Remove stale socket if exists
 	os.Remove(socketPath)
-
-	// Build command arguments: QMP socket + VM configuration
-	args := []string{
-		"-chardev", fmt.Sprintf("socket,id=qmp,path=%s,server=on,wait=off", socketPath),
-		"-mon", "chardev=qmp,mode=control",
-	}
-	// Append VM configuration as command-line arguments
-	args = append(args, BuildArgs(config)...)
 
 	// Create command
 	cmd := exec.Command(binaryPath, args...)
@@ -144,7 +145,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	instanceDir := filepath.Dir(socketPath)
 	logsDir := filepath.Join(instanceDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return 0, nil, fmt.Errorf("create logs directory: %w", err)
+		return 0, nil, nil, fmt.Errorf("create logs directory: %w", err)
 	}
 
 	vmmLogFile, err := os.OpenFile(
@@ -153,48 +154,71 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		0644,
 	)
 	if err != nil {
-		return 0, nil, fmt.Errorf("create vmm log: %w", err)
+		return 0, nil, nil, fmt.Errorf("create vmm log: %w", err)
 	}
 	defer vmmLogFile.Close()
 
 	cmd.Stdout = vmmLogFile
 	cmd.Stderr = vmmLogFile
 
+	processStartTime := time.Now()
 	if err := cmd.Start(); err != nil {
-		return 0, nil, fmt.Errorf("start qemu: %w", err)
+		return 0, nil, nil, fmt.Errorf("start qemu: %w", err)
 	}
 
 	pid := cmd.Process.Pid
+	log.DebugContext(ctx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
 		syscall.Kill(pid, syscall.SIGKILL)
 	})
-	defer cu.Clean()
 
 	// Wait for socket to be ready
+	socketWaitStart := time.Now()
 	if err := waitForSocket(socketPath, socketWaitTimeout); err != nil {
+		cu.Clean()
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
 		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
-			return 0, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
+			return 0, nil, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
 		}
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
+	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
 	// Create QMP client
 	hv, err := New(socketPath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("create client: %w", err)
+		cu.Clean()
+		return 0, nil, nil, fmt.Errorf("create client: %w", err)
 	}
+
+	return pid, hv, &cu, nil
+}
+
+// StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
+// QEMU receives all configuration via command-line arguments at process start.
+func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	log := logger.FromContext(ctx)
+
+	// Build command arguments: QMP socket + VM configuration
+	args := buildQMPArgs(socketPath)
+	args = append(args, BuildArgs(config)...)
+
+	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer cu.Clean()
 
 	// Save config for potential restore later
 	// QEMU migration files only contain memory state, not device config
+	instanceDir := filepath.Dir(socketPath)
 	if err := saveVMConfig(instanceDir, config); err != nil {
 		// Non-fatal - restore just won't work
 		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
 	}
 
-	// Success - release cleanup to prevent killing the process
 	cu.Release()
 	return pid, hv, nil
 }
@@ -205,20 +229,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	log := logger.FromContext(ctx)
 	startTime := time.Now()
 
-	// Get binary path
-	binaryPath, err := s.GetBinaryPath(p, version)
-	if err != nil {
-		return 0, nil, fmt.Errorf("get binary: %w", err)
-	}
-
-	// Check if socket is already in use
-	if isSocketInUse(socketPath) {
-		return 0, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
-	}
-
-	// Remove stale socket if exists
-	os.Remove(socketPath)
-
 	// Load saved VM config from snapshot directory
 	// QEMU requires exact same command-line args as when snapshot was taken
 	configLoadStart := time.Now()
@@ -228,14 +238,8 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "loaded VM config from snapshot", "duration_ms", time.Since(configLoadStart).Milliseconds())
 
-	instanceDir := filepath.Dir(socketPath)
-
 	// Build command arguments: QMP socket + VM configuration + incoming migration
-	args := []string{
-		"-chardev", fmt.Sprintf("socket,id=qmp,path=%s,server=on,wait=off", socketPath),
-		"-mon", "chardev=qmp,mode=control",
-	}
-	// Append VM configuration as command-line arguments
+	args := buildQMPArgs(socketPath)
 	args = append(args, BuildArgs(config)...)
 
 	// Add incoming migration flag to restore from snapshot
@@ -244,63 +248,11 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	incomingURI := "exec:cat < " + memoryFile
 	args = append(args, "-incoming", incomingURI)
 
-	// Create command
-	cmd := exec.Command(binaryPath, args...)
-
-	// Daemonize: detach from parent process group
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
-
-	// Redirect stdout/stderr to VMM log file
-	logsDir := filepath.Join(instanceDir, "logs")
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return 0, nil, fmt.Errorf("create logs directory: %w", err)
-	}
-
-	vmmLogFile, err := os.OpenFile(
-		filepath.Join(logsDir, "vmm.log"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0644,
-	)
+	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
 	if err != nil {
-		return 0, nil, fmt.Errorf("create vmm log: %w", err)
-	}
-	defer vmmLogFile.Close()
-
-	cmd.Stdout = vmmLogFile
-	cmd.Stderr = vmmLogFile
-
-	processStartTime := time.Now()
-	if err := cmd.Start(); err != nil {
-		return 0, nil, fmt.Errorf("start qemu: %w", err)
-	}
-
-	pid := cmd.Process.Pid
-	log.DebugContext(ctx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
-
-	// Setup cleanup to kill the process if subsequent steps fail
-	cu := cleanup.Make(func() {
-		syscall.Kill(pid, syscall.SIGKILL)
-	})
-	defer cu.Clean()
-
-	// Wait for socket to be ready
-	socketWaitStart := time.Now()
-	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
-		vmmLogPath := filepath.Join(logsDir, "vmm.log")
-		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
-			return 0, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
-		}
 		return 0, nil, err
 	}
-	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
-
-	// Create QMP client
-	hv, err := New(socketPath)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create client: %w", err)
-	}
+	defer cu.Clean()
 
 	// Wait for incoming migration to complete
 	// QEMU loads the migration data from the exec subprocess
@@ -311,7 +263,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "migration complete", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
-	// Success - release cleanup to prevent killing the process
 	cu.Release()
 	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil
