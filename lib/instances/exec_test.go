@@ -9,19 +9,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/stretchr/testify/require"
 )
 
-// waitForExecAgent polls until exec-agent is ready
-func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
+// waitForGuestAgent polls until guest-agent is ready
+func waitForGuestAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		logs, err := collectLogs(ctx, mgr, instanceID, 100)
-		if err == nil && strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
+		if err == nil && strings.Contains(logs, "[guest-agent] listening on vsock port 2222") {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -89,11 +89,11 @@ func TestExecConcurrent(t *testing.T) {
 		manager.DeleteInstance(ctx, inst.Id)
 	})
 
-	// Wait for exec-agent to be ready (retry here is OK - we're just waiting for startup)
-	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
-	require.NoError(t, err, "exec-agent should be ready")
+	// Wait for guest-agent to be ready (retry here is OK - we're just waiting for startup)
+	err = waitForGuestAgent(ctx, manager, inst.Id, 15*time.Second)
+	require.NoError(t, err, "guest-agent should be ready")
 
-	// Verify exec-agent works with a simple command first
+	// Verify guest-agent works with a simple command first
 	_, code, err := execCommand(ctx, inst.VsockSocket, "echo", "ready")
 	require.NoError(t, err, "initial exec should work")
 	require.Equal(t, 0, code, "initial exec should succeed")
@@ -223,7 +223,7 @@ func TestExecConcurrent(t *testing.T) {
 	// Test without TTY
 	start := time.Now()
 	var stdout, stderr strings.Builder
-	_, err = exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
 		Command: []string{"nonexistent_command_asdfasdf"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -240,7 +240,7 @@ func TestExecConcurrent(t *testing.T) {
 	start = time.Now()
 	stdout.Reset()
 	stderr.Reset()
-	_, err = exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
 		Command: []string{"nonexistent_command_xyz123"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,7 +109,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Wait for exec agent to be ready
 	t.Log("Waiting for exec agent...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "[exec-agent] listening", 10*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 10*time.Second)
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 
@@ -226,7 +226,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 func execCommand(ctx context.Context, vsockSocket string, command ...string) (string, int, error) {
 	var stdout, stderr bytes.Buffer
 
-	exit, err := exec.ExecIntoInstance(ctx, vsockSocket, exec.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx, vsockSocket, guest.ExecOptions{
 		Command: command,
 		Stdin:   nil,
 		Stdout:  &stdout,
