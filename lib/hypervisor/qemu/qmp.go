@@ -15,8 +15,8 @@ const (
 	// qmpConnectTimeout is the timeout for connecting to the QMP socket
 	qmpConnectTimeout = 1 * time.Second
 
-	// qmpMigrationPollInterval is how often to poll migration status in WaitMigration
-	qmpMigrationPollInterval = 50 * time.Millisecond
+	// qmpPollInterval is how often to poll status in WaitMigration and WaitVMReady
+	qmpPollInterval = 50 * time.Millisecond
 )
 
 // Client wraps go-qemu's Domain and raw.Monitor with convenience methods.
@@ -117,8 +117,8 @@ func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
 	return c.raw.QueryMigrate()
 }
 
-// WaitMigration polls until migration completes or times out.
-// Works for both outgoing (snapshot) and incoming (restore) migrations.
+// WaitMigration polls until an outgoing migration completes or times out.
+// Used for snapshot/standby operations where we initiate the migration.
 // Returns nil if migration completed successfully, error otherwise.
 func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -133,22 +133,19 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 		info, err := c.QueryMigration()
 		if err != nil {
 			// Ignore transient errors during migration, keep polling
-			time.Sleep(qmpMigrationPollInterval)
+			time.Sleep(qmpPollInterval)
 			continue
 		}
 
 		// Check migration status (Status is a pointer in MigrationInfo)
 		if info.Status == nil {
 			// Status not available yet, continue polling
-			time.Sleep(qmpMigrationPollInterval)
+			time.Sleep(qmpPollInterval)
 			continue
 		}
 
 		switch *info.Status {
 		case raw.MigrationStatusCompleted:
-			return nil
-		case raw.MigrationStatusNone:
-			// No active migration - for incoming this means complete, for outgoing it transitions quickly
 			return nil
 		case raw.MigrationStatusFailed:
 			if info.ErrorDesc != nil && *info.ErrorDesc != "" {
@@ -157,12 +154,56 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 			return fmt.Errorf("migration failed")
 		case raw.MigrationStatusCancelled:
 			return fmt.Errorf("migration cancelled")
-		case raw.MigrationStatusActive, raw.MigrationStatusSetup, raw.MigrationStatusPreSwitchover, raw.MigrationStatusDevice:
-			// Still in progress, continue polling
+		case raw.MigrationStatusNone, raw.MigrationStatusActive, raw.MigrationStatusSetup, raw.MigrationStatusPreSwitchover, raw.MigrationStatusDevice:
+			// Still in progress or not started yet, continue polling
 		}
 
-		time.Sleep(qmpMigrationPollInterval)
+		time.Sleep(qmpPollInterval)
 	}
 
 	return fmt.Errorf("migration timeout after %v", timeout)
+}
+
+// WaitVMReady polls until the VM is ready after an incoming migration.
+// Used for restore operations where QEMU was started with -incoming.
+// The VM transitions from "inmigrate" to "paused" when migration data is loaded.
+// Returns nil when VM is ready for resume, error on timeout or failure.
+func (c *Client) WaitVMReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		status, err := c.Status()
+		if err != nil {
+			// Ignore transient errors, keep polling
+			time.Sleep(qmpPollInterval)
+			continue
+		}
+
+		switch status {
+		case qemu.StatusPaused, qemu.StatusPostMigrate:
+			// VM has finished loading migration data and is ready for resume
+			return nil
+		case qemu.StatusInMigrate, qemu.StatusRestoreVM:
+			// Still loading migration data, continue polling
+		case qemu.StatusRunning:
+			// Already running (shouldn't happen, but not an error)
+			return nil
+		case qemu.StatusGuestPanicked, qemu.StatusInternalError, qemu.StatusIOError:
+			return fmt.Errorf("VM in error state: %v", status)
+		case qemu.StatusShutdown:
+			return fmt.Errorf("VM shut down during migration")
+		default:
+			// Other states - keep polling
+		}
+
+		time.Sleep(qmpPollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for VM ready after %v", timeout)
 }

@@ -254,14 +254,13 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	defer cu.Clean()
 
-	// Wait for incoming migration to complete
-	// QEMU loads the migration data from the exec subprocess
-	// After loading, VM is in paused state and ready for 'cont'
+	// Wait for VM to be ready after loading migration data
+	// QEMU transitions from "inmigrate" to "paused" when loading completes
 	migrationWaitStart := time.Now()
-	if err := hv.client.WaitMigration(ctx, migrationTimeout); err != nil {
-		return 0, nil, fmt.Errorf("wait for migration: %w", err)
+	if err := hv.client.WaitVMReady(ctx, migrationTimeout); err != nil {
+		return 0, nil, fmt.Errorf("wait for vm ready: %w", err)
 	}
-	log.DebugContext(ctx, "migration complete", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
+	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
 	cu.Release()
 	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
