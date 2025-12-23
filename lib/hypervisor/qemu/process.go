@@ -4,6 +4,7 @@ package qemu
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,7 +154,7 @@ func qemuBinaryName() (string, error) {
 
 // isSocketInUse checks if a Unix socket is actively being used
 func isSocketInUse(socketPath string) bool {
-	conn, err := dialUnixTimeout(socketPath, 100*time.Millisecond)
+	conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
 	if err != nil {
 		return false
 	}
@@ -165,26 +166,12 @@ func isSocketInUse(socketPath string) bool {
 func waitForSocket(socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socketPath); err == nil {
-			// Socket file exists, try to connect
-			conn, err := dialUnixTimeout(socketPath, 100*time.Millisecond)
-			if err == nil {
-				conn.Close()
-				return nil
-			}
+		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("timeout waiting for socket")
-}
-
-// dialUnixTimeout dials a Unix socket with a timeout
-func dialUnixTimeout(path string, timeout time.Duration) (*os.File, error) {
-	// Use a simple stat check - actual connection will be done by go-qemu
-	if _, err := os.Stat(path); err != nil {
-		return nil, err
-	}
-	// For now, just return nil to indicate socket exists
-	// The actual QMP connection will be made by the QEMU client
-	return nil, nil
 }
