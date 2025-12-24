@@ -28,19 +28,17 @@ const (
 	vsockGuestPort = 2222
 )
 
-// AgentConnectionError indicates the guest agent is not responding.
-// This can happen if:
-// - The VM is still booting
-// - The guest agent was stopped or deleted
-type AgentConnectionError struct {
+// AgentVSockDialError indicates the vsock dial to the guest agent failed.
+// This typically means the VM is still booting or the agent hasn't started yet.
+type AgentVSockDialError struct {
 	Err error
 }
 
-func (e *AgentConnectionError) Error() string {
-	return fmt.Sprintf("guest agent not responding (it may have been stopped, deleted, or the VM is still booting): %v", e.Err)
+func (e *AgentVSockDialError) Error() string {
+	return fmt.Sprintf("vsock dial failed (VM may still be booting): %v", e.Err)
 }
 
-func (e *AgentConnectionError) Unwrap() error {
+func (e *AgentVSockDialError) Unwrap() error {
 	return e.Err
 }
 
@@ -80,7 +78,7 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
 			if err != nil {
-				return nil, &AgentConnectionError{Err: err}
+				return nil, &AgentVSockDialError{Err: err}
 			}
 			return netConn, nil
 		}),
@@ -168,9 +166,9 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 // isRetryableConnectionError returns true if the error indicates the guest agent
 // is not yet ready and we should retry connecting.
 func isRetryableConnectionError(err error) bool {
-	// Check for our custom AgentConnectionError
-	var connErr *AgentConnectionError
-	if errors.As(err, &connErr) {
+	// Check for vsock dial errors
+	var dialErr *AgentVSockDialError
+	if errors.As(err, &dialErr) {
 		return true
 	}
 
