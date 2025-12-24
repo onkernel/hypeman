@@ -1,61 +1,55 @@
 ---
 name: Systemd VM with Go Init
-overview: Support systemd-based OCI images via auto-detection or --init-mode flag, using a Go-based init binary with structured logging to hypeman operations log, performing pivot_root for systemd handoff.
+overview: Support systemd-based OCI images via auto-detection from image CMD, using a Go-based init binary with human-readable logging, performing chroot for systemd handoff.
 todos:
   - id: go-init-scaffold
     content: Create lib/system/init/ package with main.go entry point
-    status: pending
+    status: completed
   - id: go-init-mount
     content: Implement mount.go for proc/sys/dev/overlay mounting
-    status: pending
+    status: completed
   - id: go-init-config
     content: Implement config.go to parse config disk
-    status: pending
+    status: completed
   - id: go-init-network
     content: Implement network.go for network configuration
-    status: pending
+    status: completed
   - id: go-init-drivers
     content: Implement drivers.go for GPU driver loading
-    status: pending
+    status: completed
   - id: go-init-volumes
     content: Implement volumes.go for volume mounting
-    status: pending
+    status: completed
   - id: go-init-exec
     content: Implement mode_exec.go with current behavior
-    status: pending
+    status: completed
   - id: go-init-systemd
-    content: Implement mode_systemd.go with pivot_root and service injection
-    status: pending
+    content: Implement mode_systemd.go with chroot and service injection
+    status: completed
   - id: go-init-logger
-    content: Implement logger.go writing to hypeman operations log
-    status: pending
+    content: Implement logger.go with human-readable format
+    status: completed
   - id: initrd-build
     content: Modify initrd.go to compile and include init binary
-    status: pending
+    status: completed
   - id: systemd-detect
-    content: Create lib/images/systemd.go with IsSystemdImage()
-    status: pending
+    content: Create lib/images/systemd.go with IsSystemdImage() based on CMD
+    status: completed
   - id: config-disk-mode
-    content: Add INIT_MODE to configdisk.go
-    status: pending
-  - id: api-init-mode
-    content: Add init_mode field to openapi.yaml and instance types
-    status: pending
-  - id: cli-init-mode
-    content: Add --init-mode flag to hypeman run command
-    status: pending
+    content: Add INIT_MODE to configdisk.go based on CMD detection
+    status: completed
   - id: agent-location
     content: Change guest-agent copy location to /opt/hypeman/
-    status: pending
+    status: completed
   - id: dialer-resilience
     content: Add error handling for missing agent in client.go
-    status: pending
+    status: completed
   - id: test-dockerfile
     content: Create integration/testdata/systemd/Dockerfile
-    status: pending
+    status: completed
   - id: e2e-tests
     content: Create integration/systemd_test.go with build/push/test flow
-    status: pending
+    status: completed
 ---
 
 # Systemd VM Support with Go-based Init
@@ -79,7 +73,7 @@ flowchart TB
         Network --> Drivers[Load GPU drivers if needed]
         Drivers --> Volumes[Mount volumes]
         Volumes --> CopyAgent[Copy agent to /opt/hypeman/]
-        CopyAgent --> ModeCheck{init_mode?}
+        CopyAgent --> ModeCheck{init_mode from CMD?}
         ModeCheck -->|exec| ExecMode[Exec Mode]
         ModeCheck -->|systemd| SystemdMode[Systemd Mode]
     end
@@ -92,39 +86,62 @@ flowchart TB
     
     subgraph systemdpath [Systemd Mode]
         SystemdMode --> InjectService[Inject guest-agent.service]
-        InjectService --> PivotRoot[pivot_root to overlay/newroot]
-        PivotRoot --> ExecInit["exec /sbin/init (systemd)"]
+        InjectService --> Chroot[chroot to overlay/newroot]
+        Chroot --> ExecInit["exec /sbin/init (systemd)"]
         ExecInit --> SystemdPID1[Systemd manages everything]
     end
 ```
 
-
-
 ## Shared vs Mode-Specific Behavior
 
-| Step | Exec Mode | Systemd Mode |
+| Step | Exec Mode | Systemd Mode ||------|-----------|--------------|| Mount proc/sys/dev | Shared | Shared || Mount rootfs overlay | Shared | Shared || Read config disk | Shared | Shared || Configure network | Init configures it | Init configures it (before pivot) || Load GPU drivers | Shared | Shared || Mount volumes | Shared | Shared || Copy guest-agent | To `/opt/hypeman/` | To `/opt/hypeman/` || Start guest-agent | Background process | Systemd service || PID 1 | Go init binary | Systemd || App lifecycle | Managed by init | Managed by systemd |
 
-|------|-----------|--------------|
+## Logging Behavior
 
-| Mount proc/sys/dev | Shared | Shared |
+### `hypeman logs` Output by Mode
 
-| Mount rootfs overlay | Shared | Shared |
+| Log Source | Exec Mode | Systemd Mode ||------------|-----------|--------------|| `--source app` (default) | Entrypoint stdout/stderr | Systemd boot messages + console output || `--source hypeman` | Init phases + operations | Init phases + operations (until pivot_root) || `--source vmm` | Cloud Hypervisor logs | Cloud Hypervisor logs |In systemd mode, after pivot_root:
 
-| Read config disk | Shared | Shared |
+- Serial console (app.log) shows systemd boot progress and any services writing to console
+- To view individual service logs, use: `hypeman exec <vm> journalctl -u <service>`
+- To view guest-agent logs: `hypeman exec <vm> journalctl -u hypeman-agent`
 
-| Configure network | Init configures it | Init configures it (before pivot) |
+### Init Logger Format
 
-| Load GPU drivers | Shared | Shared |
+Human-readable format for `hypeman logs --source hypeman`:
 
-| Mount volumes | Shared | Shared |
+```go
+// lib/system/init/logger.go
+package main
 
-| Copy guest-agent | To `/opt/hypeman/` | To `/opt/hypeman/` |
+type Logger struct {
+    file *os.File
+}
 
-| Start guest-agent | Background process | Systemd service |
+func (l *Logger) Info(phase, msg string) {
+    // Format: 2024-12-23T10:15:30Z [INFO] [overlay] mounted rootfs from /dev/vda
+    fmt.Fprintf(l.file, "%s [INFO] [%s] %s\n", 
+        time.Now().UTC().Format(time.RFC3339), phase, msg)
+}
 
-| PID 1 | Go init binary | Systemd |
+func (l *Logger) Error(phase, msg string, err error) {
+    if err != nil {
+        fmt.Fprintf(l.file, "%s [ERROR] [%s] %s: %v\n",
+            time.Now().UTC().Format(time.RFC3339), phase, msg, err)
+    } else {
+        fmt.Fprintf(l.file, "%s [ERROR] [%s] %s\n",
+            time.Now().UTC().Format(time.RFC3339), phase, msg)
+    }
+}
 
-| App lifecycle | Managed by init | Managed by systemd |
+// Example output:
+// 2024-12-23T10:15:30Z [INFO] [boot] init starting
+// 2024-12-23T10:15:30Z [INFO] [mount] mounted proc/sys/dev
+// 2024-12-23T10:15:31Z [INFO] [overlay] mounted rootfs from /dev/vda
+// 2024-12-23T10:15:31Z [INFO] [network] configured eth0 with 10.0.0.2/24
+// 2024-12-23T10:15:32Z [INFO] [systemd] performing pivot_root
+// 2024-12-23T10:15:32Z [INFO] [systemd] exec /sbin/init
+```
 
 ## Go-based Init Binary
 
@@ -140,48 +157,8 @@ lib/system/init/
     volumes.go        # Volume mounting
     mode_exec.go      # Exec mode: run entrypoint
     mode_systemd.go   # Systemd mode: pivot_root + exec init
-    logger.go         # Structured logging to hypeman operations log
+    logger.go         # Human-readable logging to hypeman operations log
 ```
-
-
-
-### Logger Design
-
-Logs to the hypeman operations log (same format as existing hypeman logs):
-
-```go
-// lib/system/init/logger.go
-package main
-
-type Logger struct {
-    file *os.File  // Writes to /logs/hypeman.log via config disk path
-}
-
-type LogEntry struct {
-    Time    string `json:"time"`
-    Level   string `json:"level"`
-    Phase   string `json:"phase"`
-    Message string `json:"msg"`
-    Error   string `json:"error,omitempty"`
-}
-
-func (l *Logger) Info(phase, msg string) {
-    l.log("INFO", phase, msg, "")
-}
-
-func (l *Logger) Error(phase, msg string, err error) {
-    errStr := ""
-    if err != nil {
-        errStr = err.Error()
-    }
-    l.log("ERROR", phase, msg, errStr)
-}
-
-// Output: structured JSON to hypeman operations log
-// {"time":"2024-12-23T10:15:30Z","level":"INFO","phase":"overlay","msg":"mounted rootfs"}
-```
-
-
 
 ### Main Orchestration
 
@@ -239,8 +216,6 @@ func main() {
 }
 ```
 
-
-
 ### Systemd Mode
 
 ```go
@@ -260,17 +235,10 @@ func runSystemdMode(log *Logger, cfg *Config) {
         log.Error("systemd", "failed to inject service", err)
     }
     
-    oldroot := newroot + "/oldroot"
-    os.MkdirAll(oldroot, 0755)
-    
-    if err := os.Chdir(newroot); err != nil {
-        log.Error("systemd", "chdir failed", err)
-        dropToShell()
-    }
-    
-    log.Info("systemd", "executing pivot_root")
-    if err := syscall.PivotRoot(".", "oldroot"); err != nil {
-        log.Error("systemd", "pivot_root failed", err)
+    // Use chroot instead of pivot_root (more reliable in VM environment)
+    log.Info("systemd", "executing chroot")
+    if err := syscall.Chroot(newroot); err != nil {
+        log.Error("systemd", "chroot failed", err)
         dropToShell()
     }
     
@@ -309,9 +277,9 @@ WantedBy=multi-user.target
 }
 ```
 
-
-
 ## Detection Logic
+
+Auto-detect systemd mode by inspecting the image's CMD. No override flag - if CMD is a systemd init, always use systemd mode.
 
 ```go
 // lib/images/systemd.go
@@ -319,13 +287,19 @@ package images
 
 import "strings"
 
+// IsSystemdImage checks if the image's CMD indicates it wants systemd as init.
+// Detection is based on the effective command (entrypoint + cmd), not whether
+// systemd is installed in the image.
 func IsSystemdImage(entrypoint, cmd []string) bool {
+    // Combine to get the actual command that will run
     effective := append(entrypoint, cmd...)
     if len(effective) == 0 {
         return false
     }
     
     first := effective[0]
+    
+    // Match specific systemd/init paths
     systemdPaths := []string{
         "/sbin/init",
         "/lib/systemd/systemd",
@@ -336,29 +310,15 @@ func IsSystemdImage(entrypoint, cmd []string) bool {
             return true
         }
     }
+    
+    // Match any path ending in /init (e.g., /usr/sbin/init)
     if strings.HasSuffix(first, "/init") {
         return true
     }
+    
     return false
 }
 ```
-
-
-
-## CLI and API
-
-```bash
-# Auto-detect from image CMD (default)
-hypeman run my-systemd-image
-
-# Force systemd mode
-hypeman run --init-mode=systemd my-image
-
-# Force exec mode on a systemd image
-hypeman run --init-mode=exec my-systemd-image
-```
-
-
 
 ## E2E Test
 
@@ -391,9 +351,10 @@ Test flow:
 
 1. Build image with `docker build`
 2. Push to hypeman via OCI import
-3. Run instance (should auto-detect systemd mode)
+3. Run instance (auto-detects systemd mode from CMD)
 4. Verify systemd is PID 1
 5. Verify guest-agent.service is active
+6. Verify `hypeman logs` shows systemd boot messages
 ```go
 // integration/systemd_test.go
 
@@ -401,8 +362,8 @@ func TestSystemdMode(t *testing.T) {
     // Build and push test image
     buildAndPushTestImage(t, "integration/testdata/systemd", "test-systemd:latest")
     
-    // Create instance (auto-detects systemd mode)
-    inst := createInstance(t, "test-systemd:latest", "")
+    // Create instance (auto-detects systemd mode from CMD)
+    inst := createInstance(t, "test-systemd:latest")
     defer deleteInstance(t, inst.Id)
     
     time.Sleep(10 * time.Second)
@@ -418,19 +379,28 @@ func TestSystemdMode(t *testing.T) {
     // Verify agent location
     result = execInVM(t, inst, "test", "-x", "/opt/hypeman/guest-agent")
     assert.Equal(t, 0, result.ExitCode)
+    
+    // Verify can view agent logs via journalctl
+    result = execInVM(t, inst, "journalctl", "-u", "hypeman-agent", "--no-pager")
+    assert.Equal(t, 0, result.ExitCode)
 }
 
-func TestInitModeOverride(t *testing.T) {
-    buildAndPushTestImage(t, "integration/testdata/systemd", "test-systemd:latest")
-    
-    // Force exec mode
-    inst := createInstance(t, "test-systemd:latest", "exec")
+func TestExecModeUnchanged(t *testing.T) {
+    // Regular container image should still work as before
+    inst := createInstance(t, "nginx:alpine")
     defer deleteInstance(t, inst.Id)
     
-    time.Sleep(5 * time.Second)
+    time.Sleep(3 * time.Second)
     
-    // PID 1 should be our init, not systemd
-    result := execInVM(t, inst, "cat", "/proc/1/comm")
-    assert.NotEqual(t, "systemd", strings.TrimSpace(result.Stdout))
+    // Nginx should be running
+    result := execInVM(t, inst, "pgrep", "nginx")
+    assert.Equal(t, 0, result.ExitCode)
+    
+    // PID 1 is init binary (not systemd)
+    result = execInVM(t, inst, "cat", "/proc/1/comm")
+    assert.Equal(t, "init", strings.TrimSpace(result.Stdout))
 }
 ```
+
+
+## Files to Modify/Create

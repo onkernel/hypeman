@@ -2,6 +2,7 @@ package guest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,6 +25,31 @@ const (
 	// vsockGuestPort is the port the guest-agent listens on inside the guest
 	vsockGuestPort = 2222
 )
+
+// AgentConnectionError indicates the guest agent is not responding.
+// This can happen if:
+// - The VM is still booting
+// - The guest agent was stopped or deleted
+// - The VM is in systemd mode and the agent service failed to start
+type AgentConnectionError struct {
+	Err error
+}
+
+func (e *AgentConnectionError) Error() string {
+	return fmt.Sprintf("guest agent not responding (it may have been stopped, deleted, or the VM is still booting): %v", e.Err)
+}
+
+func (e *AgentConnectionError) Unwrap() error {
+	return e.Err
+}
+
+// IsAgentConnectionError checks if an error is due to the guest agent not responding.
+func IsAgentConnectionError(err error) bool {
+	var agentErr *AgentConnectionError
+	return err != nil && (strings.Contains(err.Error(), "guest agent not responding") ||
+		strings.Contains(err.Error(), "connection refused") ||
+		errors.As(err, &agentErr))
+}
 
 // connPool manages reusable gRPC connections per vsock dialer key
 // This avoids the overhead and potential issues of rapidly creating/closing connections
@@ -59,7 +85,11 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	// Create new connection using the VsockDialer
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return dialer.DialVsock(ctx, vsockGuestPort)
+			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
+			if err != nil {
+				return nil, &AgentConnectionError{Err: err}
+			}
+			return netConn, nil
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

@@ -5,10 +5,11 @@ Manages versioned kernel and initrd files for Cloud Hypervisor VMs.
 ## Features
 
 - **Automatic Downloads**: Kernel downloaded from Cloud Hypervisor releases on first use
-- **Automatic Build**: Initrd built from busybox + custom init script
+- **Automatic Build**: Initrd built from Alpine base + Go init binary + guest-agent
 - **Versioned**: Side-by-side support for multiple kernel/initrd versions
 - **Zero Docker**: Uses OCI directly (reuses image manager infrastructure)
 - **Zero Image Modifications**: All init logic in initrd, OCI images used as-is
+- **Dual Mode Support**: Exec mode (container-like) and systemd mode (full VM)
 
 ## Architecture
 
@@ -54,15 +55,27 @@ Instance B (running): kernel v6.12.9, initrd v1.0.0
 Both work independently
 ```
 
-## Init Script Consolidation
+## Go Init Binary
 
-All init logic moved from app rootfs to initrd:
+The init binary (`lib/system/init/`) is a Go program that runs as PID 1 in the guest VM.
+It replaces the previous shell-based init script with cleaner logic and structured logging.
 
 **Initrd handles:**
 - ✅ Mount overlay filesystem
 - ✅ Mount and source config disk
 - ✅ Network configuration (if enabled)
-- ✅ Execute container entrypoint
+- ✅ Load GPU drivers (if GPU attached)
+- ✅ Mount volumes
+- ✅ Auto-detect systemd images from CMD
+- ✅ Execute container entrypoint (exec mode)
+- ✅ Hand off to systemd via pivot_root (systemd mode)
+
+**Two boot modes:**
+- **Exec mode** (default): Init binary is PID 1, runs entrypoint as child process
+- **Systemd mode** (auto-detected): Uses pivot_root to hand off to systemd as PID 1
+
+**Systemd detection:** If image CMD is `/sbin/init`, `/lib/systemd/systemd`, or similar,
+hypeman automatically uses systemd mode.
 
 **Result:** OCI images require **zero modifications** - no `/init` script needed!
 
@@ -107,9 +120,11 @@ Example URLs:
 
 ## Initrd Build Process
 
-1. **Pull busybox** (using image manager's OCI client)
-2. **Inject init script** (comprehensive, handles all init logic)
-3. **Package as cpio.gz** (initramfs format)
+1. **Pull Alpine base** (using image manager's OCI client)
+2. **Add guest-agent binary** (embedded, runs in guest for exec/shell)
+3. **Add init binary** (embedded Go binary, runs as PID 1)
+4. **Add NVIDIA modules** (optional, for GPU passthrough)
+5. **Package as cpio.gz** (initramfs format)
 
 **Build tools required:** `find`, `cpio`, `gzip` (standard Unix tools)
 
@@ -136,21 +151,18 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 var DefaultKernelVersion = KernelV6_12_10
 ```
 
-### New Initrd Version
+### Updating the Init Binary
 
-```go
-// lib/system/versions.go
+The init binary is in `lib/system/init/`. After making changes:
 
-const (
-    InitrdV1_1_0 InitrdVersion = "v1.1.0"  // Add constant
-)
+1. Build the init binary (statically linked for Alpine):
+   ```bash
+   make build-init
+   ```
 
-// lib/system/init_script.go
-// Update GenerateInitScript() if init logic changes
+2. The binary is embedded via `lib/system/init_binary.go`
 
-// Update default
-var DefaultInitrdVersion = InitrdV1_1_0
-```
+3. The initrd hash includes the binary, so it will auto-rebuild on next startup
 
 ## Testing
 
@@ -167,7 +179,22 @@ go test ./lib/system/...
 | File | Size | Purpose |
 |------|------|---------|
 | kernel/*/vmlinux | ~70MB | Cloud Hypervisor optimized kernel |
-| initrd/*/initrd | ~1-2MB | Busybox + comprehensive init script |
+| initrd/*/initrd | ~5-10MB | Alpine base + Go init binary + guest-agent |
 
 Files downloaded/built once per version, reused for all instances using that version.
+
+## Init Binary Package Structure
+
+```
+lib/system/init/
+    main.go           # Entry point, orchestrates boot
+    mount.go          # Mount operations (proc, sys, dev, overlay)
+    config.go         # Parse config disk
+    network.go        # Network configuration
+    drivers.go        # GPU driver loading
+    volumes.go        # Volume mounting
+    mode_exec.go      # Exec mode: run entrypoint
+    mode_systemd.go   # Systemd mode: pivot_root + exec init
+    logger.go         # Human-readable logging to hypeman operations log
+```
 

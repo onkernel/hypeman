@@ -151,6 +151,15 @@ GUEST_DNS="%s"
 		volumeSection = volumeLines.String()
 	}
 
+	// Determine init mode based on image CMD
+	// If the image's command is /sbin/init or /lib/systemd/systemd, use systemd mode
+	initModeSection := ""
+	if images.IsSystemdImage(imageInfo.Entrypoint, imageInfo.Cmd) {
+		initModeSection = "\n# Init mode (auto-detected from image CMD)\nINIT_MODE=\"systemd\"\n"
+	} else {
+		initModeSection = "\n# Init mode\nINIT_MODE=\"exec\"\n"
+	}
+
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
@@ -162,7 +171,7 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s%s%s`,
+%s%s%s%s%s`,
 		inst.Id,
 		entrypoint,
 		cmd,
@@ -171,6 +180,7 @@ WORKDIR=%s
 		networkSection,
 		volumeSection,
 		gpuSection,
+		initModeSection,
 	)
 
 	return script
