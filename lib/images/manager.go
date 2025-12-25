@@ -31,6 +31,9 @@ type Manager interface {
 	GetImage(ctx context.Context, name string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
+	// TotalImageBytes returns the total size of all ready images on disk.
+	// Used by the resource manager for disk capacity tracking.
+	TotalImageBytes(ctx context.Context) (int64, error)
 }
 
 type manager struct {
@@ -381,4 +384,21 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	tag := ref.Tag()
 
 	return deleteTag(m.paths, repository, tag)
+}
+
+// TotalImageBytes returns the total size of all ready images on disk.
+// @sjmiller609 TODO: This seems inefficient, shouldn't need list all images every check
+func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
+	images, err := m.ListImages(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, img := range images {
+		if img.Status == StatusReady && img.SizeBytes != nil {
+			total += *img.SizeBytes
+		}
+	}
+	return total, nil
 }

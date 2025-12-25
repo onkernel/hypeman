@@ -18,6 +18,7 @@ import (
 	hypemanotel "github.com/onkernel/hypeman/lib/otel"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/registry"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel"
@@ -138,6 +139,69 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 // ProvideRegistry provides the OCI registry for image push
 func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
 	return registry.New(p, imageManager)
+}
+
+// ProvideResourceManager provides the resource manager for capacity tracking
+func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Paths, imageManager images.Manager, instanceManager instances.Manager, volumeManager volumes.Manager) (*resources.Manager, error) {
+	mgr := resources.NewManager(cfg, p)
+
+	// Set up listers using adapter types
+	mgr.SetImageLister(&imageManagerAdapter{imageManager})
+	mgr.SetInstanceLister(&instanceManagerAdapter{instanceManager})
+	mgr.SetVolumeLister(&volumeManagerAdapter{volumeManager})
+
+	// Initialize resource discovery
+	if err := mgr.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
+	return mgr, nil
+}
+
+// imageManagerAdapter adapts images.Manager to resources.ImageLister
+type imageManagerAdapter struct {
+	mgr images.Manager
+}
+
+func (a *imageManagerAdapter) TotalImageBytes(ctx context.Context) (int64, error) {
+	return a.mgr.TotalImageBytes(ctx)
+}
+
+// instanceManagerAdapter adapts instances.Manager to resources.InstanceLister
+type instanceManagerAdapter struct {
+	mgr instances.Manager
+}
+
+// @sjmiller609, it seems like too much logic is in providers.go
+func (a *instanceManagerAdapter) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
+	allocs, err := a.mgr.ListInstanceAllocations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Convert from instances.InstanceAllocation to resources.InstanceAllocation
+	result := make([]resources.InstanceAllocation, len(allocs))
+	for i, alloc := range allocs {
+		result[i] = resources.InstanceAllocation{
+			ID:           alloc.ID,
+			Name:         alloc.Name,
+			Vcpus:        alloc.Vcpus,
+			MemoryBytes:  alloc.MemoryBytes,
+			OverlayBytes: alloc.OverlayBytes,
+			NetworkBps:   alloc.NetworkBps,
+			State:        alloc.State,
+			VolumeBytes:  alloc.VolumeBytes,
+		}
+	}
+	return result, nil
+}
+
+// volumeManagerAdapter adapts volumes.Manager to resources.VolumeLister
+type volumeManagerAdapter struct {
+	mgr volumes.Manager
+}
+
+func (a *volumeManagerAdapter) TotalVolumeBytes(ctx context.Context) (int64, error) {
+	return a.mgr.TotalVolumeBytes(ctx)
 }
 
 // ProvideIngressManager provides the ingress manager

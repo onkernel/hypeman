@@ -416,8 +416,9 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 	}
 }
 
-// createTAPDevice creates TAP device and attaches to bridge
-func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) error {
+// createTAPDevice creates TAP device and attaches to bridge.
+// If rateLimitBps > 0, applies bandwidth limiting using tc.
+func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool, rateLimitBps int64) error {
 	// 1. Check if TAP already exists
 	if _, err := netlink.LinkByName(tapName); err == nil {
 		// TAP already exists, delete it first
@@ -479,6 +480,67 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) err
 		}
 	}
 
+	// 6. Apply rate limiting if specified
+	if rateLimitBps > 0 {
+		if err := m.applyRateLimit(tapName, rateLimitBps); err != nil {
+			return fmt.Errorf("apply rate limit: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// applyRateLimit applies bandwidth limiting to a TAP device using tc (traffic control).
+// rateLimitBps is the rate limit in bytes per second.
+func (m *manager) applyRateLimit(tapName string, rateLimitBps int64) error {
+	// Convert bytes/sec to tc rate format
+	// tc uses bits per second, so multiply by 8
+	rateBps := rateLimitBps * 8
+
+	// Format rate for tc (supports suffixes: bit, kbit, mbit, gbit)
+	var rateStr string
+	switch {
+	case rateBps >= 1000000000:
+		rateStr = fmt.Sprintf("%dgbit", rateBps/1000000000)
+	case rateBps >= 1000000:
+		rateStr = fmt.Sprintf("%dmbit", rateBps/1000000)
+	case rateBps >= 1000:
+		rateStr = fmt.Sprintf("%dkbit", rateBps/1000)
+	default:
+		rateStr = fmt.Sprintf("%dbit", rateBps)
+	}
+
+	// Use Token Bucket Filter (tbf) for simple rate limiting
+	// burst: typically rate/250 (for HZ=250) or at least 1540 bytes for MTU
+	// latency: max time a packet can wait in queue
+	burstBytes := rateLimitBps / 250
+	if burstBytes < 1540 {
+		burstBytes = 1540 // Minimum burst for standard MTU
+	}
+
+	cmd := exec.Command("tc", "qdisc", "add", "dev", tapName, "root", "tbf",
+		"rate", rateStr,
+		"burst", fmt.Sprintf("%d", burstBytes),
+		"latency", "50ms")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tc qdisc add: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
+// removeRateLimit removes any rate limiting from a TAP device.
+func (m *manager) removeRateLimit(tapName string) error {
+	cmd := exec.Command("tc", "qdisc", "del", "dev", tapName, "root")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	// Ignore errors - qdisc may not exist
+	cmd.Run()
 	return nil
 }
 

@@ -294,6 +294,7 @@ func (m *manager) createInstance(
 		HotplugSize:       hotplugSize,
 		OverlaySize:       overlaySize,
 		Vcpus:             vcpus,
+		NetworkBandwidth:  req.NetworkBandwidth, // Will be set by caller if using resource manager
 		Env:               req.Env,
 		NetworkEnabled:    req.NetworkEnabled,
 		CreatedAt:         time.Now(),
@@ -326,10 +327,11 @@ func (m *manager) createInstance(
 	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
+		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName, "network_bandwidth", stored.NetworkBandwidth)
 		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
 			InstanceID:   id,
 			InstanceName: req.Name,
+			RateLimitBps: stored.NetworkBandwidth,
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)

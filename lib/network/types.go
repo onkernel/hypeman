@@ -4,12 +4,12 @@ import "time"
 
 // Network represents a virtual network for instances
 type Network struct {
-	Name      string    // "default", "internal"
-	Subnet    string    // "192.168.0.0/16"
-	Gateway   string    // "192.168.0.1"
-	Bridge    string    // "vmbr0" (derived from kernel)
-	Isolated  bool      // Bridge_slave isolation mode
-	Default   bool      // True for default network
+	Name      string // "default", "internal"
+	Subnet    string // "192.168.0.0/16"
+	Gateway   string // "192.168.0.1"
+	Bridge    string // "vmbr0" (derived from kernel)
+	Isolated  bool   // Bridge_slave isolation mode
+	Default   bool   // True for default network
 	CreatedAt time.Time
 }
 
@@ -41,5 +41,5 @@ type NetworkConfig struct {
 type AllocateRequest struct {
 	InstanceID   string
 	InstanceName string
+	RateLimitBps int64 // Network rate limit in bytes/sec (0 = no limit)
 }
-

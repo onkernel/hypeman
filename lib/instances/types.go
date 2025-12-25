@@ -36,10 +36,11 @@ type StoredMetadata struct {
 	Image string // OCI reference
 
 	// Resources (matching Cloud Hypervisor terminology)
-	Size        int64 // Base memory in bytes
-	HotplugSize int64 // Hotplug memory in bytes
-	OverlaySize int64 // Overlay disk size in bytes
-	Vcpus       int
+	Size             int64 // Base memory in bytes
+	HotplugSize      int64 // Hotplug memory in bytes
+	OverlaySize      int64 // Overlay disk size in bytes
+	Vcpus            int
+	NetworkBandwidth int64 // Network rate limit in bytes/sec (0 = no limit)
 
 	// Configuration
 	Env            map[string]string
@@ -93,17 +94,18 @@ func (i *Instance) GetHypervisorType() string {
 
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
-	Name           string             // Required
-	Image          string             // Required: OCI reference
-	Size           int64              // Base memory in bytes (default: 1GB)
-	HotplugSize    int64              // Hotplug memory in bytes (default: 3GB)
-	OverlaySize    int64              // Overlay disk size in bytes (default: 10GB)
-	Vcpus          int                // Default 2
-	Env            map[string]string  // Optional environment variables
-	NetworkEnabled bool               // Whether to enable networking (uses default network)
-	Devices        []string           // Device IDs or names to attach (GPU passthrough)
-	Volumes        []VolumeAttachment // Volumes to attach at creation time
-	Hypervisor     hypervisor.Type    // Optional: hypervisor type (defaults to config)
+	Name             string             // Required
+	Image            string             // Required: OCI reference
+	Size             int64              // Base memory in bytes (default: 1GB)
+	HotplugSize      int64              // Hotplug memory in bytes (default: 3GB)
+	OverlaySize      int64              // Overlay disk size in bytes (default: 10GB)
+	Vcpus            int                // Default 2
+	NetworkBandwidth int64              // Network rate limit in bytes/sec (0 = auto based on CPU proportion)
+	Env              map[string]string  // Optional environment variables
+	NetworkEnabled   bool               // Whether to enable networking (uses default network)
+	Devices          []string           // Device IDs or names to attach (GPU passthrough)
+	Volumes          []VolumeAttachment // Volumes to attach at creation time
+	Hypervisor       hypervisor.Type    // Optional: hypervisor type (defaults to config)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

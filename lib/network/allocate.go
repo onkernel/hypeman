@@ -55,8 +55,8 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// 5. Generate TAP name (tap-{first8chars-of-id})
 	tap := generateTAPName(req.InstanceID)
 
-	// 6. Create TAP device
-	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated); err != nil {
+	// 6. Create TAP device with optional rate limiting
+	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.RateLimitBps); err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -67,7 +67,8 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		"network", "default",
 		"ip", ip,
 		"mac", mac,
-		"tap", tap)
+		"tap", tap,
+		"rate_limit_bps", req.RateLimitBps)
 
 	// 7. Calculate netmask from subnet
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
@@ -109,7 +110,8 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) err
 	}
 
 	// 3. Recreate TAP device with same name
-	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated); err != nil {
+	// Note: Rate limit not applied on recreate - would need to be stored in metadata
+	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, 0); err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")

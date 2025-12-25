@@ -104,6 +104,16 @@ type Config struct {
 
 	// Hypervisor configuration
 	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
+
+	// Oversubscription ratios (1.0 = no oversubscription, 2.0 = 2x oversubscription)
+	OversubCPU     float64 // CPU oversubscription ratio
+	OversubMemory  float64 // Memory oversubscription ratio
+	OversubDisk    float64 // Disk oversubscription ratio
+	OversubNetwork float64 // Network oversubscription ratio
+
+	// Resource capacity limits (empty = auto-detect from host)
+	DiskLimit    string // Hard disk limit for DataDir, e.g. "500GB"
+	NetworkLimit string // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
 }
 
 // Load loads configuration from environment variables
@@ -169,6 +179,16 @@ func Load() *Config {
 
 		// Hypervisor configuration
 		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
+
+		// Oversubscription ratios (1.0 = no oversubscription)
+		OversubCPU:     getEnvFloat("OVERSUB_CPU", 4.0),
+		OversubMemory:  getEnvFloat("OVERSUB_MEMORY", 1.0),
+		OversubDisk:    getEnvFloat("OVERSUB_DISK", 1.0),
+		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
+
+		// Resource capacity limits (empty = auto-detect)
+		DiskLimit:    getEnv("DISK_LIMIT", ""),
+		NetworkLimit: getEnv("NETWORK_LIMIT", ""),
 	}
 
 	return cfg
@@ -194,6 +214,15 @@ func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		if boolVal, err := strconv.ParseBool(value); err == nil {
 			return boolVal
+		}
+	}
+	return defaultValue
+}
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatVal
 		}
 	}
 	return defaultValue

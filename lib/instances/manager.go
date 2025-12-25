@@ -34,6 +34,22 @@ type Manager interface {
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
+	// ListInstanceAllocations returns resource allocations for all instances.
+	// Used by the resource manager for capacity tracking.
+	ListInstanceAllocations(ctx context.Context) ([]InstanceAllocation, error)
+}
+
+// InstanceAllocation represents resource allocation for a single instance.
+// Used by the resource manager to track capacity.
+type InstanceAllocation struct {
+	ID           string
+	Name         string
+	Vcpus        int
+	MemoryBytes  int64
+	OverlayBytes int64
+	NetworkBps   int64
+	State        string
+	VolumeBytes  int64
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -280,4 +296,38 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
+}
+
+// ListInstanceAllocations returns resource allocations for all instances.
+// Used by the resource manager for capacity tracking.
+// @sjmiller609 TODO: This seems inefficient, shouldn't need list all instances every check
+func (m *manager) ListInstanceAllocations(ctx context.Context) ([]InstanceAllocation, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	allocations := make([]InstanceAllocation, 0, len(instances))
+	for _, inst := range instances {
+		// Calculate volume bytes
+		var volumeBytes int64
+		for _, vol := range inst.Volumes {
+			if vol.Overlay {
+				volumeBytes += vol.OverlaySize
+			}
+		}
+
+		allocations = append(allocations, InstanceAllocation{
+			ID:           inst.Id,
+			Name:         inst.Name,
+			Vcpus:        inst.Vcpus,
+			MemoryBytes:  inst.Size + inst.HotplugSize,
+			OverlayBytes: inst.OverlaySize,
+			NetworkBps:   inst.NetworkBandwidth,
+			State:        string(inst.State),
+			VolumeBytes:  volumeBytes,
+		})
+	}
+
+	return allocations, nil
 }
