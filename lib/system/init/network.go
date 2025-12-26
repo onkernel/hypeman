@@ -17,7 +17,7 @@ func configureNetwork(log *Logger, cfg *vmconfig.Config) error {
 	}
 
 	// Add IP address to eth0
-	addr := fmt.Sprintf("%s/%s", cfg.GuestIP, cfg.GuestCIDR)
+	addr := fmt.Sprintf("%s/%d", cfg.GuestIP, cfg.GuestCIDR)
 	if err := runIP("addr", "add", addr, "dev", "eth0"); err != nil {
 		return fmt.Errorf("add IP address: %w", err)
 	}
