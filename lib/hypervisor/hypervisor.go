@@ -124,6 +124,9 @@ type Capabilities struct {
 
 	// SupportsGPUPassthrough indicates if PCI device passthrough is available
 	SupportsGPUPassthrough bool
+
+	// SupportsDiskIOLimit indicates if disk I/O rate limiting is available
+	SupportsDiskIOLimit bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

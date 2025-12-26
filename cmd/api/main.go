@@ -45,6 +45,11 @@ func run() error {
 	// Load config early for OTel initialization
 	cfg := config.Load()
 
+	// Validate configuration before proceeding
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
 		Enabled:           cfg.OtelEnabled,
@@ -176,7 +181,12 @@ func run() error {
 		logger.Error("failed to initialize network manager", "error", err)
 		return fmt.Errorf("initialize network manager: %w", err)
 	}
-	logger.Info("Network manager initialized")
+
+	// Set up HTB qdisc on bridge for network fair sharing
+	networkCapacity := app.ResourceManager.NetworkCapacity()
+	if err := app.NetworkManager.SetupHTB(app.Ctx, networkCapacity); err != nil {
+		logger.Warn("failed to setup HTB on bridge (network rate limiting disabled)", "error", err)
+	}
 
 	// Reconcile device state (clears orphaned attachments from crashed VMs)
 	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments

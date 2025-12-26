@@ -43,6 +43,7 @@ func (q *QEMU) Capabilities() hypervisor.Capabilities {
 		SupportsPause:          true,
 		SupportsVsock:          true,
 		SupportsGPUPassthrough: true,
+		SupportsDiskIOLimit:    true,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/guest"
@@ -15,6 +16,7 @@ import (
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/samber/lo"
 )
 
@@ -82,6 +84,23 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		overlaySize = int64(overlayBytes)
 	}
 
+	// Parse disk_io_bps (0 = auto/unlimited)
+	diskIOBps := int64(0)
+	if request.Body.DiskIoBps != nil && *request.Body.DiskIoBps != "" {
+		var ioBpsBytes datasize.ByteSize
+		// Remove "/s" suffix if present
+		ioStr := *request.Body.DiskIoBps
+		ioStr = strings.TrimSuffix(ioStr, "/s")
+		ioStr = strings.TrimSuffix(ioStr, "ps")
+		if err := ioBpsBytes.UnmarshalText([]byte(ioStr)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_disk_io_bps",
+				Message: fmt.Sprintf("invalid disk_io_bps format: %v", err),
+			}, nil
+		}
+		diskIOBps = int64(ioBpsBytes)
+	}
+
 	vcpus := 2
 	if request.Body.Vcpus != nil {
 		vcpus = *request.Body.Vcpus
@@ -96,6 +115,33 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	networkEnabled := true
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
 		networkEnabled = *request.Body.Network.Enabled
+	}
+
+	// Parse network bandwidth limits (0 = auto)
+	// Supports both bit-based (e.g., "1Gbps") and byte-based (e.g., "125MB/s") formats
+	var networkBandwidthDownload int64
+	var networkBandwidthUpload int64
+	if request.Body.Network != nil {
+		if request.Body.Network.BandwidthDownload != nil && *request.Body.Network.BandwidthDownload != "" {
+			bw, err := resources.ParseBandwidth(*request.Body.Network.BandwidthDownload)
+			if err != nil {
+				return oapi.CreateInstance400JSONResponse{
+					Code:    "invalid_bandwidth_download",
+					Message: fmt.Sprintf("invalid bandwidth_download format: %v", err),
+				}, nil
+			}
+			networkBandwidthDownload = bw
+		}
+		if request.Body.Network.BandwidthUpload != nil && *request.Body.Network.BandwidthUpload != "" {
+			bw, err := resources.ParseBandwidth(*request.Body.Network.BandwidthUpload)
+			if err != nil {
+				return oapi.CreateInstance400JSONResponse{
+					Code:    "invalid_bandwidth_upload",
+					Message: fmt.Sprintf("invalid bandwidth_upload format: %v", err),
+				}, nil
+			}
+			networkBandwidthUpload = bw
+		}
 	}
 
 	// Parse devices (GPU passthrough)
@@ -144,18 +190,36 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		hvType = hypervisor.Type(*request.Body.Hypervisor)
 	}
 
+	// Calculate default resource limits when not specified (0 = auto)
+	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
+	if diskIOBps == 0 {
+		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
+	}
+	if networkBandwidthDownload == 0 || networkBandwidthUpload == 0 {
+		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
+		if networkBandwidthDownload == 0 {
+			networkBandwidthDownload = defaultDown
+		}
+		if networkBandwidthUpload == 0 {
+			networkBandwidthUpload = defaultUp
+		}
+	}
+
 	domainReq := instances.CreateInstanceRequest{
-		Name:           request.Body.Name,
-		Image:          request.Body.Image,
-		Size:           size,
-		HotplugSize:    hotplugSize,
-		OverlaySize:    overlaySize,
-		Vcpus:          vcpus,
-		Env:            env,
-		NetworkEnabled: networkEnabled,
-		Devices:        deviceRefs,
-		Volumes:        volumes,
-		Hypervisor:     hvType,
+		Name:                     request.Body.Name,
+		Image:                    request.Body.Image,
+		Size:                     size,
+		HotplugSize:              hotplugSize,
+		OverlaySize:              overlaySize,
+		Vcpus:                    vcpus,
+		DiskIOBps:                diskIOBps,
+		NetworkBandwidthDownload: networkBandwidthDownload,
+		NetworkBandwidthUpload:   networkBandwidthUpload,
+		Env:                      env,
+		NetworkEnabled:           networkEnabled,
+		Devices:                  deviceRefs,
+		Volumes:                  volumes,
+		Hypervisor:               hvType,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -539,14 +603,29 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
-	// Build network object with ip/mac nested inside
+	// Format bandwidth as human-readable (bytes/s to rate string)
+	var downloadBwStr, uploadBwStr *string
+	if inst.NetworkBandwidthDownload > 0 {
+		s := datasize.ByteSize(inst.NetworkBandwidthDownload).HR() + "/s"
+		downloadBwStr = &s
+	}
+	if inst.NetworkBandwidthUpload > 0 {
+		s := datasize.ByteSize(inst.NetworkBandwidthUpload).HR() + "/s"
+		uploadBwStr = &s
+	}
+
+	// Build network object with ip/mac and bandwidth nested inside
 	netObj := &struct {
-		Enabled *bool   `json:"enabled,omitempty"`
-		Ip      *string `json:"ip"`
-		Mac     *string `json:"mac"`
-		Name    *string `json:"name,omitempty"`
+		BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+		BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+		Enabled           *bool   `json:"enabled,omitempty"`
+		Ip                *string `json:"ip"`
+		Mac               *string `json:"mac"`
+		Name              *string `json:"name,omitempty"`
 	}{
-		Enabled: lo.ToPtr(inst.NetworkEnabled),
+		Enabled:           lo.ToPtr(inst.NetworkEnabled),
+		BandwidthDownload: downloadBwStr,
+		BandwidthUpload:   uploadBwStr,
 	}
 	if inst.NetworkEnabled {
 		netObj.Name = lo.ToPtr("default")
@@ -556,6 +635,13 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	// Convert hypervisor type
 	hvType := oapi.InstanceHypervisor(inst.HypervisorType)
+
+	// Format disk I/O as human-readable
+	var diskIoBpsStr *string
+	if inst.DiskIOBps > 0 {
+		s := datasize.ByteSize(inst.DiskIOBps).HR() + "/s"
+		diskIoBpsStr = &s
+	}
 
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
@@ -567,6 +653,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HotplugSize: lo.ToPtr(hotplugSizeStr),
 		OverlaySize: lo.ToPtr(overlaySizeStr),
 		Vcpus:       lo.ToPtr(inst.Vcpus),
+		DiskIoBps:   diskIoBpsStr,
 		Network:     netObj,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,

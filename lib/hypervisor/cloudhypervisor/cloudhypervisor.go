@@ -38,6 +38,7 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 		SupportsPause:          true,
 		SupportsVsock:          true,
 		SupportsGPUPassthrough: true,
+		SupportsDiskIOLimit:    true,
 	}
 }
 
