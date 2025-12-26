@@ -218,6 +218,10 @@ components:
           type: integer
           description: Number of virtual CPUs
           example: 2
+        disk_io_bps:
+          type: string
+          description: Disk I/O rate limit (human-readable, e.g., "100MB/s")
+          example: "100MB/s"
         env:
           type: object
           additionalProperties:
@@ -245,6 +249,14 @@ components:
               description: Assigned MAC address (null if no network)
               example: "02:00:00:ab:cd:ef"
               nullable: true
+            bandwidth_download:
+              type: string
+              description: Download bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+              example: "125MB/s"
+            bandwidth_upload:
+              type: string
+              description: Upload bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+              example: "125MB/s"
         volumes:
           type: array
           description: Volumes attached to the instance

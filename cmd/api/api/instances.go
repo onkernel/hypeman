@@ -194,6 +194,21 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		hvType = hypervisor.Type(*request.Body.Hypervisor)
 	}
 
+	// Calculate default resource limits when not specified (0 = auto)
+	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
+	if diskIOBps == 0 {
+		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
+	}
+	if networkBandwidthDownload == 0 || networkBandwidthUpload == 0 {
+		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
+		if networkBandwidthDownload == 0 {
+			networkBandwidthDownload = defaultDown
+		}
+		if networkBandwidthUpload == 0 {
+			networkBandwidthUpload = defaultUp
+		}
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
@@ -592,14 +607,29 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
-	// Build network object with ip/mac nested inside
+	// Format bandwidth as human-readable (bytes/s to rate string)
+	var downloadBwStr, uploadBwStr *string
+	if inst.NetworkBandwidthDownload > 0 {
+		s := datasize.ByteSize(inst.NetworkBandwidthDownload).HR() + "/s"
+		downloadBwStr = &s
+	}
+	if inst.NetworkBandwidthUpload > 0 {
+		s := datasize.ByteSize(inst.NetworkBandwidthUpload).HR() + "/s"
+		uploadBwStr = &s
+	}
+
+	// Build network object with ip/mac and bandwidth nested inside
 	netObj := &struct {
-		Enabled *bool   `json:"enabled,omitempty"`
-		Ip      *string `json:"ip"`
-		Mac     *string `json:"mac"`
-		Name    *string `json:"name,omitempty"`
+		BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+		BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+		Enabled           *bool   `json:"enabled,omitempty"`
+		Ip                *string `json:"ip"`
+		Mac               *string `json:"mac"`
+		Name              *string `json:"name,omitempty"`
 	}{
-		Enabled: lo.ToPtr(inst.NetworkEnabled),
+		Enabled:           lo.ToPtr(inst.NetworkEnabled),
+		BandwidthDownload: downloadBwStr,
+		BandwidthUpload:   uploadBwStr,
 	}
 	if inst.NetworkEnabled {
 		netObj.Name = lo.ToPtr("default")
@@ -609,6 +639,13 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	// Convert hypervisor type
 	hvType := oapi.InstanceHypervisor(inst.HypervisorType)
+
+	// Format disk I/O as human-readable
+	var diskIoBpsStr *string
+	if inst.DiskIOBps > 0 {
+		s := datasize.ByteSize(inst.DiskIOBps).HR() + "/s"
+		diskIoBpsStr = &s
+	}
 
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
@@ -620,6 +657,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HotplugSize: lo.ToPtr(hotplugSizeStr),
 		OverlaySize: lo.ToPtr(overlaySizeStr),
 		Vcpus:       lo.ToPtr(inst.Vcpus),
+		DiskIoBps:   diskIoBpsStr,
 		Network:     netObj,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,

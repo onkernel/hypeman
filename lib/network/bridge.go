@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"os"
 	"os/exec"
@@ -695,13 +696,15 @@ func (m *manager) removeVMClass(bridgeName, tapName string) error {
 // deriveClassID derives a unique HTB class ID from a TAP name.
 // Uses first 4 hex characters after the prefix (e.g., "hype-a1b2c3d4" → "a1b2").
 func deriveClassID(tapName string) string {
-	// TAP names are "hype-{8chars}", extract chars after prefix
-	suffix := strings.TrimPrefix(tapName, TAPPrefix)
-	if len(suffix) >= 4 {
-		return suffix[:4]
-	}
-	// Fallback: use full suffix padded
-	return fmt.Sprintf("%04s", suffix)
+	// Hash the TAP name to get a valid hex class ID.
+	// tc class IDs must be hexadecimal (0-9, a-f), but CUID2 instance IDs
+	// use base-36 (0-9, a-z) which includes invalid chars like t, w, v, etc.
+	// Using FNV-1a for speed with full 32 bits for virtually no collisions.
+	h := fnv.New32a()
+	h.Write([]byte(tapName))
+	hash := h.Sum32()
+	// Full 32 bits = 8 hex chars, collision at ~77k VMs
+	return fmt.Sprintf("%08x", hash)
 }
 
 // formatTcRate formats bytes per second as a tc rate string.
