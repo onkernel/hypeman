@@ -110,10 +110,12 @@ type Config struct {
 	OversubMemory  float64 // Memory oversubscription ratio
 	OversubDisk    float64 // Disk oversubscription ratio
 	OversubNetwork float64 // Network oversubscription ratio
+	OversubDiskIO  float64 // Disk I/O oversubscription ratio
 
 	// Resource capacity limits (empty = auto-detect from host)
 	DiskLimit       string  // Hard disk limit for DataDir, e.g. "500GB"
 	NetworkLimit    string  // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
+	DiskIOLimit     string  // Hard disk I/O limit, e.g. "500MB/s" (empty = auto-detect from disk type)
 	MaxImageStorage float64 // Max image storage as fraction of disk (0.2 = 20%), counts OCI cache + rootfs
 }
 
@@ -186,10 +188,12 @@ func Load() *Config {
 		OversubMemory:  getEnvFloat("OVERSUB_MEMORY", 1.0),
 		OversubDisk:    getEnvFloat("OVERSUB_DISK", 1.0),
 		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
+		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 5.0),
 
 		// Resource capacity limits (empty = auto-detect)
 		DiskLimit:       getEnv("DISK_LIMIT", ""),
 		NetworkLimit:    getEnv("NETWORK_LIMIT", ""),
+		DiskIOLimit:     getEnv("DISK_IO_LIMIT", ""),
 		MaxImageStorage: getEnvFloat("MAX_IMAGE_STORAGE", 0.2), // 20% of disk by default
 	}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/guest"
@@ -82,6 +83,23 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		overlaySize = int64(overlayBytes)
 	}
 
+	// Parse disk_io_bps (0 = auto/unlimited)
+	diskIOBps := int64(0)
+	if request.Body.DiskIoBps != nil && *request.Body.DiskIoBps != "" {
+		var ioBpsBytes datasize.ByteSize
+		// Remove "/s" suffix if present
+		ioStr := *request.Body.DiskIoBps
+		ioStr = strings.TrimSuffix(ioStr, "/s")
+		ioStr = strings.TrimSuffix(ioStr, "ps")
+		if err := ioBpsBytes.UnmarshalText([]byte(ioStr)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_disk_io_bps",
+				Message: fmt.Sprintf("invalid disk_io_bps format: %v", err),
+			}, nil
+		}
+		diskIOBps = int64(ioBpsBytes)
+	}
+
 	vcpus := 2
 	if request.Body.Vcpus != nil {
 		vcpus = *request.Body.Vcpus
@@ -151,6 +169,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		HotplugSize:    hotplugSize,
 		OverlaySize:    overlaySize,
 		Vcpus:          vcpus,
+		DiskIOBps:      diskIOBps,
 		Env:            env,
 		NetworkEnabled: networkEnabled,
 		Devices:        deviceRefs,

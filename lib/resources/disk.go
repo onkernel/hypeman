@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"strings"
 	"syscall"
 
 	"github.com/c2h5oh/datasize"
@@ -106,4 +107,22 @@ func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error)
 	}
 
 	return &breakdown, nil
+}
+
+// parseDiskIOLimit parses a disk I/O limit string like "500MB/s", "1GB/s".
+// Returns bytes per second.
+func parseDiskIOLimit(limit string) (int64, error) {
+	limit = strings.TrimSpace(limit)
+	limit = strings.ToLower(limit)
+
+	// Remove "/s" or "ps" suffix if present
+	limit = strings.TrimSuffix(limit, "/s")
+	limit = strings.TrimSuffix(limit, "ps")
+
+	var ds datasize.ByteSize
+	if err := ds.UnmarshalText([]byte(limit)); err != nil {
+		return 0, err
+	}
+
+	return int64(ds.Bytes()), nil
 }

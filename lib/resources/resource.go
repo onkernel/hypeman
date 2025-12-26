@@ -347,6 +347,20 @@ func (m *Manager) NetworkCapacity() int64 {
 	return 0
 }
 
+// DiskIOCapacity returns the configured disk I/O capacity in bytes/sec.
+// Returns 0 if not configured (no I/O limiting).
+func (m *Manager) DiskIOCapacity() int64 {
+	if m.cfg.DiskIOLimit == "" {
+		return 0
+	}
+	// Parse the limit using the same format as network (e.g., "500MB/s")
+	capacity, err := parseDiskIOLimit(m.cfg.DiskIOLimit)
+	if err != nil {
+		return 0
+	}
+	return capacity
+}
+
 // DefaultNetworkBandwidth calculates the default network bandwidth for an instance
 // based on its CPU allocation proportional to host CPU capacity.
 // Formula: (instanceVcpus / hostCpuCapacity) * networkCapacity * oversubRatio
@@ -370,6 +384,36 @@ func (m *Manager) DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int
 
 	// Symmetric limits by default
 	return bandwidth, bandwidth
+}
+
+// DefaultDiskIOBandwidth calculates the default disk I/O bandwidth for an instance
+// based on its CPU allocation proportional to host CPU capacity.
+// Formula: (instanceVcpus / hostCpuCapacity) * diskIOCapacity * oversubRatio
+// Returns sustained rate and burst rate (4x sustained).
+func (m *Manager) DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64) {
+	cpuCapacity := m.CPUCapacity()
+	if cpuCapacity == 0 {
+		return 0, 0
+	}
+
+	ioCapacity := m.DiskIOCapacity()
+	if ioCapacity == 0 {
+		return 0, 0
+	}
+
+	ratio := m.cfg.OversubDiskIO
+	if ratio <= 0 {
+		ratio = 5.0 // Default 5x oversubscription for disk I/O
+	}
+	effectiveIO := int64(float64(ioCapacity) * ratio)
+
+	// Proportional to CPU: (vcpus / cpuCapacity) * effectiveIO
+	sustained := (int64(vcpus) * effectiveIO) / cpuCapacity
+
+	// Burst is 4x sustained (allows fast cold starts)
+	burst := sustained * 4
+
+	return sustained, burst
 }
 
 // HasSufficientDiskForPull checks if there's enough disk space for an image pull.

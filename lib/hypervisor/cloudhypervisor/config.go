@@ -48,6 +48,21 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		if d.Readonly {
 			disk.Readonly = ptr(true)
 		}
+		if d.IOBps > 0 {
+			// Token bucket: Size is refilled every RefillTime ms
+			// Rate = Size / RefillTime * 1000 = Size bytes/sec (when RefillTime = 1000)
+			burstBps := d.IOBurstBps
+			if burstBps <= 0 {
+				burstBps = d.IOBps
+			}
+			disk.RateLimiterConfig = &vmm.RateLimiterConfig{
+				Bandwidth: &vmm.TokenBucket{
+					Size:         d.IOBps,                 // sustained rate (bytes/sec with 1s refill)
+					RefillTime:   1000,                    // refill over 1 second
+					OneTimeBurst: ptr(burstBps - d.IOBps), // extra burst capacity
+				},
+			}
+		}
 		disks = append(disks, disk)
 	}
 

@@ -127,6 +127,10 @@ components:
           description: Writable overlay disk size (human-readable format like "10GB", "50G")
           default: "10GB"
           example: "20GB"
+        disk_io_bps:
+          type: string
+          description: Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share based on CPU allocation if configured.
+          example: "100MB/s"
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -796,7 +800,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
-
+  
   /resources:
     get:
       summary: Get host resource capacity and allocations

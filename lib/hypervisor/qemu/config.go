@@ -40,6 +40,12 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		if disk.Readonly {
 			driveOpts += ",readonly=on"
 		}
+		if disk.IOBps > 0 {
+			driveOpts += fmt.Sprintf(",throttling.bps-total=%d", disk.IOBps)
+			if disk.IOBurstBps > 0 && disk.IOBurstBps > disk.IOBps {
+				driveOpts += fmt.Sprintf(",throttling.bps-total-max=%d", disk.IOBurstBps)
+			}
+		}
 		args = append(args, "-drive", driveOpts)
 		args = append(args, "-device", fmt.Sprintf("virtio-blk-pci,drive=drive%d", i))
 	}
