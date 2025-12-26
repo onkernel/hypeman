@@ -23,6 +23,8 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 | `NETWORK_LIMIT` | auto | Hard network limit (e.g., `10Gbps`), auto-detects from uplink speed |
 | `DISK_IO_LIMIT` | `1GB/s` | Hard disk I/O limit (e.g., `500MB/s`, `2GB/s`) |
 | `MAX_IMAGE_STORAGE` | `0.2` | Max image storage as fraction of disk (OCI cache + rootfs) |
+| `UPLOAD_BURST_MULTIPLIER` | `4` | Multiplier for upload burst ceiling (HTB ceil = rate × multiplier) |
+| `DOWNLOAD_BURST_MULTIPLIER` | `4` | Multiplier for download burst bucket (TBF bucket size) |
 
 ## Resource Types
 
@@ -58,6 +60,7 @@ Bidirectional rate limiting with separate download and upload controls:
 - Proportional to CPU: `(vcpus / cpu_capacity) * network_capacity`
 - Symmetric download/upload by default
 - Upload ceiling = 4x guaranteed rate by default (configurable via `UPLOAD_BURST_MULTIPLIER`)
+- Download burst bucket = 4x rate by default (configurable via `DOWNLOAD_BURST_MULTIPLIER`)
 
 **Capacity tracking:**
 - Uses max(download, upload) per instance since they share physical link

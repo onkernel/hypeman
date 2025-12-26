@@ -114,7 +114,8 @@ type Config struct {
 	OversubDiskIO  float64 // Disk I/O oversubscription ratio
 
 	// Network rate limiting
-	UploadBurstMultiplier int // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
+	UploadBurstMultiplier   int // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
+	DownloadBurstMultiplier int // Multiplier for download burst bucket vs rate (default: 4)
 
 	// Resource capacity limits (empty = auto-detect from host)
 	DiskLimit       string  // Hard disk limit for DataDir, e.g. "500GB"
@@ -195,7 +196,8 @@ func Load() *Config {
 		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 2.0),
 
 		// Network rate limiting
-		UploadBurstMultiplier: getEnvInt("UPLOAD_BURST_MULTIPLIER", 4),
+		UploadBurstMultiplier:   getEnvInt("UPLOAD_BURST_MULTIPLIER", 4),
+		DownloadBurstMultiplier: getEnvInt("DOWNLOAD_BURST_MULTIPLIER", 4),
 
 		// Resource capacity limits (empty = auto-detect)
 		DiskLimit:       getEnv("DISK_LIMIT", ""),
@@ -262,6 +264,9 @@ func (c *Config) Validate() error {
 	}
 	if c.UploadBurstMultiplier < 1 {
 		return fmt.Errorf("UPLOAD_BURST_MULTIPLIER must be >= 1, got %v", c.UploadBurstMultiplier)
+	}
+	if c.DownloadBurstMultiplier < 1 {
+		return fmt.Errorf("DOWNLOAD_BURST_MULTIPLIER must be >= 1, got %v", c.DownloadBurstMultiplier)
 	}
 	return nil
 }

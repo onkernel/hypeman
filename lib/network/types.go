@@ -8,6 +8,11 @@ import "time"
 // Configurable via UPLOAD_BURST_MULTIPLIER environment variable.
 const DefaultUploadBurstMultiplier = 4
 
+// DefaultDownloadBurstMultiplier is the default multiplier for the TBF burst bucket size.
+// A larger bucket allows faster initial burst before settling to sustained rate.
+// Configurable via DOWNLOAD_BURST_MULTIPLIER environment variable.
+const DefaultDownloadBurstMultiplier = 4
+
 // Network represents a virtual network for instances
 type Network struct {
 	Name      string // "default", "internal"
