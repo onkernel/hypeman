@@ -45,9 +45,11 @@ func mountVolumes(log *Logger, cfg *vmconfig.Config) error {
 // mountVolumeOverlay mounts a volume in overlay mode.
 // Uses the base device as read-only lower layer and overlay device for writable upper layer.
 func mountVolumeOverlay(log *Logger, vol vmconfig.VolumeMount, mountPath string) error {
-	baseName := filepath.Base(vol.Path)
-	baseMount := fmt.Sprintf("/mnt/vol-base-%s", baseName)
-	overlayMount := fmt.Sprintf("/mnt/vol-overlay-%s", baseName)
+	// Use device name for unique mount points (e.g., "vdd" from "/dev/vdd")
+	// This avoids collisions when multiple volumes have the same basename
+	deviceName := filepath.Base(vol.Device)
+	baseMount := fmt.Sprintf("/mnt/vol-base-%s", deviceName)
+	overlayMount := fmt.Sprintf("/mnt/vol-overlay-%s", deviceName)
 
 	// Create mount points
 	if err := os.MkdirAll(baseMount, 0755); err != nil {

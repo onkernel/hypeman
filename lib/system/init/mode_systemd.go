@@ -48,7 +48,8 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	log.Info("systemd", fmt.Sprintf("exec %v", argv))
 
 	// syscall.Exec replaces the current process with the new one
-	err := syscall.Exec(argv[0], argv, os.Environ())
+	// Use buildEnv to include user's environment variables from the image/instance config
+	err := syscall.Exec(argv[0], argv, buildEnv(cfg.Env))
 	if err != nil {
 		log.Error("systemd", fmt.Sprintf("exec %s failed", argv[0]), err)
 		dropToShell()

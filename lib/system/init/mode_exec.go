@@ -103,14 +103,20 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 }
 
 // buildEnv constructs environment variables from the config.
+// User-provided env vars take precedence over defaults.
 func buildEnv(env map[string]string) []string {
-	result := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=/root",
-	}
-
+	// Start with user's environment variables
+	result := make([]string, 0, len(env)+2)
 	for k, v := range env {
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Add defaults only if not already set by user
+	if _, ok := env["PATH"]; !ok {
+		result = append(result, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	if _, ok := env["HOME"]; !ok {
+		result = append(result, "HOME=/root")
 	}
 
 	return result
