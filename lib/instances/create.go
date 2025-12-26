@@ -336,7 +336,7 @@ func (m *manager) createInstance(
 			InstanceName:  req.Name,
 			DownloadBps:   stored.NetworkBandwidthDownload,
 			UploadBps:     stored.NetworkBandwidthUpload,
-			UploadCeilBps: stored.NetworkBandwidthUpload * 2, // Allow burst to 2x guaranteed rate
+			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)

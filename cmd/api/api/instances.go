@@ -116,6 +116,38 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 
+	// Parse network bandwidth limits (0 = auto)
+	var networkBandwidthDownload int64
+	var networkBandwidthUpload int64
+	if request.Body.Network != nil {
+		if request.Body.Network.BandwidthDownload != nil && *request.Body.Network.BandwidthDownload != "" {
+			var bwBytes datasize.ByteSize
+			bwStr := *request.Body.Network.BandwidthDownload
+			bwStr = strings.TrimSuffix(bwStr, "/s")
+			bwStr = strings.TrimSuffix(bwStr, "ps")
+			if err := bwBytes.UnmarshalText([]byte(bwStr)); err != nil {
+				return oapi.CreateInstance400JSONResponse{
+					Code:    "invalid_bandwidth_download",
+					Message: fmt.Sprintf("invalid bandwidth_download format: %v", err),
+				}, nil
+			}
+			networkBandwidthDownload = int64(bwBytes)
+		}
+		if request.Body.Network.BandwidthUpload != nil && *request.Body.Network.BandwidthUpload != "" {
+			var bwBytes datasize.ByteSize
+			bwStr := *request.Body.Network.BandwidthUpload
+			bwStr = strings.TrimSuffix(bwStr, "/s")
+			bwStr = strings.TrimSuffix(bwStr, "ps")
+			if err := bwBytes.UnmarshalText([]byte(bwStr)); err != nil {
+				return oapi.CreateInstance400JSONResponse{
+					Code:    "invalid_bandwidth_upload",
+					Message: fmt.Sprintf("invalid bandwidth_upload format: %v", err),
+				}, nil
+			}
+			networkBandwidthUpload = int64(bwBytes)
+		}
+	}
+
 	// Parse devices (GPU passthrough)
 	var deviceRefs []string
 	if request.Body.Devices != nil {
@@ -163,18 +195,20 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	}
 
 	domainReq := instances.CreateInstanceRequest{
-		Name:           request.Body.Name,
-		Image:          request.Body.Image,
-		Size:           size,
-		HotplugSize:    hotplugSize,
-		OverlaySize:    overlaySize,
-		Vcpus:          vcpus,
-		DiskIOBps:      diskIOBps,
-		Env:            env,
-		NetworkEnabled: networkEnabled,
-		Devices:        deviceRefs,
-		Volumes:        volumes,
-		Hypervisor:     hvType,
+		Name:                     request.Body.Name,
+		Image:                    request.Body.Image,
+		Size:                     size,
+		HotplugSize:              hotplugSize,
+		OverlaySize:              overlaySize,
+		Vcpus:                    vcpus,
+		DiskIOBps:                diskIOBps,
+		NetworkBandwidthDownload: networkBandwidthDownload,
+		NetworkBandwidthUpload:   networkBandwidthUpload,
+		Env:                      env,
+		NetworkEnabled:           networkEnabled,
+		Devices:                  deviceRefs,
+		Volumes:                  volumes,
+		Hypervisor:               hvType,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)

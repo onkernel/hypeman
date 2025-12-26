@@ -30,6 +30,9 @@ type Manager interface {
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
 	ListAllocations(ctx context.Context) ([]Allocation, error)
 	NameExists(ctx context.Context, name string) (bool, error)
+
+	// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
+	GetUploadBurstMultiplier() int
 }
 
 // manager implements the Manager interface
@@ -122,4 +125,13 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 // capacityBps is the total network capacity in bytes per second.
 func (m *manager) SetupHTB(ctx context.Context, capacityBps int64) error {
 	return m.setupBridgeHTB(ctx, m.config.BridgeName, capacityBps)
+}
+
+// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
+// Defaults to 4 if not configured.
+func (m *manager) GetUploadBurstMultiplier() int {
+	if m.config.UploadBurstMultiplier < 1 {
+		return DefaultUploadBurstMultiplier
+	}
+	return m.config.UploadBurstMultiplier
 }

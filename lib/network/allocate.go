@@ -111,8 +111,8 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
-	// Use uploadBps as ceiling too (same as guaranteed rate on restore)
-	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadBps); err != nil {
+	uploadCeilBps := uploadBps * int64(m.GetUploadBurstMultiplier())
+	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadCeilBps); err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")

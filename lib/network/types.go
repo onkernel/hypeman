@@ -2,6 +2,12 @@ package network
 
 import "time"
 
+// DefaultUploadBurstMultiplier is the default multiplier applied to guaranteed upload rate
+// to calculate the burst ceiling. This allows VMs to burst above their guaranteed rate
+// when other VMs are not using their full bandwidth allocation.
+// Configurable via UPLOAD_BURST_MULTIPLIER environment variable.
+const DefaultUploadBurstMultiplier = 4
+
 // Network represents a virtual network for instances
 type Network struct {
 	Name      string // "default", "internal"

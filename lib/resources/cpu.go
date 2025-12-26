@@ -3,6 +3,7 @@ package resources
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -63,7 +64,7 @@ func (c *CPUResource) Allocated(ctx context.Context) (int64, error) {
 func detectCPUCapacity() (int64, error) {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("open /proc/cpuinfo: %w", err)
 	}
 	defer file.Close()
 

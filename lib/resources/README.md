@@ -57,7 +57,7 @@ Bidirectional rate limiting with separate download and upload controls:
 **Default limits:**
 - Proportional to CPU: `(vcpus / cpu_capacity) * network_capacity`
 - Symmetric download/upload by default
-- Upload ceiling = 2x guaranteed rate (allows bursting when bandwidth available)
+- Upload ceiling = 4x guaranteed rate by default (configurable via `UPLOAD_BURST_MULTIPLIER`)
 
 **Capacity tracking:**
 - Uses max(download, upload) per instance since they share physical link

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -112,6 +113,9 @@ type Config struct {
 	OversubNetwork float64 // Network oversubscription ratio
 	OversubDiskIO  float64 // Disk I/O oversubscription ratio
 
+	// Network rate limiting
+	UploadBurstMultiplier int // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
+
 	// Resource capacity limits (empty = auto-detect from host)
 	DiskLimit       string  // Hard disk limit for DataDir, e.g. "500GB"
 	NetworkLimit    string  // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
@@ -190,6 +194,9 @@ func Load() *Config {
 		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
 		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 2.0),
 
+		// Network rate limiting
+		UploadBurstMultiplier: getEnvInt("UPLOAD_BURST_MULTIPLIER", 4),
+
 		// Resource capacity limits (empty = auto-detect)
 		DiskLimit:       getEnv("DISK_LIMIT", ""),
 		NetworkLimit:    getEnv("NETWORK_LIMIT", ""),
@@ -232,4 +239,29 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 		}
 	}
 	return defaultValue
+}
+
+// Validate checks configuration values for correctness.
+// Returns an error if any configuration value is invalid.
+func (c *Config) Validate() error {
+	// Validate oversubscription ratios are positive
+	if c.OversubCPU <= 0 {
+		return fmt.Errorf("OVERSUB_CPU must be positive, got %v", c.OversubCPU)
+	}
+	if c.OversubMemory <= 0 {
+		return fmt.Errorf("OVERSUB_MEMORY must be positive, got %v", c.OversubMemory)
+	}
+	if c.OversubDisk <= 0 {
+		return fmt.Errorf("OVERSUB_DISK must be positive, got %v", c.OversubDisk)
+	}
+	if c.OversubNetwork <= 0 {
+		return fmt.Errorf("OVERSUB_NETWORK must be positive, got %v", c.OversubNetwork)
+	}
+	if c.OversubDiskIO <= 0 {
+		return fmt.Errorf("OVERSUB_DISK_IO must be positive, got %v", c.OversubDiskIO)
+	}
+	if c.UploadBurstMultiplier < 1 {
+		return fmt.Errorf("UPLOAD_BURST_MULTIPLIER must be >= 1, got %v", c.UploadBurstMultiplier)
+	}
+	return nil
 }

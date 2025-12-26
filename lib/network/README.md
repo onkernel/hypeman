@@ -252,7 +252,7 @@ Network bandwidth is limited separately for download and upload directions:
 When not specified in the create request:
 - Both download and upload = `(vcpus / cpu_capacity) * network_capacity`
 - Symmetric by default
-- Upload ceiling = 2x guaranteed rate (allows bursting)
+- Upload ceiling = 4x guaranteed rate (configurable via `UPLOAD_BURST_MULTIPLIER`)
 
 Note: In case of unexpected scenarios like power loss, straggler TAP devices may persist until manual cleanup or host reboot.
 

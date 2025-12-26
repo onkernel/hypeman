@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
@@ -275,7 +276,10 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 
 	// Get disk breakdown
 	var diskBreakdown *DiskBreakdown
-	if disk, ok := m.resources[ResourceDisk].(*DiskResource); ok {
+	m.mu.RLock()
+	diskRes := m.resources[ResourceDisk]
+	m.mu.RUnlock()
+	if disk, ok := diskRes.(*DiskResource); ok {
 		breakdown, err := disk.GetBreakdown(ctx)
 		if err == nil {
 			diskBreakdown = breakdown
@@ -290,7 +294,10 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 
 	if lister != nil {
 		instances, err := lister.ListInstanceAllocations(ctx)
-		if err == nil {
+		if err != nil {
+			log := logger.FromContext(ctx)
+			log.WarnContext(ctx, "failed to list instance allocations for resource status", "error", err)
+		} else {
 			for _, inst := range instances {
 				// Only include active instances
 				if inst.State == "Running" || inst.State == "Paused" || inst.State == "Created" {
