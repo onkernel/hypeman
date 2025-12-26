@@ -1,7 +1,5 @@
 package images
 
-import "strings"
-
 // IsSystemdImage checks if the image's CMD indicates it wants systemd as init.
 // Detection is based on the effective command (entrypoint + cmd), not whether
 // systemd is installed in the image.
@@ -10,17 +8,21 @@ import "strings"
 //   - /sbin/init
 //   - /lib/systemd/systemd
 //   - /usr/lib/systemd/systemd
-//   - Any path ending in /init
 func IsSystemdImage(entrypoint, cmd []string) bool {
-	// Combine to get the actual command that will run
-	effective := append(entrypoint, cmd...)
+	// Combine to get the actual command that will run.
+	// Create a new slice to avoid corrupting caller's backing array.
+	effective := make([]string, 0, len(entrypoint)+len(cmd))
+	effective = append(effective, entrypoint...)
+	effective = append(effective, cmd...)
 	if len(effective) == 0 {
 		return false
 	}
 
 	first := effective[0]
 
-	// Match specific systemd/init paths
+	// Match specific systemd/init paths only.
+	// We intentionally don't match generic */init paths since many entrypoint
+	// scripts are named "init" and would be false positives.
 	systemdPaths := []string{
 		"/sbin/init",
 		"/lib/systemd/systemd",
@@ -30,12 +32,6 @@ func IsSystemdImage(entrypoint, cmd []string) bool {
 		if first == p {
 			return true
 		}
-	}
-
-	// Match any absolute path ending in /init (e.g., /usr/sbin/init)
-	// Only match absolute paths to avoid false positives like "./init"
-	if strings.HasPrefix(first, "/") && strings.HasSuffix(first, "/init") {
-		return true
 	}
 
 	return false

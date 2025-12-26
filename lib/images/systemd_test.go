@@ -38,10 +38,10 @@ func TestIsSystemdImage(t *testing.T) {
 			expected:   true,
 		},
 		{
-			name:       "path ending in /init",
+			name:       "path ending in /init should not match (too broad)",
 			entrypoint: nil,
 			cmd:        []string{"/usr/sbin/init"},
-			expected:   true,
+			expected:   false,
 		},
 		{
 			name:       "regular command (nginx)",
