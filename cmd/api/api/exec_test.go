@@ -47,7 +47,9 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Name:  "exec-test",
 			Image: "docker.io/library/nginx:alpine",
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -185,7 +187,9 @@ func TestExecWithDebianMinimal(t *testing.T) {
 			Name:  "debian-exec-test",
 			Image: "docker.io/library/debian:12-slim",
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

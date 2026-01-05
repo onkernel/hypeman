@@ -18,6 +18,7 @@ import (
 	hypemanotel "github.com/onkernel/hypeman/lib/otel"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/registry"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel"
@@ -45,9 +46,14 @@ func ProvideContext(log *slog.Logger) context.Context {
 	return logger.AddToContext(context.Background(), log)
 }
 
-// ProvideConfig provides the application configuration
+// ProvideConfig provides the application configuration.
+// Panics if configuration is invalid (prevents startup with bad config).
 func ProvideConfig() *config.Config {
-	return config.Load()
+	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		panic(fmt.Sprintf("invalid configuration: %v", err))
+	}
+	return cfg
 }
 
 // ProvidePaths provides the paths abstraction
@@ -138,6 +144,23 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 // ProvideRegistry provides the OCI registry for image push
 func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
 	return registry.New(p, imageManager)
+}
+
+// ProvideResourceManager provides the resource manager for capacity tracking
+func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Paths, imageManager images.Manager, instanceManager instances.Manager, volumeManager volumes.Manager) (*resources.Manager, error) {
+	mgr := resources.NewManager(cfg, p)
+
+	// Managers implement the lister interfaces directly
+	mgr.SetImageLister(imageManager)
+	mgr.SetInstanceLister(instanceManager)
+	mgr.SetVolumeLister(volumeManager)
+
+	// Initialize resource discovery
+	if err := mgr.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
+	return mgr, nil
 }
 
 // ProvideIngressManager provides the ingress manager

@@ -41,8 +41,10 @@ type CPUTopology struct {
 
 // DiskConfig represents a disk attached to the VM
 type DiskConfig struct {
-	Path     string
-	Readonly bool
+	Path       string
+	Readonly   bool
+	IOBps      int64 // Sustained I/O rate limit in bytes/sec (0 = unlimited)
+	IOBurstBps int64 // Burst I/O rate in bytes/sec (0 = same as IOBps)
 }
 
 // NetworkConfig represents a network interface attached to the VM

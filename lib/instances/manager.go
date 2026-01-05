@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
@@ -34,6 +35,9 @@ type Manager interface {
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
+	// ListInstanceAllocations returns resource allocations for all instances.
+	// Used by the resource manager for capacity tracking.
+	ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -280,4 +284,47 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
+}
+
+// ListInstanceAllocations returns resource allocations for all instances.
+// Used by the resource manager for capacity tracking.
+func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	allocations := make([]resources.InstanceAllocation, 0, len(instances))
+	for _, inst := range instances {
+		// Calculate volume bytes and volume overlay bytes separately
+		var volumeBytes int64
+		var volumeOverlayBytes int64
+		for _, vol := range inst.Volumes {
+			// Get actual volume size from volume manager
+			if m.volumeManager != nil {
+				if volume, err := m.volumeManager.GetVolume(ctx, vol.VolumeID); err == nil {
+					volumeBytes += int64(volume.SizeGb) * 1024 * 1024 * 1024
+				}
+			}
+			// Track overlay size separately for overlay volumes
+			if vol.Overlay {
+				volumeOverlayBytes += vol.OverlaySize
+			}
+		}
+
+		allocations = append(allocations, resources.InstanceAllocation{
+			ID:                 inst.Id,
+			Name:               inst.Name,
+			Vcpus:              inst.Vcpus,
+			MemoryBytes:        inst.Size + inst.HotplugSize,
+			OverlayBytes:       inst.OverlaySize,
+			VolumeOverlayBytes: volumeOverlayBytes,
+			NetworkDownloadBps: inst.NetworkBandwidthDownload,
+			NetworkUploadBps:   inst.NetworkBandwidthUpload,
+			State:              string(inst.State),
+			VolumeBytes:        volumeBytes,
+		})
+	}
+
+	return allocations, nil
 }

@@ -287,26 +287,29 @@ func (m *manager) createInstance(
 
 	// 11. Create instance metadata
 	stored := &StoredMetadata{
-		Id:                id,
-		Name:              req.Name,
-		Image:             req.Image,
-		Size:              size,
-		HotplugSize:       hotplugSize,
-		OverlaySize:       overlaySize,
-		Vcpus:             vcpus,
-		Env:               req.Env,
-		NetworkEnabled:    req.NetworkEnabled,
-		CreatedAt:         time.Now(),
-		StartedAt:         nil,
-		StoppedAt:         nil,
-		KernelVersion:     string(kernelVer),
-		HypervisorType:    hvType,
-		HypervisorVersion: hvVersion,
-		SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
-		DataDir:           m.paths.InstanceDir(id),
-		VsockCID:          vsockCID,
-		VsockSocket:       vsockSocket,
-		Devices:           resolvedDeviceIDs,
+		Id:                       id,
+		Name:                     req.Name,
+		Image:                    req.Image,
+		Size:                     size,
+		HotplugSize:              hotplugSize,
+		OverlaySize:              overlaySize,
+		Vcpus:                    vcpus,
+		NetworkBandwidthDownload: req.NetworkBandwidthDownload, // Will be set by caller if using resource manager
+		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
+		DiskIOBps:                req.DiskIOBps,                // Will be set by caller if using resource manager
+		Env:                      req.Env,
+		NetworkEnabled:           req.NetworkEnabled,
+		CreatedAt:                time.Now(),
+		StartedAt:                nil,
+		StoppedAt:                nil,
+		KernelVersion:            string(kernelVer),
+		HypervisorType:           hvType,
+		HypervisorVersion:        hvVersion,
+		SocketPath:               m.paths.InstanceSocket(id, starter.SocketName()),
+		DataDir:                  m.paths.InstanceDir(id),
+		VsockCID:                 vsockCID,
+		VsockSocket:              vsockSocket,
+		Devices:                  resolvedDeviceIDs,
 	}
 
 	// 12. Ensure directories
@@ -326,10 +329,14 @@ func (m *manager) createInstance(
 	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
+		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
+			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
 		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
-			InstanceID:   id,
-			InstanceName: req.Name,
+			InstanceID:    id,
+			InstanceName:  req.Name,
+			DownloadBps:   stored.NetworkBandwidthDownload,
+			UploadBps:     stored.NetworkBandwidthUpload,
+			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)
@@ -598,13 +605,20 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		return hypervisor.VMConfig{}, err
 	}
 
+	// Get disk I/O limits (same for all disks in this VM)
+	ioBps := inst.DiskIOBps
+	burstBps := ioBps * 4 // Burst is 4x sustained
+	if ioBps <= 0 {
+		burstBps = 0
+	}
+
 	disks := []hypervisor.DiskConfig{
 		// Rootfs (from image, read-only)
-		{Path: rootfsPath, Readonly: true},
+		{Path: rootfsPath, Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 		// Overlay disk (writable)
-		{Path: m.paths.InstanceOverlay(inst.Id), Readonly: false},
+		{Path: m.paths.InstanceOverlay(inst.Id), Readonly: false, IOBps: ioBps, IOBurstBps: burstBps},
 		// Config disk (read-only)
-		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true},
+		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 	}
 
 	// Add attached volumes as additional disks
@@ -613,19 +627,25 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		if volAttach.Overlay {
 			// Base volume is always read-only when overlay is enabled
 			disks = append(disks, hypervisor.DiskConfig{
-				Path:     volumePath,
-				Readonly: true,
+				Path:       volumePath,
+				Readonly:   true,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 			// Overlay disk is writable
 			overlayPath := m.paths.InstanceVolumeOverlay(inst.Id, volAttach.VolumeID)
 			disks = append(disks, hypervisor.DiskConfig{
-				Path:     overlayPath,
-				Readonly: false,
+				Path:       overlayPath,
+				Readonly:   false,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 		} else {
 			disks = append(disks, hypervisor.DiskConfig{
-				Path:     volumePath,
-				Readonly: volAttach.Readonly,
+				Path:       volumePath,
+				Readonly:   volAttach.Readonly,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 		}
 	}
