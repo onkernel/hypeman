@@ -16,6 +16,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,7 @@ func newTestService(t *testing.T) *ApiService {
 	networkMgr := network.NewManager(p, cfg, nil)
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil) // 0 = unlimited storage
+	resourceMgr := resources.NewManager(cfg, p)
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
@@ -53,6 +55,7 @@ func newTestService(t *testing.T) *ApiService {
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
 		DeviceManager:   deviceMgr,
+		ResourceManager: resourceMgr,
 	}
 }
 
