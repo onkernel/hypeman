@@ -60,6 +60,11 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 }
 
 func convertResourceStatus(rs resources.ResourceStatus) oapi.ResourceStatus {
+	var source *string
+	if rs.Source != "" {
+		s := string(rs.Source)
+		source = &s
+	}
 	return oapi.ResourceStatus{
 		Type:           string(rs.Type),
 		Capacity:       rs.Capacity,
@@ -67,6 +72,6 @@ func convertResourceStatus(rs resources.ResourceStatus) oapi.ResourceStatus {
 		Allocated:      rs.Allocated,
 		Available:      rs.Available,
 		OversubRatio:   rs.OversubRatio,
-		Source:         &rs.Source,
+		Source:         source,
 	}
 }

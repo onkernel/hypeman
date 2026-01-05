@@ -9,6 +9,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
 )
 
@@ -20,8 +21,9 @@ type NetworkResource struct {
 
 // NewNetworkResource discovers network capacity.
 // If cfg.NetworkLimit is set, uses that; otherwise auto-detects from uplink interface.
-func NewNetworkResource(cfg *config.Config, instLister InstanceLister) (*NetworkResource, error) {
+func NewNetworkResource(ctx context.Context, cfg *config.Config, instLister InstanceLister) (*NetworkResource, error) {
 	var capacity int64
+	log := logger.FromContext(ctx)
 
 	if cfg.NetworkLimit != "" {
 		// Parse configured limit (e.g., "10Gbps", "1GB/s")
@@ -35,11 +37,13 @@ func NewNetworkResource(cfg *config.Config, instLister InstanceLister) (*Network
 		uplink, err := getUplinkInterface(cfg.UplinkInterface)
 		if err != nil {
 			// No uplink found - network limiting disabled
+			log.WarnContext(ctx, "no uplink interface found, network limiting disabled", "error", err)
 			capacity = 0
 		} else {
 			speed, err := getInterfaceSpeed(uplink)
 			if err != nil || speed <= 0 {
 				// Speed detection failed - network limiting disabled
+				log.WarnContext(ctx, "failed to detect interface speed, network limiting disabled", "interface", uplink, "error", err, "speed", speed)
 				capacity = 0
 			} else {
 				// speed is in Mbps, convert to bytes/sec

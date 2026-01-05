@@ -367,7 +367,7 @@ func TestNetworkResource_Allocated(t *testing.T) {
 		},
 	}
 
-	net, err := NewNetworkResource(cfg, mockLister)
+	net, err := NewNetworkResource(context.Background(), cfg, mockLister)
 	require.NoError(t, err)
 
 	allocated, err := net.Allocated(context.Background())

@@ -22,6 +22,14 @@ const (
 	ResourceNetwork ResourceType = "network"
 )
 
+// SourceType identifies how a resource capacity was determined.
+type SourceType string
+
+const (
+	SourceDetected   SourceType = "detected"   // Auto-detected from host hardware
+	SourceConfigured SourceType = "configured" // Explicitly configured by operator
+)
+
 // Resource represents a discoverable and allocatable host resource.
 type Resource interface {
 	// Type returns the resource type identifier.
@@ -42,7 +50,7 @@ type ResourceStatus struct {
 	Allocated      int64        `json:"allocated"`        // Currently allocated
 	Available      int64        `json:"available"`        // EffectiveLimit - Allocated
 	OversubRatio   float64      `json:"oversub_ratio"`    // Oversubscription ratio applied
-	Source         string       `json:"source,omitempty"` // How capacity was determined (e.g., "detected", "configured")
+	Source         SourceType   `json:"source,omitempty"` // How capacity was determined
 }
 
 // AllocationBreakdown shows per-instance resource allocations.
@@ -182,7 +190,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	m.resources[ResourceDisk] = disk
 
 	// Discover network
-	net, err := NewNetworkResource(m.cfg, m.instanceLister)
+	net, err := NewNetworkResource(ctx, m.cfg, m.instanceLister)
 	if err != nil {
 		return fmt.Errorf("discover network: %w", err)
 	}
@@ -243,9 +251,9 @@ func (m *Manager) GetStatus(ctx context.Context, rt ResourceType) (*ResourceStat
 	// Add source info for network
 	if rt == ResourceNetwork {
 		if m.cfg.NetworkLimit != "" {
-			status.Source = "configured"
+			status.Source = SourceConfigured
 		} else {
-			status.Source = "detected"
+			status.Source = SourceDetected
 		}
 	}
 
