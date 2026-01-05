@@ -3,14 +3,18 @@
 # Usage: ./scripts/e2e-build-test.sh
 #
 # Prerequisites:
-#   - API server running (make dev or sudo ./bin/hypeman)
-#   - Builder images built (docker build -t hypeman/builder:latest ...)
+#   - API server running (make dev)
+#   - Builder image imported into Hypeman registry (hirokernel/builder-nodejs20:latest)
 #   - .env file configured
+#
+# Environment variables:
+#   API_URL       - API endpoint (default: http://localhost:8083)
+#   BUILDER_IMAGE - Builder image to check (default: hirokernel/builder-nodejs20:latest)
 
 set -e
 
 # Configuration
-API_URL="${API_URL:-http://localhost:8080}"
+API_URL="${API_URL:-http://localhost:8083}"
 TIMEOUT_POLLS=60
 POLL_INTERVAL=5
 
@@ -20,9 +24,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-log() { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # Check prerequisites
 check_prerequisites() {
@@ -36,13 +40,14 @@ check_prerequisites() {
     fi
     log "✓ API server is running"
 
-    # Check if builder image exists
-    if ! docker images hypeman/builder:latest --format "{{.Repository}}" | grep -q hypeman; then
-        error "Builder image not found"
-        error "Build it with: docker build -t hypeman/builder:latest -f lib/builds/images/nodejs20/Dockerfile ."
-        exit 1
+    # Check if builder image exists (check both local and Docker Hub versions)
+    BUILDER_IMAGE="${BUILDER_IMAGE:-hirokernel/builder-nodejs20:latest}"
+    if ! docker images "$BUILDER_IMAGE" --format "{{.Repository}}" | grep -q .; then
+        warn "Builder image not found locally, will be pulled from registry"
+        warn "Or build it with: make build-builder-nodejs20"
+    else
+        log "✓ Builder image available locally"
     fi
-    log "✓ Builder image available"
 }
 
 # Generate JWT token
@@ -89,6 +94,13 @@ console.log("E2E Build Test - Success!");
 console.log("Built at:", new Date().toISOString());
 EOF
 
+    cat > "$TEST_DIR/Dockerfile" << 'EOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json index.js ./
+CMD ["node", "index.js"]
+EOF
+
     # Create tarball
     TARBALL=$(mktemp --suffix=.tar.gz)
     tar -czvf "$TARBALL" -C "$TEST_DIR" . > /dev/null 2>&1
@@ -104,12 +116,25 @@ submit_build() {
     
     log "Submitting build..."
     
-    RESPONSE=$(curl -s -X POST "$API_URL/builds" \
-        -H "Authorization: Bearer $token" \
-        -F "runtime=nodejs20" \
-        -F "source=@$source" \
-        -F "cache_scope=e2e-test" \
-        -F "timeout_seconds=300")
+    # Extract Dockerfile from source tarball
+    DOCKERFILE_CONTENT=$(tar -xzf "$source" -O ./Dockerfile 2>/dev/null || echo "")
+    
+    if [ -n "$DOCKERFILE_CONTENT" ]; then
+        RESPONSE=$(curl -s -X POST "$API_URL/builds" \
+            -H "Authorization: Bearer $token" \
+            -F "runtime=nodejs20" \
+            -F "source=@$source" \
+            -F "dockerfile=$DOCKERFILE_CONTENT" \
+            -F "cache_scope=e2e-test" \
+            -F "timeout_seconds=300")
+    else
+        RESPONSE=$(curl -s -X POST "$API_URL/builds" \
+            -H "Authorization: Bearer $token" \
+            -F "runtime=nodejs20" \
+            -F "source=@$source" \
+            -F "cache_scope=e2e-test" \
+            -F "timeout_seconds=300")
+    fi
     
     BUILD_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
     
