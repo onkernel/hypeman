@@ -26,6 +26,19 @@ const (
 // when multiple instances request vGPUs concurrently.
 var mdevMu sync.Mutex
 
+// profileMetadata holds static profile info (doesn't change after driver load)
+type profileMetadata struct {
+	TypeName      string // e.g., "nvidia-1145"
+	Name          string // e.g., "NVIDIA L40S-1B"
+	FramebufferMB int
+}
+
+// cachedProfiles holds static profile metadata, loaded once on first access
+var (
+	cachedProfiles     []profileMetadata
+	cachedProfilesOnce sync.Once
+)
+
 // DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
 // These are discovered by scanning /sys/class/mdev_bus/ which contains
 // VFs that can host mdev devices.
@@ -77,48 +90,64 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ListGPUProfilesWithVFs(vfs)
+}
+
+// ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
+// This avoids redundant VF discovery when the caller already has the list.
+func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
 	}
 
-	// Get profile types from first VF
-	firstVF := vfs[0].PCIAddress
+	// Load static profile metadata once (cached indefinitely)
+	cachedProfilesOnce.Do(func() {
+		cachedProfiles = loadProfileMetadata(vfs[0].PCIAddress)
+	})
+
+	// Build result with dynamic availability counts
+	profiles := make([]GPUProfile, 0, len(cachedProfiles))
+	for _, meta := range cachedProfiles {
+		profiles = append(profiles, GPUProfile{
+			Name:          meta.Name,
+			FramebufferMB: meta.FramebufferMB,
+			Available:     countAvailableVFsForProfile(vfs, meta.TypeName),
+		})
+	}
+
+	return profiles, nil
+}
+
+// loadProfileMetadata reads static profile info from sysfs (called once)
+func loadProfileMetadata(firstVF string) []profileMetadata {
 	typesPath := filepath.Join(mdevBusPath, firstVF, "mdev_supported_types")
 	entries, err := os.ReadDir(typesPath)
 	if err != nil {
-		return nil, fmt.Errorf("read mdev_supported_types: %w", err)
+		return nil
 	}
 
-	var profiles []GPUProfile
+	var profiles []profileMetadata
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
-		typeName := entry.Name() // e.g., "nvidia-556"
+		typeName := entry.Name()
 		typeDir := filepath.Join(typesPath, typeName)
 
-		// Read profile name from 'name' file
 		nameBytes, err := os.ReadFile(filepath.Join(typeDir, "name"))
 		if err != nil {
 			continue
 		}
-		profileName := strings.TrimSpace(string(nameBytes))
 
-		// Parse framebuffer size from description file
-		framebufferMB := parseFramebufferFromDescription(typeDir)
-
-		// Count available VFs for this profile type
-		available := countAvailableVFsForProfile(vfs, typeName)
-
-		profiles = append(profiles, GPUProfile{
-			Name:          profileName,
-			FramebufferMB: framebufferMB,
-			Available:     available,
+		profiles = append(profiles, profileMetadata{
+			TypeName:      typeName,
+			Name:          strings.TrimSpace(string(nameBytes)),
+			FramebufferMB: parseFramebufferFromDescription(typeDir),
 		})
 	}
 
-	return profiles, nil
+	return profiles
 }
 
 // parseFramebufferFromDescription extracts framebuffer size from profile description
@@ -161,21 +190,41 @@ func parseFramebufferFromDescription(typeDir string) int {
 	return 0
 }
 
-// countAvailableVFsForProfile counts VFs that can still create the given profile type
+// countAvailableVFsForProfile counts available instances for a profile type.
+// Optimized: all VFs on the same parent GPU have identical profile support,
+// so we only sample one VF per parent instead of reading from every VF.
 func countAvailableVFsForProfile(vfs []VirtualFunction, profileType string) int {
-	count := 0
+	if len(vfs) == 0 {
+		return 0
+	}
+
+	// Group free VFs by parent GPU
+	freeVFsByParent := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
-		// Check available_instances for this profile on this VF
-		availPath := filepath.Join(mdevBusPath, vf.PCIAddress, "mdev_supported_types", profileType, "available_instances")
+		if vf.HasMdev {
+			continue
+		}
+		freeVFsByParent[vf.ParentGPU] = append(freeVFsByParent[vf.ParentGPU], vf)
+	}
+
+	count := 0
+	for _, parentVFs := range freeVFsByParent {
+		if len(parentVFs) == 0 {
+			continue
+		}
+		// Sample just ONE VF per parent - all VFs on same parent have same profiles
+		sampleVF := parentVFs[0]
+		availPath := filepath.Join(mdevBusPath, sampleVF.PCIAddress, "mdev_supported_types", profileType, "available_instances")
 		data, err := os.ReadFile(availPath)
 		if err != nil {
 			continue
 		}
 		instances, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil {
+		if err != nil || instances < 1 {
 			continue
 		}
-		count += instances
+		// Profile is available - count all free VFs on this parent
+		count += len(parentVFs)
 	}
 	return count
 }

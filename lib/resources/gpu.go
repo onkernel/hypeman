@@ -47,8 +47,8 @@ func getVGPUStatus() *GPUResourceStatus {
 		}
 	}
 
-	// Get available profiles
-	profiles, err := devices.ListGPUProfiles()
+	// Get available profiles (reuse VFs to avoid redundant discovery)
+	profiles, err := devices.ListGPUProfilesWithVFs(vfs)
 	if err != nil {
 		profiles = nil
 	}
