@@ -1,12 +1,15 @@
 package builds
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,7 +79,6 @@ type manager struct {
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
 	secretProvider  SecretProvider
-	vsockHandler    *VsockHandler
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
@@ -103,7 +105,6 @@ func NewManager(
 		instanceManager: instanceMgr,
 		volumeManager:   volumeMgr,
 		secretProvider:  secretProvider,
-		vsockHandler:    NewVsockHandler(secretProvider, logger),
 		logger:          logger,
 	}
 
@@ -124,16 +125,10 @@ func NewManager(
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	// Start the vsock handler in a goroutine
-	go func() {
-		if err := m.vsockHandler.ListenAndServe(ctx); err != nil {
-			if ctx.Err() == nil {
-				m.logger.Error("vsock handler error", "error", err)
-			}
-		}
-	}()
-
-	m.logger.Info("build manager started", "vsock_port", BuildAgentVsockPort)
+	// Note: We no longer use a global vsock listener.
+	// Instead, we connect TO each builder VM's vsock socket directly.
+	// This follows the Cloud Hypervisor vsock pattern where host initiates connections.
+	m.logger.Info("build manager started")
 	return nil
 }
 
@@ -381,42 +376,126 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	return result, nil
 }
 
-// waitForResult waits for the build result from the builder agent
+// waitForResult waits for the build result from the builder agent via vsock
 func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (*BuildResult, error) {
-	// Poll for the build result
-	// In a production system, you'd use vsock for real-time communication
-	// For now, we'll poll the instance state and check for completion
+	// Wait a bit for the VM to start and the builder agent to listen on vsock
+	time.Sleep(3 * time.Second)
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	// Try to connect to the builder agent with retries
+	var conn net.Conn
+	var err error
 
-	timeout := time.After(30 * time.Minute) // Maximum wait time
-
-	for {
+	for attempt := 0; attempt < 30; attempt++ {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-timeout:
-			return nil, ErrBuildTimeout
-		case <-ticker.C:
-			// Check if instance is still running
-			current, err := m.instanceManager.GetInstance(ctx, inst.Id)
-			if err != nil {
-				// Instance might have been deleted
-				return nil, fmt.Errorf("check instance: %w", err)
-			}
+		default:
+		}
 
-			// If instance stopped, check for result in logs
-			if current.State == instances.StateStopped || current.State == instances.StateShutdown {
-				// Try to parse result from logs
-				// This is a fallback - ideally vsock would be used
-				return &BuildResult{
-					Success: false,
-					Error:   "builder instance stopped unexpectedly",
-				}, nil
-			}
+		conn, err = m.dialBuilderVsock(inst.VsockSocket)
+		if err == nil {
+			break
+		}
+
+		m.logger.Debug("waiting for builder agent", "attempt", attempt+1, "error", err)
+		time.Sleep(2 * time.Second)
+
+		// Check if instance is still running
+		current, checkErr := m.instanceManager.GetInstance(ctx, inst.Id)
+		if checkErr != nil {
+			return nil, fmt.Errorf("check instance: %w", checkErr)
+		}
+		if current.State == instances.StateStopped || current.State == instances.StateShutdown {
+			return &BuildResult{
+				Success: false,
+				Error:   "builder instance stopped unexpectedly",
+			}, nil
 		}
 	}
+
+	if conn == nil {
+		return nil, fmt.Errorf("failed to connect to builder agent after retries: %w", err)
+	}
+	defer conn.Close()
+
+	m.logger.Info("connected to builder agent", "instance", inst.Id)
+
+	// Send request for result
+	encoder := json.NewEncoder(conn)
+	decoder := json.NewDecoder(conn)
+
+	// Request the build result (this will block until build completes)
+	if err := encoder.Encode(VsockMessage{Type: "get_result"}); err != nil {
+		return nil, fmt.Errorf("send get_result request: %w", err)
+	}
+
+	// Wait for response
+	var response VsockMessage
+	if err := decoder.Decode(&response); err != nil {
+		return nil, fmt.Errorf("read result: %w", err)
+	}
+
+	if response.Type != "build_result" || response.Result == nil {
+		return nil, fmt.Errorf("unexpected response type: %s", response.Type)
+	}
+
+	return response.Result, nil
+}
+
+// dialBuilderVsock connects to a builder VM's vsock socket using Cloud Hypervisor's handshake
+func (m *manager) dialBuilderVsock(vsockSocketPath string) (net.Conn, error) {
+	// Connect to the Cloud Hypervisor vsock Unix socket
+	conn, err := net.DialTimeout("unix", vsockSocketPath, 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
+	}
+
+	// Set deadline for handshake
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set handshake deadline: %w", err)
+	}
+
+	// Perform Cloud Hypervisor vsock handshake
+	// Format: "CONNECT <port>\n" -> "OK <port>\n"
+	handshakeCmd := fmt.Sprintf("CONNECT %d\n", BuildAgentVsockPort)
+	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("send vsock handshake: %w", err)
+	}
+
+	// Read handshake response
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read vsock handshake response: %w", err)
+	}
+
+	// Clear deadline after successful handshake
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("clear deadline: %w", err)
+	}
+
+	response = strings.TrimSpace(response)
+	if !strings.HasPrefix(response, "OK ") {
+		conn.Close()
+		return nil, fmt.Errorf("vsock handshake failed: %s", response)
+	}
+
+	return &bufferedConn{Conn: conn, reader: reader}, nil
+}
+
+// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
+// data from the handshake is properly drained before reading from the connection
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }
 
 // updateStatus updates the build status
