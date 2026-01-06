@@ -4,12 +4,12 @@
 #
 # Prerequisites:
 #   - API server running (make dev)
-#   - Builder image imported into Hypeman registry (hirokernel/builder-nodejs20:latest)
+#   - Generic builder image imported into Hypeman registry
 #   - .env file configured
 #
 # Environment variables:
 #   API_URL       - API endpoint (default: http://localhost:8083)
-#   BUILDER_IMAGE - Builder image to check (default: hirokernel/builder-nodejs20:latest)
+#   BUILDER_IMAGE - Builder image to check (default: hypeman/builder:latest)
 
 set -e
 
@@ -40,11 +40,11 @@ check_prerequisites() {
     fi
     log "✓ API server is running"
 
-    # Check if builder image exists (check both local and Docker Hub versions)
-    BUILDER_IMAGE="${BUILDER_IMAGE:-hirokernel/builder-nodejs20:latest}"
+    # Check if generic builder image exists
+    BUILDER_IMAGE="${BUILDER_IMAGE:-hypeman/builder:latest}"
     if ! docker images "$BUILDER_IMAGE" --format "{{.Repository}}" | grep -q .; then
-        warn "Builder image not found locally, will be pulled from registry"
-        warn "Or build it with: make build-builder-nodejs20"
+        warn "Builder image not found locally"
+        warn "Build it with: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile ."
     else
         log "✓ Builder image available locally"
     fi
@@ -73,10 +73,12 @@ generate_token() {
     echo ""
 }
 
-# Create test source
+# Create test source with Dockerfile
+# The generic builder requires a Dockerfile to be provided
 create_test_source() {
     TEST_DIR=$(mktemp -d)
     
+    # Application code
     cat > "$TEST_DIR/package.json" << 'EOF'
 {
   "name": "e2e-test-app",
@@ -94,6 +96,8 @@ console.log("E2E Build Test - Success!");
 console.log("Built at:", new Date().toISOString());
 EOF
 
+    # Dockerfile is REQUIRED for the generic builder
+    # Users control their runtime version here
     cat > "$TEST_DIR/Dockerfile" << 'EOF'
 FROM node:20-alpine
 WORKDIR /app
@@ -120,20 +124,17 @@ submit_build() {
     DOCKERFILE_CONTENT=$(tar -xzf "$source" -O ./Dockerfile 2>/dev/null || echo "")
     
     if [ -n "$DOCKERFILE_CONTENT" ]; then
+        # Dockerfile found in source - pass it explicitly for reliability
         RESPONSE=$(curl -s -X POST "$API_URL/builds" \
             -H "Authorization: Bearer $token" \
-            -F "runtime=nodejs20" \
             -F "source=@$source" \
             -F "dockerfile=$DOCKERFILE_CONTENT" \
             -F "cache_scope=e2e-test" \
             -F "timeout_seconds=300")
     else
-        RESPONSE=$(curl -s -X POST "$API_URL/builds" \
-            -H "Authorization: Bearer $token" \
-            -F "runtime=nodejs20" \
-            -F "source=@$source" \
-            -F "cache_scope=e2e-test" \
-            -F "timeout_seconds=300")
+        # No Dockerfile in source - will fail if not provided
+        error "No Dockerfile found in source tarball"
+        exit 1
     fi
     
     BUILD_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
