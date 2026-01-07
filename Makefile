@@ -206,17 +206,12 @@ test: ensure-ch-binaries ensure-caddy-binaries build-embedded
 gen-jwt: $(GODOTENV)
 	@$(GODOTENV) -f .env go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
 
-# Build the nodejs20 builder image for builds
-build-builder-nodejs20:
-	docker build -t hypeman/builder-nodejs20:latest -f lib/builds/images/nodejs20/Dockerfile .
-	docker tag hypeman/builder-nodejs20:latest hypeman/builder:latest
+# Build the generic builder image for builds
+build-builder:
+	docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
 
-# Build the python312 builder image for builds
-build-builder-python312:
-	docker build -t hypeman/builder-python312:latest -f lib/builds/images/python312/Dockerfile .
-
-# Build all builder images
-build-builders: build-builder-nodejs20 build-builder-python312
+# Alias for backwards compatibility
+build-builders: build-builder
 
 # Run E2E build system test (requires server running: make dev)
 e2e-build-test:

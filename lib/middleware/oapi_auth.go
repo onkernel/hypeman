@@ -342,6 +342,31 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Reject registry tokens - they should not be used for API authentication.
+			// Registry tokens have specific claims that user tokens don't have.
+			// This provides defense-in-depth even though BuildKit isolates build containers.
+			if _, hasRepos := claims["repos"]; hasRepos {
+				log.DebugContext(r.Context(), "rejected registry token used for API auth")
+				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
+				return
+			}
+			if _, hasScope := claims["scope"]; hasScope {
+				log.DebugContext(r.Context(), "rejected registry token used for API auth")
+				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
+				return
+			}
+			if _, hasBuildID := claims["build_id"]; hasBuildID {
+				log.DebugContext(r.Context(), "rejected registry token used for API auth")
+				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
+				return
+			}
+			// Also reject tokens with "builder-" prefix in subject as an extra safeguard
+			if sub, ok := claims["sub"].(string); ok && strings.HasPrefix(sub, "builder-") {
+				log.DebugContext(r.Context(), "rejected builder token used for API auth", "sub", sub)
+				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
+				return
+			}
+
 			// Extract user ID from claims and add to context
 			var userID string
 			if sub, ok := claims["sub"].(string); ok {

@@ -459,17 +459,38 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 		return nil, fmt.Errorf("send get_result request: %w", err)
 	}
 
-	// Wait for response
-	var response VsockMessage
-	if err := decoder.Decode(&response); err != nil {
-		return nil, fmt.Errorf("read result: %w", err)
+	// Use a goroutine for decoding so we can respect context cancellation.
+	// json.Decoder.Decode() doesn't respect context, so we need to close the
+	// connection to unblock it when the context is cancelled.
+	type decodeResult struct {
+		response VsockMessage
+		err      error
 	}
+	resultCh := make(chan decodeResult, 1)
 
-	if response.Type != "build_result" || response.Result == nil {
-		return nil, fmt.Errorf("unexpected response type: %s", response.Type)
+	go func() {
+		var response VsockMessage
+		err := decoder.Decode(&response)
+		resultCh <- decodeResult{response: response, err: err}
+	}()
+
+	// Wait for either the result or context cancellation
+	select {
+	case <-ctx.Done():
+		// Close the connection to unblock the decoder goroutine
+		conn.Close()
+		// Drain the result channel to avoid goroutine leak
+		<-resultCh
+		return nil, ctx.Err()
+	case dr := <-resultCh:
+		if dr.err != nil {
+			return nil, fmt.Errorf("read result: %w", dr.err)
+		}
+		if dr.response.Type != "build_result" || dr.response.Result == nil {
+			return nil, fmt.Errorf("unexpected response type: %s", dr.response.Type)
+		}
+		return dr.response.Result, nil
 	}
-
-	return response.Result, nil
 }
 
 // dialBuilderVsock connects to a builder VM's vsock socket using Cloud Hypervisor's handshake
