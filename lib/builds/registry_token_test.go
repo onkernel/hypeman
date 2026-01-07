@@ -109,5 +109,3 @@ func TestRegistryTokenClaims_IsPushAllowed(t *testing.T) {
 		assert.True(t, claims.IsPullAllowed())
 	})
 }
-
-

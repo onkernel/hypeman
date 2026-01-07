@@ -104,5 +104,3 @@ func (c *RegistryTokenClaims) IsPushAllowed() bool {
 func (c *RegistryTokenClaims) IsPullAllowed() bool {
 	return c.Scope == "push" || c.Scope == "pull"
 }
-
-

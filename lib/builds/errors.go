@@ -47,4 +47,3 @@ func IsSupportedRuntime(runtime string) bool {
 	// or no runtime at all. Kept for backward compatibility.
 	return true
 }
-
