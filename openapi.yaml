@@ -662,22 +662,20 @@ components:
     
     CreateBuildRequest:
       type: object
-      required: [runtime]
       properties:
         runtime:
           type: string
-          enum: [nodejs20, python312]
-          description: Build runtime
-          example: nodejs20
+          description: "(Deprecated) Build runtime hint. No longer required - the generic builder accepts any Dockerfile."
+          example: generic
+        dockerfile:
+          type: string
+          description: "Dockerfile content. Required if not included in the source tarball. The Dockerfile specifies the runtime (e.g., FROM node:20-alpine)."
         base_image_digest:
           type: string
           description: Optional pinned base image digest for reproducibility
         cache_scope:
           type: string
           description: Tenant-specific cache key prefix for isolation
-        dockerfile:
-          type: string
-          description: Optional custom Dockerfile content
         build_args:
           type: object
           additionalProperties:
@@ -688,7 +686,7 @@ components:
     
     Build:
       type: object
-      required: [id, status, runtime, created_at]
+      required: [id, status, created_at]
       properties:
         id:
           type: string
@@ -698,8 +696,8 @@ components:
           $ref: "#/components/schemas/BuildStatus"
         runtime:
           type: string
-          description: Build runtime
-          example: nodejs20
+          description: "(Deprecated) Build runtime hint"
+          example: generic
         queue_position:
           type: integer
           description: Position in build queue (only when status is queued)
@@ -1836,26 +1834,24 @@ paths:
             schema:
               type: object
               required:
-                - runtime
                 - source
               properties:
-                runtime:
-                  type: string
-                  enum: [nodejs20, python312]
-                  description: Build runtime
                 source:
                   type: string
                   format: binary
-                  description: Source tarball (tar.gz)
+                  description: Source tarball (tar.gz) containing application code and optionally a Dockerfile
+                dockerfile:
+                  type: string
+                  description: Dockerfile content. Required if not included in the source tarball.
+                runtime:
+                  type: string
+                  description: "(Deprecated) Build runtime hint. No longer required."
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest
                 cache_scope:
                   type: string
                   description: Tenant-specific cache key prefix
-                dockerfile:
-                  type: string
-                  description: Optional custom Dockerfile content
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)

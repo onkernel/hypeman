@@ -90,11 +90,10 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		part.Close()
 	}
 
+	// Note: runtime is deprecated and optional. The generic builder accepts any Dockerfile.
+	// If runtime is empty, we use "generic" as a placeholder for logging/caching purposes.
 	if runtime == "" {
-		return oapi.CreateBuild400JSONResponse{
-			Code:    "invalid_request",
-			Message: "runtime is required",
-		}, nil
+		runtime = "generic"
 	}
 
 	if len(sourceData) == 0 {
@@ -103,6 +102,9 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			Message: "source is required",
 		}, nil
 	}
+
+	// Note: Dockerfile validation happens in the builder agent.
+	// It will check if Dockerfile is in the source tarball or provided via dockerfile parameter.
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
@@ -123,8 +125,14 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	if err != nil {
 		switch {
 		case errors.Is(err, builds.ErrInvalidRuntime):
+			// Deprecated: Runtime validation no longer occurs, but kept for compatibility
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "invalid_runtime",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, builds.ErrDockerfileRequired):
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "dockerfile_required",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, builds.ErrInvalidSource):
@@ -225,10 +233,15 @@ func (s *ApiService) GetBuildLogs(ctx context.Context, request oapi.GetBuildLogs
 
 // buildToOAPI converts a domain Build to OAPI Build
 func buildToOAPI(b *builds.Build) oapi.Build {
+	var runtimePtr *string
+	if b.Runtime != "" {
+		runtimePtr = &b.Runtime
+	}
+
 	oapiBuild := oapi.Build{
 		Id:            b.ID,
 		Status:        oapi.BuildStatus(b.Status),
-		Runtime:       b.Runtime,
+		Runtime:       runtimePtr,
 		QueuePosition: b.QueuePosition,
 		ImageDigest:   b.ImageDigest,
 		ImageRef:      b.ImageRef,

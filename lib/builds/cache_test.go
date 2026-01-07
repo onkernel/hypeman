@@ -43,10 +43,13 @@ func TestCacheKeyGenerator_GenerateCacheKey(t *testing.T) {
 			wantErr:     true,
 		},
 		{
-			name:        "invalid runtime",
+			name:        "any runtime is accepted",
 			tenantScope: "tenant",
 			runtime:     "ruby",
-			wantErr:     true,
+			lockfileHashes: map[string]string{
+				"Gemfile.lock": "abc123",
+			},
+			wantPrefix: "localhost:8080/cache/tenant/ruby/",
 		},
 		{
 			name:        "scope with special chars",

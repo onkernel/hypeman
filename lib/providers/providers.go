@@ -196,6 +196,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		BuilderImage:        cfg.BuilderImage,
 		RegistryURL:         cfg.RegistryURL,
 		DefaultTimeout:      cfg.BuildTimeout,
+		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}
 
 	// Apply defaults if not set

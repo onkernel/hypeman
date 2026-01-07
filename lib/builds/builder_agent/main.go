@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,7 @@ type BuildConfig struct {
 	Runtime         string            `json:"runtime"`
 	BaseImageDigest string            `json:"base_image_digest,omitempty"`
 	RegistryURL     string            `json:"registry_url"`
+	RegistryToken   string            `json:"registry_token,omitempty"`
 	CacheScope      string            `json:"cache_scope,omitempty"`
 	SourcePath      string            `json:"source_path"`
 	Dockerfile      string            `json:"dockerfile,omitempty"`
@@ -212,7 +214,18 @@ func runBuildProcess() {
 		})
 		return
 	}
-	log.Printf("Job: %s, Runtime: %s", config.JobID, config.Runtime)
+	log.Printf("Job: %s", config.JobID)
+
+	// Setup registry authentication before running the build
+	if err := setupRegistryAuth(config.RegistryURL, config.RegistryToken); err != nil {
+		setResult(BuildResult{
+			Success:    false,
+			Error:      fmt.Sprintf("setup registry auth: %v", err),
+			Logs:       logs.String(),
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+		return
+	}
 
 	// Setup timeout context
 	ctx := context.Background()
@@ -229,22 +242,21 @@ func runBuildProcess() {
 		log.Printf("Warning: Secrets requested but vsock secret fetching not yet implemented in new model")
 	}
 
-	// Generate Dockerfile if not provided
-	dockerfile := config.Dockerfile
-	if dockerfile == "" {
-		dockerfile, err = generateDockerfile(config)
-		if err != nil {
+	// Ensure Dockerfile exists (either in source or provided via config)
+	dockerfilePath := filepath.Join(config.SourcePath, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
+		// Check if Dockerfile was provided in config
+		if config.Dockerfile == "" {
 			setResult(BuildResult{
 				Success:    false,
-				Error:      fmt.Sprintf("generate dockerfile: %v", err),
+				Error:      "Dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball",
 				Logs:       logs.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
 		}
-		// Write generated Dockerfile
-		dockerfilePath := filepath.Join(config.SourcePath, "Dockerfile")
-		if err := os.WriteFile(dockerfilePath, []byte(dockerfile), 0644); err != nil {
+		// Write provided Dockerfile to source directory
+		if err := os.WriteFile(dockerfilePath, []byte(config.Dockerfile), 0644); err != nil {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      fmt.Sprintf("write dockerfile: %v", err),
@@ -253,7 +265,9 @@ func runBuildProcess() {
 			})
 			return
 		}
-		log.Println("Generated Dockerfile for runtime:", config.Runtime)
+		log.Println("Using Dockerfile from config")
+	} else {
+		log.Println("Using Dockerfile from source")
 	}
 
 	// Compute provenance
@@ -309,81 +323,47 @@ func loadConfig() (*BuildConfig, error) {
 	return &config, nil
 }
 
-func generateDockerfile(config *BuildConfig) (string, error) {
-	switch {
-	case strings.HasPrefix(config.Runtime, "nodejs"):
-		return generateNodeDockerfile(config)
-	case strings.HasPrefix(config.Runtime, "python"):
-		return generatePythonDockerfile(config)
-	default:
-		return "", fmt.Errorf("unsupported runtime: %s", config.Runtime)
-	}
-}
-
-func generateNodeDockerfile(config *BuildConfig) (string, error) {
-	version := strings.TrimPrefix(config.Runtime, "nodejs")
-	baseImage := config.BaseImageDigest
-	if baseImage == "" {
-		baseImage = fmt.Sprintf("node:%s-alpine", version)
+// setupRegistryAuth creates a Docker config.json with the registry token for authentication.
+// BuildKit uses this file to authenticate when pushing images.
+func setupRegistryAuth(registryURL, token string) error {
+	if token == "" {
+		log.Println("No registry token provided, skipping auth setup")
+		return nil
 	}
 
-	// Detect lockfile
-	lockfile := "package-lock.json"
-	installCmd := "npm ci"
-	if _, err := os.Stat(filepath.Join(config.SourcePath, "pnpm-lock.yaml")); err == nil {
-		lockfile = "pnpm-lock.yaml"
-		installCmd = "corepack enable && pnpm install --frozen-lockfile"
-	} else if _, err := os.Stat(filepath.Join(config.SourcePath, "yarn.lock")); err == nil {
-		lockfile = "yarn.lock"
-		installCmd = "yarn install --frozen-lockfile"
+	// Docker config format expects base64-encoded "username:password" or just the token
+	// For bearer tokens, we use the token directly as the "auth" value
+	// Format: base64(token + ":") - empty password
+	authValue := base64.StdEncoding.EncodeToString([]byte(token + ":"))
+
+	// Create the Docker config structure
+	dockerConfig := map[string]interface{}{
+		"auths": map[string]interface{}{
+			registryURL: map[string]string{
+				"auth": authValue,
+			},
+		},
 	}
 
-	return fmt.Sprintf(`FROM %s
-
-WORKDIR /app
-
-COPY package.json %s ./
-
-RUN %s
-
-COPY . .
-
-CMD ["node", "index.js"]
-`, baseImage, lockfile, installCmd), nil
-}
-
-func generatePythonDockerfile(config *BuildConfig) (string, error) {
-	version := strings.TrimPrefix(config.Runtime, "python")
-	baseImage := config.BaseImageDigest
-	if baseImage == "" {
-		baseImage = fmt.Sprintf("python:%s-slim", version)
+	configData, err := json.MarshalIndent(dockerConfig, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal docker config: %w", err)
 	}
 
-	reqPath := filepath.Join(config.SourcePath, "requirements.txt")
-	hasHashes := false
-	if data, err := os.ReadFile(reqPath); err == nil {
-		hasHashes = strings.Contains(string(data), "--hash=")
+	// Ensure ~/.docker directory exists
+	dockerDir := "/home/builder/.docker"
+	if err := os.MkdirAll(dockerDir, 0700); err != nil {
+		return fmt.Errorf("create docker config dir: %w", err)
 	}
 
-	var installCmd string
-	if hasHashes {
-		installCmd = "pip install --require-hashes --only-binary :all: -r requirements.txt"
-	} else {
-		installCmd = "pip install --no-cache-dir -r requirements.txt"
+	// Write config.json
+	configPath := filepath.Join(dockerDir, "config.json")
+	if err := os.WriteFile(configPath, configData, 0600); err != nil {
+		return fmt.Errorf("write docker config: %w", err)
 	}
 
-	return fmt.Sprintf(`FROM %s
-
-WORKDIR /app
-
-COPY requirements.txt ./
-
-RUN %s
-
-COPY . .
-
-CMD ["python", "main.py"]
-`, baseImage, installCmd), nil
+	log.Printf("Registry auth configured for %s", registryURL)
+	return nil
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
@@ -468,7 +448,7 @@ func computeProvenance(config *BuildConfig) BuildProvenance {
 		BaseImageDigest:  config.BaseImageDigest,
 		LockfileHashes:   make(map[string]string),
 		BuildkitVersion:  getBuildkitVersion(),
-		ToolchainVersion: getToolchainVersion(config.Runtime),
+		ToolchainVersion: getToolchainVersion(),
 	}
 
 	// Hash lockfiles
@@ -533,14 +513,8 @@ func getBuildkitVersion() string {
 	return strings.TrimSpace(string(out))
 }
 
-func getToolchainVersion(runtime string) string {
-	switch {
-	case strings.HasPrefix(runtime, "nodejs"):
-		out, _ := exec.Command("node", "--version").Output()
-		return strings.TrimSpace(string(out))
-	case strings.HasPrefix(runtime, "python"):
-		out, _ := exec.Command("python", "--version").Output()
-		return strings.TrimSpace(string(out))
-	}
-	return "unknown"
+func getToolchainVersion() string {
+	// Generic builder doesn't have runtime-specific toolchains
+	// The actual runtime version is determined by the user's Dockerfile
+	return "generic"
 }

@@ -43,9 +43,8 @@ func (g *CacheKeyGenerator) GenerateCacheKey(tenantScope, runtime string, lockfi
 		return nil, fmt.Errorf("tenant scope is required for caching")
 	}
 
-	if !IsSupportedRuntime(runtime) {
-		return nil, fmt.Errorf("unsupported runtime: %s", runtime)
-	}
+	// Note: Runtime is no longer validated as the generic builder accepts any runtime.
+	// The runtime is still used as part of the cache key for separation.
 
 	// Normalize tenant scope (alphanumeric + hyphen only)
 	normalizedScope := normalizeCacheScope(tenantScope)

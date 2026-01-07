@@ -14,10 +14,12 @@ const (
 	StatusCancelled = "cancelled"
 )
 
-// Runtime constants for supported build runtimes
+// Runtime constants (deprecated - kept for backward compatibility)
+// The generic builder system no longer requires runtime selection.
+// Users provide their own Dockerfile which specifies the runtime.
 const (
-	RuntimeNodeJS20  = "nodejs20"
-	RuntimePython312 = "python312"
+	RuntimeNodeJS20  = "nodejs20"  // Deprecated
+	RuntimePython312 = "python312" // Deprecated
 )
 
 // Build represents a source-to-image build job
@@ -38,8 +40,13 @@ type Build struct {
 
 // CreateBuildRequest represents a request to create a new build
 type CreateBuildRequest struct {
-	// Runtime specifies the build runtime (e.g., nodejs20, python312)
-	Runtime string `json:"runtime"`
+	// Runtime is deprecated. Kept for backward compatibility but no longer required.
+	// The generic builder system accepts any Dockerfile.
+	Runtime string `json:"runtime,omitempty"`
+
+	// Dockerfile content. Required if not included in the source tarball.
+	// The Dockerfile specifies the runtime (e.g., FROM node:20-alpine).
+	Dockerfile string `json:"dockerfile,omitempty"`
 
 	// BaseImageDigest optionally pins the base image by digest for reproducibility
 	BaseImageDigest string `json:"base_image_digest,omitempty"`
@@ -52,9 +59,6 @@ type CreateBuildRequest struct {
 
 	// CacheScope is the tenant-specific cache key prefix for isolation
 	CacheScope string `json:"cache_scope,omitempty"`
-
-	// Dockerfile is an optional custom Dockerfile (if not provided, one is generated)
-	Dockerfile string `json:"dockerfile,omitempty"`
 
 	// BuildArgs are ARG values to pass to the Dockerfile
 	BuildArgs map[string]string `json:"build_args,omitempty"`
@@ -119,8 +123,11 @@ type BuildConfig struct {
 	// JobID is the build job identifier
 	JobID string `json:"job_id"`
 
-	// Runtime is the build runtime (nodejs20, python312)
-	Runtime string `json:"runtime"`
+	// Runtime is deprecated, kept for logging purposes only
+	Runtime string `json:"runtime,omitempty"`
+
+	// Dockerfile content (if not provided in source tarball)
+	Dockerfile string `json:"dockerfile,omitempty"`
 
 	// BaseImageDigest optionally pins the base image
 	BaseImageDigest string `json:"base_image_digest,omitempty"`
@@ -128,14 +135,15 @@ type BuildConfig struct {
 	// RegistryURL is where to push the built image
 	RegistryURL string `json:"registry_url"`
 
+	// RegistryToken is a short-lived JWT granting push access to specific repositories.
+	// The builder agent uses this token to authenticate with the registry.
+	RegistryToken string `json:"registry_token,omitempty"`
+
 	// CacheScope is the tenant-specific cache key prefix
 	CacheScope string `json:"cache_scope,omitempty"`
 
 	// SourcePath is the path to source in the guest (typically /src)
 	SourcePath string `json:"source_path"`
-
-	// Dockerfile is an optional custom Dockerfile content
-	Dockerfile string `json:"dockerfile,omitempty"`
 
 	// BuildArgs are ARG values for the Dockerfile
 	BuildArgs map[string]string `json:"build_args,omitempty"`

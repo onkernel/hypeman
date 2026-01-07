@@ -60,6 +60,10 @@ type Config struct {
 
 	// DefaultTimeout is the default build timeout in seconds
 	DefaultTimeout int
+
+	// RegistrySecret is the secret used to sign registry access tokens
+	// This should be the same secret used by the registry middleware
+	RegistrySecret string
 }
 
 // DefaultConfig returns the default build manager configuration
@@ -79,6 +83,7 @@ type manager struct {
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
 	secretProvider  SecretProvider
+	tokenGenerator  *RegistryTokenGenerator
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
@@ -105,6 +110,7 @@ func NewManager(
 		instanceManager: instanceMgr,
 		volumeManager:   volumeMgr,
 		secretProvider:  secretProvider,
+		tokenGenerator:  NewRegistryTokenGenerator(config.RegistrySecret),
 		logger:          logger,
 	}
 
@@ -176,12 +182,29 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, fmt.Errorf("store source: %w", err)
 	}
 
+	// Generate scoped registry token for this build
+	// Token grants push access to the build output repo and cache repo
+	allowedRepos := []string{fmt.Sprintf("builds/%s", id)}
+	if req.CacheScope != "" {
+		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
+	}
+	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
+	if tokenTTL < 30*time.Minute {
+		tokenTTL = 30 * time.Minute // Minimum 30 minutes
+	}
+	registryToken, err := m.tokenGenerator.GeneratePushToken(id, allowedRepos, tokenTTL)
+	if err != nil {
+		deleteBuild(m.paths, id)
+		return nil, fmt.Errorf("generate registry token: %w", err)
+	}
+
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
 		JobID:           id,
 		Runtime:         req.Runtime,
 		BaseImageDigest: req.BaseImageDigest,
 		RegistryURL:     m.config.RegistryURL,
+		RegistryToken:   registryToken,
 		CacheScope:      req.CacheScope,
 		SourcePath:      "/src",
 		Dockerfile:      req.Dockerfile,
@@ -247,6 +270,13 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 			m.metrics.RecordBuild(ctx, "failed", req.Runtime, duration)
 		}
 		return
+	}
+
+	// Save build logs (regardless of success/failure)
+	if result.Logs != "" {
+		if err := appendLog(m.paths, id, []byte(result.Logs)); err != nil {
+			m.logger.Warn("failed to save build logs", "id", id, "error", err)
+		}
 	}
 
 	if !result.Success {

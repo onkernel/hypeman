@@ -22,7 +22,7 @@ The build system provides source-to-image builds inside ephemeral Cloud Hypervis
 │  ├─────────────────────────────────────────────────────────────┤│
 │  │  Builder Agent                                               ││
 │  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  ││
-│  │  │ Load Config │→ │ Generate     │→ │ Run BuildKit       │  ││
+│  │  │ Load Config │→ │ Read User's  │→ │ Run BuildKit       │  ││
 │  │  │ /config/    │  │ Dockerfile   │  │ (buildctl)         │  ││
 │  │  └─────────────┘  └──────────────┘  └────────────────────┘  ││
 │  │                                              │               ││
@@ -96,20 +96,6 @@ Orchestrates the build lifecycle:
 
 **Important**: The `Start()` method must be called to start the vsock handler for builder communication.
 
-### Dockerfile Templates (`templates/`)
-
-Auto-generates Dockerfiles based on runtime and detected lockfiles:
-
-| Runtime | Package Managers |
-|---------|-----------------|
-| `nodejs20` | npm, yarn, pnpm |
-| `python312` | pip, poetry, pipenv |
-
-```go
-gen, _ := templates.GetGenerator("nodejs20")
-dockerfile, _ := gen.Generate(sourceDir, baseImageDigest)
-```
-
 ### Cache System (`cache.go`)
 
 Registry-based caching with tenant isolation:
@@ -131,10 +117,12 @@ Guest binary that runs inside builder VMs:
 
 1. Reads config from `/config/build.json`
 2. Fetches secrets from host via vsock (if any)
-3. Generates Dockerfile (if not provided)
+3. Uses user-provided Dockerfile (from source or config)
 4. Runs `buildctl-daemonless.sh` with cache and insecure registry flags
 5. Computes provenance (lockfile hashes, source hash)
 6. Reports result back via vsock
+
+**Note**: The agent requires a Dockerfile to be provided. It can be included in the source tarball or passed via the `dockerfile` config parameter.
 
 **Key Details**:
 - Config path: `/config/build.json`
@@ -155,12 +143,23 @@ Guest binary that runs inside builder VMs:
 ### Submit Build Example
 
 ```bash
+# Option 1: Dockerfile in source tarball
 curl -X POST http://localhost:8083/builds \
   -H "Authorization: Bearer $TOKEN" \
-  -F "runtime=nodejs20" \
   -F "source=@source.tar.gz" \
   -F "cache_scope=tenant-123" \
   -F "timeout_seconds=300"
+
+# Option 2: Dockerfile as parameter
+curl -X POST http://localhost:8083/builds \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "source=@source.tar.gz" \
+  -F "dockerfile=FROM node:20-alpine
+WORKDIR /app
+COPY . .
+RUN npm ci
+CMD [\"node\", \"index.js\"]" \
+  -F "cache_scope=tenant-123"
 ```
 
 ### Response
@@ -169,8 +168,6 @@ curl -X POST http://localhost:8083/builds \
 {
   "id": "abc123",
   "status": "queued",
-  "runtime": "nodejs20",
-  "queue_position": 1,
   "created_at": "2025-01-15T10:00:00Z"
 }
 ```
@@ -215,11 +212,11 @@ queued → building → pushing → ready
 
 ## Builder Images
 
-Builder images are in `images/`:
+The generic builder image is in `images/generic/`:
 
-- `base/Dockerfile` - BuildKit base
-- `nodejs20/Dockerfile` - Node.js 20 + BuildKit + agent
-- `python312/Dockerfile` - Python 3.12 + BuildKit + agent
+- `generic/Dockerfile` - Minimal Alpine + BuildKit + agent (runtime-agnostic)
+
+The generic builder does not include any runtime (Node.js, Python, etc.). Users provide their own Dockerfile which specifies the runtime. BuildKit pulls the runtime as part of the build process.
 
 ### Required Components
 
@@ -234,22 +231,17 @@ Builder images must include:
 | `builder-agent` | Built from `builder_agent/main.go` | Hypeman agent |
 | `fuse-overlayfs` | apk/apt | Overlay filesystem support |
 
-### Build and Push (OCI Format)
-
-Builder images must be pushed in OCI format (not Docker v2 manifest):
+### Build and Push
 
 ```bash
-# Build with OCI output
-docker buildx build --platform linux/amd64 \
-  -t myregistry/builder-nodejs20:latest \
-  -f lib/builds/images/nodejs20/Dockerfile \
-  --output type=oci,dest=/tmp/builder.tar \
+# Build the generic builder image
+docker build \
+  -t hypeman/builder:latest \
+  -f lib/builds/images/generic/Dockerfile \
   .
 
-# Extract and push with crane
-mkdir -p /tmp/oci-builder
-tar -xf /tmp/builder.tar -C /tmp/oci-builder
-crane push /tmp/oci-builder myregistry/builder-nodejs20:latest
+# Push to your registry
+docker push hypeman/builder:latest
 ```
 
 ### Environment Variables
@@ -339,12 +331,17 @@ go test ./lib/builds/templates/... -v
      -d '{"name": "hirokernel/builder-nodejs20:latest"}'
    ```
 
-3. **Create test source**:
+3. **Create test source with Dockerfile**:
    ```bash
    mkdir -p /tmp/test-app
    echo '{"name": "test", "version": "1.0.0", "dependencies": {}}' > /tmp/test-app/package.json
-   echo '{"lockfileVersion": 3, "packages": {}}' > /tmp/test-app/package-lock.json
    echo 'console.log("Hello!");' > /tmp/test-app/index.js
+   cat > /tmp/test-app/Dockerfile << 'EOF'
+   FROM node:20-alpine
+   WORKDIR /app
+   COPY package.json index.js ./
+   CMD ["node", "index.js"]
+   EOF
    tar -czf /tmp/source.tar.gz -C /tmp/test-app .
    ```
 
@@ -352,7 +349,6 @@ go test ./lib/builds/templates/... -v
    ```bash
    curl -X POST http://localhost:8083/builds \
      -H "Authorization: Bearer $TOKEN" \
-     -F "runtime=nodejs20" \
      -F "source=@/tmp/source.tar.gz"
    ```
 

@@ -1,226 +1,299 @@
-# Builder Images
+# Generic Builder Image
 
-Builder images run inside Hypeman microVMs to execute source-to-image builds using BuildKit.
+The generic builder image runs inside Hypeman microVMs to execute source-to-image builds using BuildKit. It is runtime-agnostic - users provide their own Dockerfile which specifies the runtime.
 
-## Available Images
+## Architecture
 
-| Image | Runtime | Use Case |
-|-------|---------|----------|
-| `nodejs20/` | Node.js 20.x | npm, yarn, pnpm projects |
-| `python312/` | Python 3.12 | pip, poetry, pipenv projects |
-| `base/` | None | Base BuildKit image (for custom runtimes) |
-
-## Creating a Builder Image
-
-### Step 1: Create Dockerfile
-
-Create a new directory under `images/` with a Dockerfile:
-
-```dockerfile
-# Use BuildKit rootless as base for build tools
-FROM moby/buildkit:rootless AS buildkit
-
-# Use your runtime base image
-FROM node:20-alpine
-
-# Install required dependencies
-RUN apk add --no-cache \
-    fuse-overlayfs \
-    shadow \
-    newuidmap \
-    ca-certificates
-
-# Create non-root builder user
-RUN adduser -D -u 1000 builder && \
-    mkdir -p /home/builder/.local/share/buildkit && \
-    chown -R builder:builder /home/builder
-
-# Copy BuildKit binaries (these specific paths are required)
-COPY --from=buildkit /usr/bin/buildctl /usr/bin/buildctl
-COPY --from=buildkit /usr/bin/buildctl-daemonless.sh /usr/bin/buildctl-daemonless.sh
-COPY --from=buildkit /usr/bin/buildkitd /usr/bin/buildkitd
-COPY --from=buildkit /usr/bin/buildkit-runc /usr/bin/runc
-
-# Copy the builder agent (built during image build)
-COPY builder-agent /usr/bin/builder-agent
-
-# Set environment variables
-ENV HOME=/home/builder
-ENV XDG_RUNTIME_DIR=/home/builder/.local/share
-ENV BUILDKITD_FLAGS=""
-
-# Run as builder user
-USER builder
-WORKDIR /home/builder
-
-# The agent is the entrypoint
-ENTRYPOINT ["/usr/bin/builder-agent"]
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Generic Builder Image (~50MB)                               │
+│                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │ BuildKit    │  │ builder-    │  │ Minimal Alpine      │ │
+│  │ (daemonless)│  │ agent       │  │ (git, curl, fuse)   │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+                    User's Dockerfile
+                            │
+                            ▼
+            ┌───────────────────────────────┐
+            │ FROM node:20-alpine           │
+            │ FROM python:3.12-slim         │
+            │ FROM rust:1.75                │
+            │ FROM golang:1.22              │
+            │ ... any base image            │
+            └───────────────────────────────┘
 ```
 
-### Step 2: Required Components
+## Key Benefits
 
-Every builder image **must** include:
+- **One image to maintain** - No more runtime-specific builder images
+- **Any Dockerfile works** - Node.js, Python, Rust, Go, Java, Ruby, etc.
+- **Smaller footprint** - ~50MB vs 200MB+ for runtime-specific images
+- **User-controlled versions** - Users specify their runtime version in their Dockerfile
 
-| Component | Path | Source | Purpose |
-|-----------|------|--------|---------|
-| `buildctl` | `/usr/bin/buildctl` | `moby/buildkit:rootless` | BuildKit CLI |
-| `buildctl-daemonless.sh` | `/usr/bin/buildctl-daemonless.sh` | `moby/buildkit:rootless` | Runs buildkitd + buildctl together |
-| `buildkitd` | `/usr/bin/buildkitd` | `moby/buildkit:rootless` | BuildKit daemon |
-| `runc` | `/usr/bin/runc` | `moby/buildkit:rootless` (as `buildkit-runc`) | Container runtime |
-| `builder-agent` | `/usr/bin/builder-agent` | Built from Go source | Hypeman orchestration agent |
-| `fuse-overlayfs` | System package | apk/apt | Overlay filesystem for rootless builds |
+## Directory Structure
 
-### Step 3: Build the Agent
+```
+images/
+└── generic/
+    └── Dockerfile    # The generic builder image
+```
 
-The builder agent must be compiled for the target architecture:
+## Building the Generic Builder Image
+
+> **Important**: Hypeman uses `umoci` for OCI image manipulation, which requires images
+> to have **OCI manifest format** (not Docker v2 format). You must use `docker buildx`
+> with the `oci-mediatypes=true` option.
+
+### Prerequisites
+
+1. **Docker Buildx** with a container builder:
+   ```bash
+   # Create a buildx builder (if you don't have one)
+   docker buildx create --name ocibuilder --use
+   ```
+
+2. **Docker Hub login** (or your registry):
+   ```bash
+   docker login
+   ```
+
+### 1. Build and Push with OCI Format
 
 ```bash
 # From repository root
-cd lib/builds/builder_agent
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o builder-agent .
-```
-
-### Step 4: Build the Image (OCI Format)
-
-**Important**: Hypeman uses `umoci` to extract images, which requires OCI format (not Docker v2 manifest).
-
-```bash
-# From repository root
-
-# Build agent first
-cd lib/builds/builder_agent
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o builder-agent .
-cd ../../..
-
-# Build image with OCI output
-docker buildx build --platform linux/amd64 \
-  -t yourregistry/builder-nodejs20:latest \
-  -f lib/builds/images/nodejs20/Dockerfile \
-  --output type=oci,dest=/tmp/builder.tar \
+docker buildx build \
+  --platform linux/amd64 \
+  --output "type=registry,oci-mediatypes=true" \
+  --tag hirokernel/builder-generic:latest \
+  -f lib/builds/images/generic/Dockerfile \
   .
 ```
 
-### Step 5: Push to Registry
+This command:
+- Builds for `linux/amd64` platform
+- Uses `oci-mediatypes=true` to create OCI manifests (required for Hypeman)
+- Pushes directly to the registry
 
-Use `crane` (from go-containerregistry) to push in OCI format:
+### 2. Verify the Manifest Format
 
 ```bash
-# Extract the OCI tarball
-mkdir -p /tmp/oci-builder
-tar -xf /tmp/builder.tar -C /tmp/oci-builder
-
-# Push to registry
-crane push /tmp/oci-builder yourregistry/builder-nodejs20:latest
+# Should show "application/vnd.oci.image.index.v1+json"
+docker manifest inspect hirokernel/builder-generic:latest | head -5
 ```
 
-### Step 6: Configure Hypeman
+Expected output:
+```json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  ...
+}
+```
+
+### 3. Import into Hypeman
+
+```bash
+# Generate a token
+TOKEN=$(make gen-jwt | tail -1)
+
+# Import the image
+curl -X POST http://localhost:8083/images \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "hirokernel/builder-generic:latest"}'
+
+# Wait for import to complete
+curl http://localhost:8083/images/docker.io%2Fhirokernel%2Fbuilder-generic:latest \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 4. Configure Hypeman
 
 Set the builder image in your `.env`:
 
 ```bash
-BUILDER_IMAGE=yourregistry/builder-nodejs20:latest
+BUILDER_IMAGE=hirokernel/builder-generic:latest
 ```
 
-## Testing Your Builder Image
+### Why OCI Format is Required
 
-### 1. Pull the Image into Hypeman
+| Build Method | Manifest Type | Works with Hypeman? |
+|--------------|---------------|---------------------|
+| `docker build` | Docker v2 (`application/vnd.docker.distribution.manifest.v2+json`) | ❌ No |
+| `docker buildx --output type=docker` | Docker v2 | ❌ No |
+| `docker buildx --output type=registry,oci-mediatypes=true` | OCI (`application/vnd.oci.image.index.v1+json`) | ✅ Yes |
+
+Hypeman uses `umoci` to extract and convert OCI images to ext4 disk images for microVMs.
+`umoci` strictly requires OCI-format manifests and cannot parse Docker v2 manifests.
+
+### Building for Local Testing (without pushing)
+
+If you need to test locally before pushing:
 
 ```bash
-TOKEN=$(make gen-jwt | tail -1)
-curl -X POST http://localhost:8083/images \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "yourregistry/builder-nodejs20:latest"}'
+# Build and load to local Docker (for testing only - won't work with Hypeman import)
+docker build \
+  -t hypeman/builder:local \
+  -f lib/builds/images/generic/Dockerfile \
+  .
+
+# Run locally to test
+docker run --rm hypeman/builder:local --help
 ```
 
-### 2. Submit a Test Build
+**Note**: Images built with `docker build` cannot be imported into Hypeman directly.
+You must rebuild with `docker buildx --output type=registry,oci-mediatypes=true`
+before deploying to Hypeman.
+
+## Usage
+
+### Submitting a Build
+
+Users must provide a Dockerfile either:
+1. **In the source tarball** - Include a `Dockerfile` in the root of the source
+2. **As a parameter** - Pass `dockerfile` content in the API request
 
 ```bash
-# Create minimal test source
-mkdir -p /tmp/test-app
-echo '{"name": "test", "version": "1.0.0"}' > /tmp/test-app/package.json
-echo '{"lockfileVersion": 3, "packages": {}}' > /tmp/test-app/package-lock.json
-echo 'console.log("Hello from test build!");' > /tmp/test-app/index.js
-tar -czf /tmp/source.tar.gz -C /tmp/test-app .
+# Option 1: Dockerfile in source tarball
+tar -czf source.tar.gz Dockerfile package.json index.js
 
-# Submit build
 curl -X POST http://localhost:8083/builds \
   -H "Authorization: Bearer $TOKEN" \
-  -F "runtime=nodejs20" \
-  -F "source=@/tmp/source.tar.gz"
+  -F "source=@source.tar.gz"
+
+# Option 2: Dockerfile as parameter
+curl -X POST http://localhost:8083/builds \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "source=@source.tar.gz" \
+  -F "dockerfile=FROM node:20-alpine
+WORKDIR /app
+COPY . .
+RUN npm ci
+CMD [\"node\", \"index.js\"]"
 ```
 
-### 3. Check Build Status
+### Example Dockerfiles
 
-```bash
-BUILD_ID="<id-from-response>"
-curl http://localhost:8083/builds/$BUILD_ID \
-  -H "Authorization: Bearer $TOKEN" | jq
+**Node.js:**
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+CMD ["node", "index.js"]
 ```
 
-### 4. Debug Failed Builds
-
-If the build fails, check the builder instance logs:
-
-```bash
-# Find the builder instance
-curl http://localhost:8083/instances \
-  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.name | startswith("builder-"))'
-
-# Get its logs
-INSTANCE_ID="<builder-instance-id>"
-curl "http://localhost:8083/instances/$INSTANCE_ID/logs" \
-  -H "Authorization: Bearer $TOKEN"
+**Python:**
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD ["python", "main.py"]
 ```
+
+**Go:**
+```dockerfile
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o main .
+
+FROM alpine:3.21
+COPY --from=builder /app/main /main
+CMD ["/main"]
+```
+
+**Rust:**
+```dockerfile
+FROM rust:1.75 AS builder
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+COPY --from=builder /app/target/release/myapp /myapp
+CMD ["/myapp"]
+```
+
+## Required Components
+
+The generic builder image contains:
+
+| Component | Path | Purpose |
+|-----------|------|---------|
+| `buildctl` | `/usr/bin/buildctl` | BuildKit CLI |
+| `buildctl-daemonless.sh` | `/usr/bin/buildctl-daemonless.sh` | Runs buildkitd + buildctl |
+| `buildkitd` | `/usr/bin/buildkitd` | BuildKit daemon |
+| `runc` | `/usr/bin/runc` | Container runtime |
+| `builder-agent` | `/usr/bin/builder-agent` | Hypeman orchestration |
+| `fuse-overlayfs` | System package | Rootless overlay filesystem |
+| `git` | System package | Git operations (for go mod, etc.) |
+| `curl` | System package | Network utilities |
 
 ## Environment Variables
-
-Builder images should configure these environment variables:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
 | `HOME` | `/home/builder` | User home directory |
 | `XDG_RUNTIME_DIR` | `/home/builder/.local/share` | Runtime directory for BuildKit |
-| `BUILDKITD_FLAGS` | `""` (empty) | BuildKit daemon flags (cgroups are mounted in VM) |
+| `BUILDKITD_FLAGS` | `""` (empty) | BuildKit daemon flags |
 
 ## MicroVM Runtime Environment
 
-When the builder image runs inside a Hypeman microVM:
+When the builder runs inside a Hypeman microVM:
 
 1. **Volumes mounted**:
    - `/src` - Source code (read-write)
    - `/config/build.json` - Build configuration (read-only)
 
-2. **Cgroups**: Mounted by init script at `/sys/fs/cgroup` (v2 preferred, v1 fallback)
+2. **Cgroups**: Mounted at `/sys/fs/cgroup`
 
 3. **Network**: Access to host registry via gateway IP `10.102.0.1`
 
-4. **Registry**: HTTP (insecure) - agent adds `registry.insecure=true` flag
+4. **Registry**: Uses HTTP (insecure) with `registry.insecure=true`
 
 ## Troubleshooting
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| `runc: not found` | Missing or wrong path | Copy `buildkit-runc` to `/usr/bin/runc` |
-| `no cgroup mount found` | Cgroups not available | Ensure VM init script mounts cgroups |
-| `fuse-overlayfs: not found` | Missing package | Add `fuse-overlayfs` to image |
-| `permission denied` on buildkit | Wrong user/permissions | Run as non-root user with proper home dir |
-| `can't enable NoProcessSandbox without Rootless` | Wrong BUILDKITD_FLAGS | Set `BUILDKITD_FLAGS=""` |
+| `manifest data is not v1.Manifest` | Image built with Docker v2 format | Rebuild with `docker buildx --output type=registry,oci-mediatypes=true` |
+| Image import stuck on `pending`/`failed` | Manifest format incompatible | Check manifest format with `docker manifest inspect` |
+| `Dockerfile required` | No Dockerfile in source or parameter | Include Dockerfile in tarball or pass as parameter |
+| `401 Unauthorized` during push | Registry token issue | Check builder agent logs, verify token generation |
+| `runc: not found` | BuildKit binaries missing | Rebuild the builder image |
+| `no cgroup mount found` | Cgroups not available | Check VM init script |
+| `fuse-overlayfs: not found` | Missing package | Rebuild image with fuse-overlayfs |
+| `permission denied` | Wrong user/permissions | Ensure running as `builder` user |
 
-## Adding a New Runtime
+### Debugging Image Import Issues
 
-To add support for a new runtime (e.g., Ruby, Go):
+```bash
+# Check image status
+cat ~/hypeman_data_dir/images/docker.io/hirokernel/builder-generic/*/metadata.json | jq .
 
-1. Create `images/ruby32/Dockerfile` based on the template above
-2. Add Dockerfile template in `templates/templates.go`:
-   ```go
-   var ruby32Template = `FROM {{.BaseImage}}
-   COPY . /app
-   WORKDIR /app
-   RUN bundle install
-   CMD ["ruby", "app.rb"]
-   `
-   ```
-3. Register the generator in `templates/templates.go`
-4. Build and push the builder image
-5. Test with a sample project
+# Check OCI cache for manifest format
+cat ~/hypeman_data_dir/system/oci-cache/index.json | jq '.manifests[-1]'
+
+# Verify image on Docker Hub has OCI format
+skopeo inspect --raw docker://hirokernel/builder-generic:latest | head -5
+```
+
+If you see `application/vnd.docker.distribution.manifest.v2+json`, the image needs to be rebuilt with OCI format.
+
+## Migration from Runtime-Specific Images
+
+If you were using `nodejs20` or `python312` builder images:
+
+1. **Update your build requests** to include a Dockerfile
+2. **The `runtime` parameter is deprecated** - you can still send it but it's ignored
+3. **Configure `BUILDER_IMAGE`** to use the generic builder
