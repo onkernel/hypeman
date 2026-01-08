@@ -377,7 +377,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
 		"--local", "dockerfile=" + config.SourcePath,
-		"--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true", outputRef),
+		"--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true", outputRef),
 		"--metadata-file", "/tmp/build-metadata.json",
 	}
 

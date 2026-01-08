@@ -177,15 +177,116 @@ get_logs() {
         -H "Authorization: Bearer $token"
 }
 
+# Import an image into Hypeman's image store
+import_image() {
+    local token="$1"
+    local image_ref="$2"
+    
+    log "Importing image into Hypeman..."
+    log "  Image: $image_ref"
+    
+    # Request image import
+    RESPONSE=$(curl -s -X POST "$API_URL/images" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"$image_ref\"}")
+    
+    IMAGE_NAME=$(echo "$RESPONSE" | jq -r '.name // empty')
+    IMAGE_STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
+    
+    if [ -z "$IMAGE_NAME" ]; then
+        error "Failed to import image"
+        echo "$RESPONSE" | jq .
+        return 1
+    fi
+    
+    log "Image import started: $IMAGE_NAME (status: $IMAGE_STATUS)"
+    
+    # Extract the build ID for filtering (last part of the path before the tag)
+    # e.g., "10.102.0.1:8083/builds/abc123:latest" -> "abc123"
+    BUILD_ID=$(echo "$IMAGE_NAME" | sed -E 's|.*/([^/:]+)(:[^/]*)?$|\1|')
+    
+    # Wait for image to be ready
+    # Look specifically for the image with matching name (not just build ID, since there may be docker.io versions)
+    log "Waiting for image conversion..."
+    for i in $(seq 1 60); do
+        # Query the list endpoint and filter by exact name prefix
+        RESPONSE=$(curl -s "$API_URL/images" \
+            -H "Authorization: Bearer $token" | \
+            jq --arg name "$IMAGE_NAME" '[.[] | select(.name == $name)] | .[0] // empty')
+        
+        if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "null" ]; then
+            echo -ne "\r  Waiting for image... (poll $i/60)..."
+            sleep 2
+            continue
+        fi
+        
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
+        IMAGE_ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+        FOUND_NAME=$(echo "$RESPONSE" | jq -r '.name // empty')
+        
+        case "$STATUS" in
+            "ready")
+                log "✓ Image is ready: $FOUND_NAME"
+                # Export the actual image name for use in instance creation
+                echo "$FOUND_NAME"
+                return 0
+                ;;
+            "failed")
+                error "Image import failed: $IMAGE_ERROR"
+                if echo "$IMAGE_ERROR" | grep -q "mediatype"; then
+                    error "  Hint: The builder may be pushing Docker-format images instead of OCI format."
+                    error "  Ensure the builder image has been updated with oci-mediatypes=true"
+                fi
+                return 1
+                ;;
+            "pending"|"pulling"|"converting")
+                echo -ne "\r  Status: $STATUS (poll $i/60)..."
+                ;;
+            *)
+                warn "Unknown status: $STATUS"
+                ;;
+        esac
+        
+        sleep 2
+    done
+    echo ""
+    
+    error "Image import timed out"
+    return 1
+}
+
 # Create and run an instance from the built image
 run_built_image() {
     local token="$1"
     local image_ref="$2"
     
-    log "Creating instance from built image..."
+    log "Running built image as VM..."
     log "  Image: $image_ref"
     
+    # First, import the image into Hypeman's image store
+    IMPORTED_NAME=$(import_image "$token" "$image_ref")
+    if [ $? -ne 0 ]; then
+        error "Failed to import image"
+        error ""
+        error "  This typically happens when the builder outputs Docker-format images"
+        error "  instead of OCI format. The builder agent needs oci-mediatypes=true"
+        error "  in the BuildKit output configuration."
+        error ""
+        error "  To fix: rebuild the builder image and deploy it:"
+        error "    make build-builder"
+        error "    docker push <your-registry>/builder:latest"
+        return 1
+    fi
+    
+    # Use the imported image name (may differ from the original reference)
+    if [ -n "$IMPORTED_NAME" ]; then
+        log "Using imported image: $IMPORTED_NAME"
+        image_ref="$IMPORTED_NAME"
+    fi
+    
     # Create instance
+    log "Creating instance..."
     RESPONSE=$(curl -s -X POST "$API_URL/instances" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
