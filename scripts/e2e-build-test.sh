@@ -207,13 +207,14 @@ import_image() {
     BUILD_ID=$(echo "$IMAGE_NAME" | sed -E 's|.*/([^/:]+)(:[^/]*)?$|\1|')
     
     # Wait for image to be ready
-    # Look specifically for the image with matching name (not just build ID, since there may be docker.io versions)
+    # The API may normalize image names (e.g., 10.102.0.1:8083/builds/xxx -> docker.io/builds/xxx)
+    # So we need to check for both the original name and the normalized version
     log "Waiting for image conversion..."
     for i in $(seq 1 60); do
-        # Query the list endpoint and filter by exact name prefix
+        # Query the list endpoint and filter by build ID (works regardless of registry prefix)
         RESPONSE=$(curl -s "$API_URL/images" \
             -H "Authorization: Bearer $token" | \
-            jq --arg name "$IMAGE_NAME" '[.[] | select(.name == $name)] | .[0] // empty')
+            jq --arg buildid "$BUILD_ID" '[.[] | select(.name | contains($buildid))] | .[0] // empty')
         
         if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "null" ]; then
             echo -ne "\r  Waiting for image... (poll $i/60)..." >&2
@@ -317,7 +318,10 @@ run_built_image() {
         
         STATE=$(echo "$RESPONSE" | jq -r '.state')
         
-        case "$STATE" in
+        # Convert state to lowercase for comparison (API may return "Running" or "running")
+        STATE_LOWER=$(echo "$STATE" | tr '[:upper:]' '[:lower:]')
+        
+        case "$STATE_LOWER" in
             "running")
                 log "✓ Instance is running"
                 break
@@ -337,8 +341,8 @@ run_built_image() {
     done
     echo ""
     
-    if [ "$STATE" != "running" ]; then
-        error "Instance did not start in time"
+    if [ "$STATE_LOWER" != "running" ]; then
+        error "Instance did not start in time (final state: $STATE)"
         cleanup_instance "$token" "$INSTANCE_ID"
         return 1
     fi
