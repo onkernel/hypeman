@@ -2111,6 +2111,12 @@ paths:
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
+                secrets:
+                  type: string
+                  description: |
+                    JSON array of secret references to inject during build.
+                    Each object has "id" (required) for use with --mount=type=secret,id=...
+                    Example: [{"id": "npm_token"}, {"id": "github_token"}]
       responses:
         202:
           description: Build created and queued

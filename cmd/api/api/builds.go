@@ -43,6 +43,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	var sourceData []byte
 	var baseImageDigest, cacheScope, dockerfile string
 	var timeoutSeconds int
+	var secrets []builds.SecretRef
 
 	for {
 		part, err := request.Body.NextPart()
@@ -103,6 +104,20 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			if v, err := strconv.Atoi(string(data)); err == nil {
 				timeoutSeconds = v
 			}
+		case "secrets":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read secrets field",
+				}, nil
+			}
+			if err := json.Unmarshal(data, &secrets); err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "secrets must be a JSON array of {\"id\": \"...\", \"env_var\": \"...\"} objects",
+				}, nil
+			}
 		}
 		part.Close()
 	}
@@ -122,6 +137,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		BaseImageDigest: baseImageDigest,
 		CacheScope:      cacheScope,
 		Dockerfile:      dockerfile,
+		Secrets:         secrets,
 	}
 
 	// Apply timeout if provided

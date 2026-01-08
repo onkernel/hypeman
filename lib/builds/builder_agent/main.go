@@ -169,6 +169,20 @@ func handleHostConnection(conn net.Conn) {
 				close(secretsReady)
 			})
 
+			// Wait for build to complete and send result to host
+			go func() {
+				<-buildDone
+
+				buildResultLock.Lock()
+				result := buildResult
+				buildResultLock.Unlock()
+
+				log.Printf("Build completed, sending result to host")
+				if err := encoder.Encode(VsockMessage{Type: "build_result", Result: result}); err != nil {
+					log.Printf("Failed to send build result: %v", err)
+				}
+			}()
+
 		case "get_result":
 			// Host is asking for the build result
 			// Wait for build to complete if not done yet
