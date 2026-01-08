@@ -73,7 +73,8 @@ func TestRegistryPushAndConvert(t *testing.T) {
 	t.Log("Push successful!")
 
 	// Wait for image to be converted
-	imageName := "test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/test/alpine@" + digest.String()
 	imgResp := waitForImageReady(t, svc, imageName, 60*time.Second)
 	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
 }
@@ -124,7 +125,8 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for image to be ready
-	imageName := "test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/test/alpine@" + digest.String()
 	waitForImageReady(t, svc, imageName, 60*time.Second)
 
 	// Create instance with pushed image
@@ -362,7 +364,8 @@ func TestRegistryTagPush(t *testing.T) {
 	t.Log("Push successful!")
 
 	// The image should be registered with the computed digest, not the tag
-	imageName := "tag-test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/tag-test/alpine@" + digest.String()
 	waitForImageReady(t, svc, imageName, 60*time.Second)
 
 	// Verify image appears in ListImages (GET /images)
@@ -415,7 +418,8 @@ func TestRegistryDockerV2ManifestConversion(t *testing.T) {
 
 	// Wait for image to be converted
 	// The server converts Docker v2 to OCI format internally, resulting in a different digest
-	imgResp := waitForImageReady(t, svc, "dockerv2-test/alpine:v1", 60*time.Second)
+	// Include serverHost since our registry now stores images with the full host
+	imgResp := waitForImageReady(t, svc, serverHost+"/dockerv2-test/alpine:v1", 60*time.Second)
 	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
 	assert.NotEmpty(t, imgResp.Digest, "image should have digest")
 }
