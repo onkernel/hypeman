@@ -21,25 +21,25 @@ func TestCacheKeyGenerator_GenerateCacheKey(t *testing.T) {
 		{
 			name:        "valid nodejs build",
 			tenantScope: "tenant-abc",
-			runtime:     "nodejs20",
+			runtime:     "nodejs",
 			lockfileHashes: map[string]string{
 				"package-lock.json": "abc123",
 			},
-			wantPrefix: "localhost:8080/cache/tenant-abc/nodejs20/",
+			wantPrefix: "localhost:8080/cache/tenant-abc/nodejs/",
 		},
 		{
 			name:        "valid python build",
 			tenantScope: "my-team",
-			runtime:     "python312",
+			runtime:     "python",
 			lockfileHashes: map[string]string{
 				"requirements.txt": "def456",
 			},
-			wantPrefix: "localhost:8080/cache/my-team/python312/",
+			wantPrefix: "localhost:8080/cache/my-team/python/",
 		},
 		{
 			name:        "empty tenant scope",
 			tenantScope: "",
-			runtime:     "nodejs20",
+			runtime:     "nodejs",
 			wantErr:     true,
 		},
 		{
@@ -54,11 +54,11 @@ func TestCacheKeyGenerator_GenerateCacheKey(t *testing.T) {
 		{
 			name:        "scope with special chars",
 			tenantScope: "My Team!@#$%",
-			runtime:     "nodejs20",
+			runtime:     "nodejs",
 			lockfileHashes: map[string]string{
 				"package-lock.json": "abc",
 			},
-			wantPrefix: "localhost:8080/cache/my-team/nodejs20/",
+			wantPrefix: "localhost:8080/cache/my-team/nodejs/",
 		},
 	}
 
@@ -79,17 +79,17 @@ func TestCacheKeyGenerator_GenerateCacheKey(t *testing.T) {
 
 func TestCacheKey_Args(t *testing.T) {
 	key := &CacheKey{
-		Reference:    "localhost:8080/cache/tenant/nodejs20/abc123",
+		Reference:    "localhost:8080/cache/tenant/nodejs/abc123",
 		TenantScope:  "tenant",
-		Runtime:      "nodejs20",
+		Runtime:      "nodejs",
 		LockfileHash: "abc123",
 	}
 
 	importArg := key.ImportCacheArg()
-	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs20/abc123", importArg)
+	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs/abc123", importArg)
 
 	exportArg := key.ExportCacheArg()
-	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs20/abc123,mode=max", exportArg)
+	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs/abc123,mode=max", exportArg)
 }
 
 func TestValidateCacheScope(t *testing.T) {
@@ -169,7 +169,7 @@ func TestGetCacheKeyFromConfig(t *testing.T) {
 	importArg, exportArg, err := GetCacheKeyFromConfig(
 		"localhost:8080",
 		"my-tenant",
-		"nodejs20",
+		"nodejs",
 		map[string]string{"package-lock.json": "abc"},
 	)
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestGetCacheKeyFromConfig(t *testing.T) {
 	importArg, exportArg, err = GetCacheKeyFromConfig(
 		"localhost:8080",
 		"", // Empty = no caching
-		"nodejs20",
+		"nodejs",
 		nil,
 	)
 	require.NoError(t, err)

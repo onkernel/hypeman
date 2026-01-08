@@ -79,6 +79,21 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 			return fmt.Errorf("invalid token")
 		}
 
+		// Reject registry tokens - they should not be used for API authentication.
+		// Registry tokens have specific claims (repos, scope, build_id) that user tokens don't have.
+		if _, hasRepos := claims["repos"]; hasRepos {
+			log.DebugContext(ctx, "rejected registry token used for API auth")
+			return fmt.Errorf("invalid token type")
+		}
+		if _, hasScope := claims["scope"]; hasScope {
+			log.DebugContext(ctx, "rejected registry token used for API auth")
+			return fmt.Errorf("invalid token type")
+		}
+		if _, hasBuildID := claims["build_id"]; hasBuildID {
+			log.DebugContext(ctx, "rejected registry token used for API auth")
+			return fmt.Errorf("invalid token type")
+		}
+
 		// Extract user ID from claims and add to context
 		var userID string
 		if sub, ok := claims["sub"].(string); ok {
@@ -167,17 +182,17 @@ func isRegistryPath(path string) bool {
 }
 
 // isInternalVMRequest checks if the request is from an internal VM network (10.102.x.x)
-// This is used as a fallback for builder VMs that don't have token auth yet
+// This is used as a fallback for builder VMs that don't have token auth yet.
+//
+// SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
+// as those can be spoofed by attackers to bypass authentication.
 func isInternalVMRequest(r *http.Request) bool {
-	// Get the real client IP (RealIP middleware sets X-Real-IP)
-	ip := r.Header.Get("X-Real-IP")
-	if ip == "" {
-		// Fall back to RemoteAddr
-		ip = r.RemoteAddr
-		// Remove port if present
-		if idx := strings.LastIndex(ip, ":"); idx != -1 {
-			ip = ip[:idx]
-		}
+	// Use only RemoteAddr - never trust client-supplied headers for auth decisions
+	ip := r.RemoteAddr
+
+	// RemoteAddr is "IP:port" format, extract just the IP
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
 	}
 
 	// Check if it's from the VM network (10.102.x.x)

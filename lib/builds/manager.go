@@ -140,12 +140,7 @@ func (m *manager) Start(ctx context.Context) error {
 
 // CreateBuild starts a new build job
 func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourceData []byte) (*Build, error) {
-	m.logger.Info("creating build", "runtime", req.Runtime)
-
-	// Validate runtime
-	if !IsSupportedRuntime(req.Runtime) {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRuntime, req.Runtime)
-	}
+	m.logger.Info("creating build")
 
 	// Apply defaults to build policy
 	policy := req.BuildPolicy
@@ -166,7 +161,6 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	meta := &buildMetadata{
 		ID:        id,
 		Status:    StatusQueued,
-		Runtime:   req.Runtime,
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}
@@ -201,7 +195,6 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
 		JobID:           id,
-		Runtime:         req.Runtime,
 		BaseImageDigest: req.BaseImageDigest,
 		RegistryURL:     m.config.RegistryURL,
 		RegistryToken:   registryToken,
@@ -267,7 +260,7 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		errMsg := err.Error()
 		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, nil, &durationMS)
 		if m.metrics != nil {
-			m.metrics.RecordBuild(ctx, "failed", req.Runtime, duration)
+			m.metrics.RecordBuild(ctx, "failed", duration)
 		}
 		return
 	}
@@ -283,7 +276,7 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		m.logger.Error("build failed", "id", id, "error", result.Error, "duration", duration)
 		m.updateBuildComplete(id, StatusFailed, nil, &result.Error, &result.Provenance, &durationMS)
 		if m.metrics != nil {
-			m.metrics.RecordBuild(ctx, "failed", req.Runtime, duration)
+			m.metrics.RecordBuild(ctx, "failed", duration)
 		}
 		return
 	}
@@ -299,7 +292,7 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	}
 
 	if m.metrics != nil {
-		m.metrics.RecordBuild(ctx, "success", req.Runtime, duration)
+		m.metrics.RecordBuild(ctx, "success", duration)
 	}
 }
 

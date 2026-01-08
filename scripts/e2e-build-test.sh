@@ -1,11 +1,14 @@
 #!/bin/bash
 # E2E Build System Test
-# Usage: ./scripts/e2e-build-test.sh
+# Usage: ./scripts/e2e-build-test.sh [--skip-run]
 #
 # Prerequisites:
 #   - API server running (make dev)
 #   - Generic builder image imported into Hypeman registry
 #   - .env file configured
+#
+# Options:
+#   --skip-run    Skip running the built image (only test build)
 #
 # Environment variables:
 #   API_URL       - API endpoint (default: http://localhost:8083)
@@ -17,6 +20,21 @@ set -e
 API_URL="${API_URL:-http://localhost:8083}"
 TIMEOUT_POLLS=60
 POLL_INTERVAL=5
+SKIP_RUN=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --skip-run)
+            SKIP_RUN=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 # Colors
 RED='\033[0;31m'
@@ -149,49 +167,6 @@ submit_build() {
     echo "$BUILD_ID"
 }
 
-# Poll for build completion
-wait_for_build() {
-    local token="$1"
-    local build_id="$2"
-    
-    log "Waiting for build to complete..."
-    
-    for i in $(seq 1 $TIMEOUT_POLLS); do
-        RESPONSE=$(curl -s "$API_URL/builds/$build_id" \
-            -H "Authorization: Bearer $token")
-        
-        STATUS=$(echo "$RESPONSE" | jq -r '.status')
-        
-        case "$STATUS" in
-            "ready")
-                log "✅ Build succeeded!"
-                echo "$RESPONSE" | jq .
-                return 0
-                ;;
-            "failed")
-                error "❌ Build failed!"
-                echo "$RESPONSE" | jq .
-                return 1
-                ;;
-            "cancelled")
-                warn "Build was cancelled"
-                return 1
-                ;;
-            "queued"|"building"|"pushing")
-                echo -ne "\r  Status: $STATUS (poll $i/$TIMEOUT_POLLS)..."
-                ;;
-            *)
-                warn "Unknown status: $STATUS"
-                ;;
-        esac
-        
-        sleep $POLL_INTERVAL
-    done
-    
-    error "Build timed out after $((TIMEOUT_POLLS * POLL_INTERVAL)) seconds"
-    return 1
-}
-
 # Get build logs
 get_logs() {
     local token="$1"
@@ -200,6 +175,120 @@ get_logs() {
     log "Fetching build logs..."
     curl -s "$API_URL/builds/$build_id/logs" \
         -H "Authorization: Bearer $token"
+}
+
+# Create and run an instance from the built image
+run_built_image() {
+    local token="$1"
+    local image_ref="$2"
+    
+    log "Creating instance from built image..."
+    log "  Image: $image_ref"
+    
+    # Create instance
+    RESPONSE=$(curl -s -X POST "$API_URL/instances" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"image\": \"$image_ref\",
+            \"name\": \"e2e-test-instance\",
+            \"vcpus\": 1,
+            \"memory\": \"256M\"
+        }")
+    
+    INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+    
+    if [ -z "$INSTANCE_ID" ]; then
+        error "Failed to create instance"
+        echo "$RESPONSE" | jq .
+        return 1
+    fi
+    
+    log "Instance created: $INSTANCE_ID"
+    
+    # Wait for instance to be running
+    log "Waiting for instance to start..."
+    for i in $(seq 1 30); do
+        RESPONSE=$(curl -s "$API_URL/instances/$INSTANCE_ID" \
+            -H "Authorization: Bearer $token")
+        
+        STATE=$(echo "$RESPONSE" | jq -r '.state')
+        
+        case "$STATE" in
+            "running")
+                log "✓ Instance is running"
+                break
+                ;;
+            "stopped"|"shutdown"|"failed")
+                error "Instance failed to start (state: $STATE)"
+                echo "$RESPONSE" | jq .
+                cleanup_instance "$token" "$INSTANCE_ID"
+                return 1
+                ;;
+            *)
+                echo -ne "\r  State: $STATE (poll $i/30)..."
+                ;;
+        esac
+        
+        sleep 2
+    done
+    echo ""
+    
+    if [ "$STATE" != "running" ]; then
+        error "Instance did not start in time"
+        cleanup_instance "$token" "$INSTANCE_ID"
+        return 1
+    fi
+    
+    # Give the container a moment to run
+    sleep 2
+    
+    # Try to exec into the instance and run a simple command
+    log "Executing test command in instance..."
+    EXEC_RESPONSE=$(curl -s -X POST "$API_URL/instances/$INSTANCE_ID/exec" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "command": ["node", "-e", "console.log(\"E2E VM test passed!\")"],
+            "timeout_seconds": 30
+        }')
+    
+    EXEC_EXIT_CODE=$(echo "$EXEC_RESPONSE" | jq -r '.exit_code // -1')
+    EXEC_STDOUT=$(echo "$EXEC_RESPONSE" | jq -r '.stdout // ""')
+    
+    if [ "$EXEC_EXIT_CODE" = "0" ]; then
+        log "✅ Instance exec succeeded!"
+        log "  Output: $EXEC_STDOUT"
+    else
+        warn "Instance exec returned exit code: $EXEC_EXIT_CODE"
+        echo "$EXEC_RESPONSE" | jq .
+    fi
+    
+    # Cleanup
+    cleanup_instance "$token" "$INSTANCE_ID"
+    
+    return 0
+}
+
+# Cleanup instance
+cleanup_instance() {
+    local token="$1"
+    local instance_id="$2"
+    
+    log "Cleaning up instance: $instance_id"
+    
+    # Stop the instance
+    curl -s -X POST "$API_URL/instances/$instance_id/stop" \
+        -H "Authorization: Bearer $token" > /dev/null 2>&1 || true
+    
+    # Wait a bit for it to stop
+    sleep 2
+    
+    # Delete the instance
+    curl -s -X DELETE "$API_URL/instances/$instance_id" \
+        -H "Authorization: Bearer $token" > /dev/null 2>&1 || true
+    
+    log "✓ Instance cleaned up"
 }
 
 # Main
@@ -232,29 +321,89 @@ main() {
     BUILD_ID=$(submit_build "$TOKEN" "$SOURCE")
     echo ""
     
-    # Wait for completion
-    if wait_for_build "$TOKEN" "$BUILD_ID"; then
-        echo ""
-        log "=== Build Logs ==="
-        get_logs "$TOKEN" "$BUILD_ID"
-        echo ""
-        log "=== E2E Test PASSED ==="
+    # Wait for completion and capture the response
+    BUILD_RESPONSE=""
+    log "Waiting for build to complete..."
+    
+    for i in $(seq 1 $TIMEOUT_POLLS); do
+        BUILD_RESPONSE=$(curl -s "$API_URL/builds/$BUILD_ID" \
+            -H "Authorization: Bearer $TOKEN")
         
-        # Cleanup
-        rm -f "$SOURCE"
-        exit 0
-    else
-        echo ""
-        log "=== Build Logs ==="
-        get_logs "$TOKEN" "$BUILD_ID"
-        echo ""
-        error "=== E2E Test FAILED ==="
+        STATUS=$(echo "$BUILD_RESPONSE" | jq -r '.status')
         
-        # Cleanup
+        case "$STATUS" in
+            "ready")
+                log "✅ Build succeeded!"
+                echo "$BUILD_RESPONSE" | jq .
+                break
+                ;;
+            "failed")
+                error "❌ Build failed!"
+                echo "$BUILD_RESPONSE" | jq .
+                echo ""
+                log "=== Build Logs ==="
+                get_logs "$TOKEN" "$BUILD_ID"
+                echo ""
+                error "=== E2E Test FAILED ==="
+                rm -f "$SOURCE"
+                exit 1
+                ;;
+            "cancelled")
+                warn "Build was cancelled"
+                rm -f "$SOURCE"
+                exit 1
+                ;;
+            "queued"|"building"|"pushing")
+                echo -ne "\r  Status: $STATUS (poll $i/$TIMEOUT_POLLS)..."
+                ;;
+            *)
+                warn "Unknown status: $STATUS"
+                ;;
+        esac
+        
+        sleep $POLL_INTERVAL
+    done
+    echo ""
+    
+    if [ "$STATUS" != "ready" ]; then
+        error "Build timed out after $((TIMEOUT_POLLS * POLL_INTERVAL)) seconds"
         rm -f "$SOURCE"
         exit 1
     fi
+    
+    echo ""
+    log "=== Build Logs ==="
+    get_logs "$TOKEN" "$BUILD_ID"
+    echo ""
+    
+    # Run the built image (unless skipped)
+    if [ "$SKIP_RUN" = "false" ]; then
+        IMAGE_REF=$(echo "$BUILD_RESPONSE" | jq -r '.image_ref // empty')
+        
+        if [ -n "$IMAGE_REF" ]; then
+            echo ""
+            log "=== Running Built Image ==="
+            if run_built_image "$TOKEN" "$IMAGE_REF"; then
+                log "✅ VM run test passed!"
+            else
+                error "❌ VM run test failed!"
+                rm -f "$SOURCE"
+                exit 1
+            fi
+        else
+            warn "No image_ref in build response, skipping VM test"
+        fi
+    else
+        log "Skipping VM run test (--skip-run)"
+    fi
+    
+    echo ""
+    log "=== E2E Test PASSED ==="
+    
+    # Cleanup
+    rm -f "$SOURCE"
+    exit 0
 }
 
-main "$@"
+main
 

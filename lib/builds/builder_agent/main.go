@@ -38,7 +38,6 @@ const (
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
 type BuildConfig struct {
 	JobID           string            `json:"job_id"`
-	Runtime         string            `json:"runtime"`
 	BaseImageDigest string            `json:"base_image_digest,omitempty"`
 	RegistryURL     string            `json:"registry_url"`
 	RegistryToken   string            `json:"registry_token,omitempty"`
@@ -69,12 +68,11 @@ type BuildResult struct {
 
 // BuildProvenance records build inputs
 type BuildProvenance struct {
-	BaseImageDigest  string            `json:"base_image_digest"`
-	SourceHash       string            `json:"source_hash"`
-	LockfileHashes   map[string]string `json:"lockfile_hashes,omitempty"`
-	ToolchainVersion string            `json:"toolchain_version,omitempty"`
-	BuildkitVersion  string            `json:"buildkit_version,omitempty"`
-	Timestamp        time.Time         `json:"timestamp"`
+	BaseImageDigest string            `json:"base_image_digest"`
+	SourceHash      string            `json:"source_hash"`
+	LockfileHashes  map[string]string `json:"lockfile_hashes,omitempty"`
+	BuildkitVersion string            `json:"buildkit_version,omitempty"`
+	Timestamp       time.Time         `json:"timestamp"`
 }
 
 // VsockMessage is the envelope for vsock communication
@@ -445,10 +443,9 @@ func extractDigest(metadataPath string) (string, error) {
 
 func computeProvenance(config *BuildConfig) BuildProvenance {
 	prov := BuildProvenance{
-		BaseImageDigest:  config.BaseImageDigest,
-		LockfileHashes:   make(map[string]string),
-		BuildkitVersion:  getBuildkitVersion(),
-		ToolchainVersion: getToolchainVersion(),
+		BaseImageDigest: config.BaseImageDigest,
+		LockfileHashes:  make(map[string]string),
+		BuildkitVersion: getBuildkitVersion(),
 	}
 
 	// Hash lockfiles
@@ -511,10 +508,4 @@ func getBuildkitVersion() string {
 	cmd := exec.Command("buildctl", "--version")
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
-}
-
-func getToolchainVersion() string {
-	// Generic builder doesn't have runtime-specific toolchains
-	// The actual runtime version is determined by the user's Dockerfile
-	return "generic"
 }

@@ -1,6 +1,6 @@
 # Generic Builder Image
-# Contains rootless BuildKit + builder agent - runtime agnostic
-# Users provide their own Dockerfile which specifies the runtime (node, python, etc.)
+# Contains rootless BuildKit + builder agent
+# Builds any Dockerfile provided by the user
 
 FROM moby/buildkit:rootless AS buildkit
 

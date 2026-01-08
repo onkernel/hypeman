@@ -251,10 +251,10 @@ cat ~/hypeman_data_dir/images/docker.io/hirokernel/builder-generic/*/metadata.js
 cat ~/hypeman_data_dir/system/oci-cache/index.json | jq '.manifests[-1]'
 ```
 
-## Migration from Runtime-Specific Images
+## Using the Generic Builder
 
-If you were using `nodejs20` or `python312` builder images:
+The generic builder accepts any Dockerfile. To use it:
 
-1. **Update your build requests** to include a Dockerfile
-2. **The `runtime` parameter is deprecated** - you can still send it but it's ignored
-3. **Configure `BUILDER_IMAGE`** to use the generic builder
+1. **Include a Dockerfile** in your source tarball (or pass it via the `dockerfile` parameter)
+2. **Your Dockerfile specifies the runtime** - e.g., `FROM node:20-alpine` or `FROM python:3.12-slim`
+3. **Configure `BUILDER_IMAGE`** in your `.env` to point to the generic builder image

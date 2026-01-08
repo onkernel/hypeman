@@ -9,11 +9,6 @@ var (
 	// ErrAlreadyExists is returned when a build with the same ID already exists
 	ErrAlreadyExists = errors.New("build already exists")
 
-	// ErrInvalidRuntime is returned when an unsupported runtime is specified
-	// Deprecated: Runtime validation is no longer performed. The generic builder
-	// accepts any Dockerfile.
-	ErrInvalidRuntime = errors.New("invalid runtime")
-
 	// ErrDockerfileRequired is returned when no Dockerfile is provided
 	ErrDockerfileRequired = errors.New("dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball")
 
@@ -38,12 +33,3 @@ var (
 	// ErrBuildInProgress is returned when trying to cancel a build that's already complete
 	ErrBuildInProgress = errors.New("build in progress")
 )
-
-// IsSupportedRuntime returns true if the runtime is supported.
-// Deprecated: This function always returns true. The generic builder system
-// no longer validates runtimes - users provide their own Dockerfile.
-func IsSupportedRuntime(runtime string) bool {
-	// Always return true - the generic builder accepts any runtime value
-	// or no runtime at all. Kept for backward compatibility.
-	return true
-}

@@ -38,7 +38,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Parse multipart form fields
 	var sourceData []byte
-	var runtime string
 	var baseImageDigest, cacheScope, dockerfile string
 	var timeoutSeconds int
 
@@ -63,15 +62,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 					Message: "failed to read source data",
 				}, nil
 			}
-		case "runtime":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read runtime field",
-				}, nil
-			}
-			runtime = string(data)
 		case "base_image_digest":
 			data, err := io.ReadAll(part)
 			if err != nil {
@@ -114,12 +104,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		part.Close()
 	}
 
-	// Note: runtime is deprecated and optional. The generic builder accepts any Dockerfile.
-	// If runtime is empty, we use "generic" as a placeholder for logging/caching purposes.
-	if runtime == "" {
-		runtime = "generic"
-	}
-
 	if len(sourceData) == 0 {
 		return oapi.CreateBuild400JSONResponse{
 			Code:    "invalid_request",
@@ -132,7 +116,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
-		Runtime:         runtime,
 		BaseImageDigest: baseImageDigest,
 		CacheScope:      cacheScope,
 		Dockerfile:      dockerfile,
@@ -148,12 +131,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
 	if err != nil {
 		switch {
-		case errors.Is(err, builds.ErrInvalidRuntime):
-			// Deprecated: Runtime validation no longer occurs, but kept for compatibility
-			return oapi.CreateBuild400JSONResponse{
-				Code:    "invalid_runtime",
-				Message: err.Error(),
-			}, nil
 		case errors.Is(err, builds.ErrDockerfileRequired):
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "dockerfile_required",
@@ -227,29 +204,28 @@ func (s *ApiService) CancelBuild(ctx context.Context, request oapi.CancelBuildRe
 	return oapi.CancelBuild204Response{}, nil
 }
 
-// GetBuildLogs streams build logs
-func (s *ApiService) GetBuildLogs(ctx context.Context, request oapi.GetBuildLogsRequestObject) (oapi.GetBuildLogsResponseObject, error) {
+// GetBuildEvents streams build events
+func (s *ApiService) GetBuildEvents(ctx context.Context, request oapi.GetBuildEventsRequestObject) (oapi.GetBuildEventsResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	logs, err := s.BuildManager.GetBuildLogs(ctx, request.Id)
 	if err != nil {
 		if errors.Is(err, builds.ErrNotFound) {
-			return oapi.GetBuildLogs404JSONResponse{
+			return oapi.GetBuildEvents404JSONResponse{
 				Code:    "not_found",
 				Message: "build not found",
 			}, nil
 		}
-		log.ErrorContext(ctx, "failed to get build logs", "error", err, "id", request.Id)
-		return oapi.GetBuildLogs500JSONResponse{
+		log.ErrorContext(ctx, "failed to get build events", "error", err, "id", request.Id)
+		return oapi.GetBuildEvents500JSONResponse{
 			Code:    "internal_error",
-			Message: "failed to get build logs",
+			Message: "failed to get build events",
 		}, nil
 	}
 
-	// Return logs as SSE
-	// For simplicity, return all logs at once
-	// TODO: Implement proper SSE streaming with follow support
-	return oapi.GetBuildLogs200TexteventStreamResponse{
+	// Return logs as SSE events
+	// TODO: Implement proper SSE streaming with follow support and typed events
+	return oapi.GetBuildEvents200TexteventStreamResponse{
 		Body:          stringReader(string(logs)),
 		ContentLength: int64(len(logs)),
 	}, nil
@@ -257,15 +233,9 @@ func (s *ApiService) GetBuildLogs(ctx context.Context, request oapi.GetBuildLogs
 
 // buildToOAPI converts a domain Build to OAPI Build
 func buildToOAPI(b *builds.Build) oapi.Build {
-	var runtimePtr *string
-	if b.Runtime != "" {
-		runtimePtr = &b.Runtime
-	}
-
 	oapiBuild := oapi.Build{
 		Id:            b.ID,
 		Status:        oapi.BuildStatus(b.Status),
-		Runtime:       runtimePtr,
 		QueuePosition: b.QueuePosition,
 		ImageDigest:   b.ImageDigest,
 		ImageRef:      b.ImageRef,
@@ -278,11 +248,10 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 
 	if b.Provenance != nil {
 		oapiBuild.Provenance = &oapi.BuildProvenance{
-			BaseImageDigest:  &b.Provenance.BaseImageDigest,
-			SourceHash:       &b.Provenance.SourceHash,
-			ToolchainVersion: &b.Provenance.ToolchainVersion,
-			BuildkitVersion:  &b.Provenance.BuildkitVersion,
-			Timestamp:        &b.Provenance.Timestamp,
+			BaseImageDigest: &b.Provenance.BaseImageDigest,
+			SourceHash:      &b.Provenance.SourceHash,
+			BuildkitVersion: &b.Provenance.BuildkitVersion,
+			Timestamp:       &b.Provenance.Timestamp,
 		}
 		if len(b.Provenance.LockfileHashes) > 0 {
 			oapiBuild.Provenance.LockfileHashes = &b.Provenance.LockfileHashes
@@ -290,14 +259,6 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 	}
 
 	return oapiBuild
-}
-
-// deref safely dereferences a pointer, returning empty string if nil
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // stringReader wraps a string as an io.Reader

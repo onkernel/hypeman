@@ -5,7 +5,7 @@
 - ✅ Source-to-image builds in isolated microVMs
 - ✅ BuildKit-based builds with daemonless execution
 - ✅ Tenant-isolated registry caching
-- ✅ Node.js 20 and Python 3.12 runtimes
+- ✅ Generic builder (any Dockerfile/runtime supported)
 - ✅ Vsock communication for build results
 - ✅ Cgroup mounting for container runtime support
 
@@ -59,22 +59,14 @@ Export to:
 - [ ] SBOM (Software Bill of Materials) generation during builds
 - [ ] Vulnerability scanning of built images before push
 
-### Phase 3: Additional Runtimes
+### Phase 3: Security Hardening
 
-| Runtime | Package Managers | Priority |
-|---------|-----------------|----------|
-| Go 1.22+ | go mod | High |
-| Ruby 3.3+ | bundler, gem | Medium |
-| Rust | cargo | Medium |
-| Java 21+ | Maven, Gradle | Medium |
-| PHP 8.3+ | composer | Low |
-| Custom Dockerfile | N/A | High |
+The generic builder now supports any Dockerfile. Security improvements:
 
-#### Custom Dockerfile Support
-- [ ] Allow users to provide their own Dockerfile
 - [ ] Security review: sandbox custom Dockerfiles more strictly
 - [ ] Validate Dockerfile doesn't use dangerous instructions
 - [ ] Consider read-only base image allowlist
+- [ ] Rate limiting for build submissions
 
 ### Phase 4: Performance & Observability
 

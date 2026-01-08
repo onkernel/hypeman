@@ -723,9 +723,6 @@ components:
           additionalProperties:
             type: string
           description: Map of lockfile names to SHA256 hashes
-        toolchain_version:
-          type: string
-          description: Runtime version (e.g., "node v20.10.0")
         buildkit_version:
           type: string
           description: BuildKit version used
@@ -734,29 +731,24 @@ components:
           format: date-time
           description: Build completion timestamp
     
-    CreateBuildRequest:
+    BuildEvent:
       type: object
+      required: [type, timestamp]
       properties:
-        runtime:
+        type:
           type: string
-          description: "(Deprecated) Build runtime hint. No longer required - the generic builder accepts any Dockerfile."
-          example: generic
-        dockerfile:
+          enum: [log, status, heartbeat]
+          description: Event type
+        timestamp:
           type: string
-          description: "Dockerfile content. Required if not included in the source tarball. The Dockerfile specifies the runtime (e.g., FROM node:20-alpine)."
-        base_image_digest:
+          format: date-time
+          description: Event timestamp
+        content:
           type: string
-          description: Optional pinned base image digest for reproducibility
-        cache_scope:
-          type: string
-          description: Tenant-specific cache key prefix for isolation
-        build_args:
-          type: object
-          additionalProperties:
-            type: string
-          description: Build arguments to pass to Dockerfile
-        build_policy:
-          $ref: "#/components/schemas/BuildPolicy"
+          description: Log line content (only for type=log)
+        status:
+          $ref: "#/components/schemas/BuildStatus"
+          description: New build status (only for type=status)
     
     Build:
       type: object
@@ -768,10 +760,6 @@ components:
           example: "build-abc123"
         status:
           $ref: "#/components/schemas/BuildStatus"
-        runtime:
-          type: string
-          description: "(Deprecated) Build runtime hint"
-          example: generic
         queue_position:
           type: integer
           description: Position in build queue (only when status is queued)
@@ -2114,9 +2102,6 @@ paths:
                 dockerfile:
                   type: string
                   description: Dockerfile content. Required if not included in the source tarball.
-                runtime:
-                  type: string
-                  description: "(Deprecated) Build runtime hint. No longer required."
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest
@@ -2218,13 +2203,17 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /builds/{id}/logs:
+  /builds/{id}/events:
     get:
-      summary: Stream build logs (SSE)
+      summary: Stream build events (SSE)
       description: |
-        Streams build logs as Server-Sent Events.
-        Returns existing logs, then continues streaming new lines if follow=true.
-      operationId: getBuildLogs
+        Streams build events as Server-Sent Events. Events include:
+        - `log`: Build log lines with timestamp and content
+        - `status`: Build status changes (queued→building→pushing→ready/failed)
+        - `heartbeat`: Keep-alive events sent every 30s to prevent connection timeouts
+        
+        Returns existing logs as events, then continues streaming if follow=true.
+      operationId: getBuildEvents
       security:
         - bearerAuth: []
       parameters:
@@ -2240,14 +2229,14 @@ paths:
           schema:
             type: boolean
             default: false
-          description: Continue streaming new lines after initial output
+          description: Continue streaming new events after initial output
       responses:
         200:
-          description: Log stream (SSE)
+          description: Event stream (SSE). Each event is a JSON BuildEvent object.
           content:
             text/event-stream:
               schema:
-                type: string
+                $ref: "#/components/schemas/BuildEvent"
         404:
           description: Build not found
           content:

@@ -60,10 +60,9 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 }
 
 // RecordBuild records metrics for a completed build
-func (m *Metrics) RecordBuild(ctx context.Context, status string, runtime string, duration time.Duration) {
+func (m *Metrics) RecordBuild(ctx context.Context, status string, duration time.Duration) {
 	attrs := []attribute.KeyValue{
 		attribute.String("status", status),
-		attribute.String("runtime", runtime),
 	}
 
 	m.buildDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))

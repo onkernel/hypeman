@@ -14,7 +14,6 @@ import (
 type buildMetadata struct {
 	ID              string              `json:"id"`
 	Status          string              `json:"status"`
-	Runtime         string              `json:"runtime"`
 	Request         *CreateBuildRequest `json:"request,omitempty"`
 	ImageDigest     *string             `json:"image_digest,omitempty"`
 	ImageRef        *string             `json:"image_ref,omitempty"`
@@ -32,7 +31,6 @@ func (m *buildMetadata) toBuild() *Build {
 	return &Build{
 		ID:          m.ID,
 		Status:      m.Status,
-		Runtime:     m.Runtime,
 		ImageDigest: m.ImageDigest,
 		ImageRef:    m.ImageRef,
 		Error:       m.Error,

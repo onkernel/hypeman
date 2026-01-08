@@ -16,7 +16,7 @@ func TestBuildQueue_EnqueueStartsImmediately(t *testing.T) {
 	done := make(chan struct{})
 
 	// Enqueue first build - should start immediately
-	pos := queue.Enqueue("build-1", CreateBuildRequest{Runtime: "nodejs20"}, func() {
+	pos := queue.Enqueue("build-1", CreateBuildRequest{}, func() {
 		started <- "build-1"
 		<-done // Wait for signal
 	})

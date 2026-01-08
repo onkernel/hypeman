@@ -14,36 +14,23 @@ const (
 	StatusCancelled = "cancelled"
 )
 
-// Runtime constants (deprecated - kept for backward compatibility)
-// The generic builder system no longer requires runtime selection.
-// Users provide their own Dockerfile which specifies the runtime.
-const (
-	RuntimeNodeJS20  = "nodejs20"  // Deprecated
-	RuntimePython312 = "python312" // Deprecated
-)
-
 // Build represents a source-to-image build job
 type Build struct {
-	ID            string          `json:"id"`
-	Status        string          `json:"status"`
-	Runtime       string          `json:"runtime"`
-	QueuePosition *int            `json:"queue_position,omitempty"`
-	ImageDigest   *string         `json:"image_digest,omitempty"`
-	ImageRef      *string         `json:"image_ref,omitempty"`
-	Error         *string         `json:"error,omitempty"`
+	ID            string           `json:"id"`
+	Status        string           `json:"status"`
+	QueuePosition *int             `json:"queue_position,omitempty"`
+	ImageDigest   *string          `json:"image_digest,omitempty"`
+	ImageRef      *string          `json:"image_ref,omitempty"`
+	Error         *string          `json:"error,omitempty"`
 	Provenance    *BuildProvenance `json:"provenance,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	StartedAt     *time.Time      `json:"started_at,omitempty"`
-	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
-	DurationMS    *int64          `json:"duration_ms,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
+	StartedAt     *time.Time       `json:"started_at,omitempty"`
+	CompletedAt   *time.Time       `json:"completed_at,omitempty"`
+	DurationMS    *int64           `json:"duration_ms,omitempty"`
 }
 
 // CreateBuildRequest represents a request to create a new build
 type CreateBuildRequest struct {
-	// Runtime is deprecated. Kept for backward compatibility but no longer required.
-	// The generic builder system accepts any Dockerfile.
-	Runtime string `json:"runtime,omitempty"`
-
 	// Dockerfile content. Required if not included in the source tarball.
 	// The Dockerfile specifies the runtime (e.g., FROM node:20-alpine).
 	Dockerfile string `json:"dockerfile,omitempty"`
@@ -107,9 +94,6 @@ type BuildProvenance struct {
 	// LockfileHashes maps lockfile names to their SHA256 hashes
 	LockfileHashes map[string]string `json:"lockfile_hashes,omitempty"`
 
-	// ToolchainVersion is the runtime version (e.g., "node v20.10.0")
-	ToolchainVersion string `json:"toolchain_version,omitempty"`
-
 	// BuildkitVersion is the BuildKit version used
 	BuildkitVersion string `json:"buildkit_version,omitempty"`
 
@@ -122,9 +106,6 @@ type BuildProvenance struct {
 type BuildConfig struct {
 	// JobID is the build job identifier
 	JobID string `json:"job_id"`
-
-	// Runtime is deprecated, kept for logging purposes only
-	Runtime string `json:"runtime,omitempty"`
 
 	// Dockerfile content (if not provided in source tarball)
 	Dockerfile string `json:"dockerfile,omitempty"`
@@ -205,4 +186,3 @@ func (p *BuildPolicy) ApplyDefaults() {
 		p.NetworkMode = defaults.NetworkMode
 	}
 }
-
