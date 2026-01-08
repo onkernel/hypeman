@@ -167,13 +167,13 @@ submit_build() {
     echo "$BUILD_ID"
 }
 
-# Get build logs
+# Get build events/logs
 get_logs() {
     local token="$1"
     local build_id="$2"
     
-    log "Fetching build logs..."
-    curl -s "$API_URL/builds/$build_id/logs" \
+    log "Fetching build events..."
+    curl -s "$API_URL/builds/$build_id/events" \
         -H "Authorization: Bearer $token"
 }
 
