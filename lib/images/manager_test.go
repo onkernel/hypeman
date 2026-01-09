@@ -12,7 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipIfNoDockerHub skips the test if SKIP_DOCKER_HUB_TESTS is set.
+func skipIfNoDockerHub(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SKIP_DOCKER_HUB_TESTS") != "" {
+		t.Skip("Skipping test that requires Docker Hub (SKIP_DOCKER_HUB_TESTS is set)")
+	}
+}
+
 func TestCreateImage(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -83,6 +92,7 @@ func TestCreateImage(t *testing.T) {
 }
 
 func TestCreateImageDifferentTag(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -105,6 +115,7 @@ func TestCreateImageDifferentTag(t *testing.T) {
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -134,6 +145,7 @@ func TestCreateImageDuplicate(t *testing.T) {
 }
 
 func TestListImages(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -163,6 +175,7 @@ func TestListImages(t *testing.T) {
 }
 
 func TestGetImage(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -198,6 +211,7 @@ func TestGetImageNotFound(t *testing.T) {
 }
 
 func TestDeleteImage(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)
@@ -270,6 +284,7 @@ func TestNormalizedRefParsing(t *testing.T) {
 }
 
 func TestLayerCaching(t *testing.T) {
+	skipIfNoDockerHub(t)
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
 	require.NoError(t, err)

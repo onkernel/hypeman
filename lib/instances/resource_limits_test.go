@@ -227,6 +227,7 @@ func TestAggregateUsage_StructValues(t *testing.T) {
 // aggregate resource limits are enforced when creating VMs.
 // It creates one VM, then tries to create another that would exceed the total limit.
 func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
+	skipIfNoDockerHub(t)
 	// Skip in short mode - this is an integration test
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

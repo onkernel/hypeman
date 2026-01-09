@@ -22,6 +22,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipIfNoDockerHub skips the test if SKIP_DOCKER_HUB_TESTS is set.
+func skipIfNoDockerHub(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SKIP_DOCKER_HUB_TESTS") != "" {
+		t.Skip("Skipping test that requires Docker Hub (SKIP_DOCKER_HUB_TESTS is set)")
+	}
+}
+
 // TestSystemdMode verifies that hypeman correctly detects and runs
 // systemd-based images with systemd as PID 1.
 //
@@ -31,6 +39,7 @@ import (
 // - Starts systemd as PID 1
 // - Injects and starts the hypeman-agent.service
 func TestSystemdMode(t *testing.T) {
+	skipIfNoDockerHub(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}

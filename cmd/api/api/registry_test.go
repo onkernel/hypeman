@@ -25,6 +25,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipIfNoDockerHub skips the test if SKIP_DOCKER_HUB_TESTS is set.
+// This is used to skip tests that require pulling from Docker Hub in CI
+// environments where rate limiting may be an issue.
+func skipIfNoDockerHub(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SKIP_DOCKER_HUB_TESTS") != "" {
+		t.Skip("Skipping test that requires Docker Hub (SKIP_DOCKER_HUB_TESTS is set)")
+	}
+}
+
 // setupRegistryTest creates a test service with a mounted OCI registry server.
 // Returns the service (for API calls) and the server host (for building push URLs).
 func setupRegistryTest(t *testing.T) (*ApiService, string) {
@@ -47,6 +57,7 @@ func setupRegistryTest(t *testing.T) (*ApiService, string) {
 }
 
 func TestRegistryPushAndConvert(t *testing.T) {
+	skipIfNoDockerHub(t)
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull a small image from Docker Hub to push to our registry
@@ -92,6 +103,7 @@ func TestRegistryVersionCheck(t *testing.T) {
 }
 
 func TestRegistryPushAndCreateInstance(t *testing.T) {
+	skipIfNoDockerHub(t)
 	// This is a full e2e test that requires KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available - skipping VM creation test")
@@ -174,6 +186,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 // TestRegistryLayerCaching verifies that pushing the same image twice
 // reuses cached layers and doesn't re-upload them.
 func TestRegistryLayerCaching(t *testing.T) {
+	skipIfNoDockerHub(t)
 	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
@@ -257,6 +270,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 // TestRegistrySharedLayerCaching verifies that pushing different images
 // that share layers reuses the cached shared layers.
 func TestRegistrySharedLayerCaching(t *testing.T) {
+	skipIfNoDockerHub(t)
 	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image (this will be our base)
@@ -338,6 +352,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 // TestRegistryTagPush verifies that pushing with a tag reference (not digest)
 // correctly triggers conversion. The server computes the digest from the manifest.
 func TestRegistryTagPush(t *testing.T) {
+	skipIfNoDockerHub(t)
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
@@ -391,6 +406,7 @@ func TestRegistryTagPush(t *testing.T) {
 // Docker v2 manifest (as returned by local Docker daemon) is correctly converted
 // to OCI format and the image conversion succeeds.
 func TestRegistryDockerV2ManifestConversion(t *testing.T) {
+	skipIfNoDockerHub(t)
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub (OCI format)

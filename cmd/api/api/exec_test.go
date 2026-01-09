@@ -18,6 +18,7 @@ import (
 )
 
 func TestExecInstanceNonTTY(t *testing.T) {
+	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -158,6 +159,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 // 2. guest-agent must keep running even after the main app exits
 // 3. The VM must not kernel panic when the entrypoint exits
 func TestExecWithDebianMinimal(t *testing.T) {
+	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
