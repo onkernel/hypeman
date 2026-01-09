@@ -33,7 +33,6 @@ func TestGetInstance_NotFound(t *testing.T) {
 }
 
 func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -130,7 +129,6 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available - skipping lifecycle test")

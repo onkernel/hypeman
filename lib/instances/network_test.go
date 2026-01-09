@@ -19,7 +19,6 @@ import (
 // TestCreateInstanceWithNetwork tests instance creation with network allocation
 // and verifies network connectivity persists after standby/restore
 func TestCreateInstanceWithNetwork(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access
 	requireKVMAccess(t)
 

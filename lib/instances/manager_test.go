@@ -31,14 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// skipIfNoDockerHub skips the test if SKIP_DOCKER_HUB_TESTS is set.
-func skipIfNoDockerHub(t *testing.T) {
-	t.Helper()
-	if os.Getenv("SKIP_DOCKER_HUB_TESTS") != "" {
-		t.Skip("Skipping test that requires Docker Hub (SKIP_DOCKER_HUB_TESTS is set)")
-	}
-}
-
 // setupTestManager creates a manager and registers cleanup for any orphaned processes
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
@@ -182,7 +174,6 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 }
 
 func TestBasicEndToEnd(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -834,7 +825,6 @@ func TestStorageOperations(t *testing.T) {
 }
 
 func TestStandbyAndRestore(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")

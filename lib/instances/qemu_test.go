@@ -161,7 +161,6 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 // It tests: create, get, list, logs, network, ingress, volumes, exec, and delete.
 // It does NOT test: snapshot/standby, hot memory resize (not supported by QEMU in first pass).
 func TestQEMUBasicEndToEnd(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -541,7 +540,6 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 // TestQEMUStandbyAndRestore tests the standby/restore cycle with QEMU.
 // This tests QEMU's migrate-to-file snapshot mechanism.
 func TestQEMUStandbyAndRestore(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")

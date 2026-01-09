@@ -33,7 +33,6 @@ func TestGetImage_NotFound(t *testing.T) {
 }
 
 func TestCreateImage_Async(t *testing.T) {
-	skipIfNoDockerHub(t)
 	svc := newTestService(t)
 	ctx := ctx()
 
@@ -126,7 +125,6 @@ func TestCreateImage_Async(t *testing.T) {
 }
 
 func TestCreateImage_InvalidTag(t *testing.T) {
-	skipIfNoDockerHub(t)
 	svc := newTestService(t)
 	ctx := ctx()
 
@@ -173,7 +171,6 @@ func TestCreateImage_InvalidName(t *testing.T) {
 }
 
 func TestCreateImage_Idempotent(t *testing.T) {
-	skipIfNoDockerHub(t)
 	svc := newTestService(t)
 	ctx := ctx()
 

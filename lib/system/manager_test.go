@@ -2,21 +2,12 @@ package system
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// skipIfNoDockerHub skips the test if SKIP_DOCKER_HUB_TESTS is set.
-func skipIfNoDockerHub(t *testing.T) {
-	t.Helper()
-	if os.Getenv("SKIP_DOCKER_HUB_TESTS") != "" {
-		t.Skip("Skipping test that requires Docker Hub (SKIP_DOCKER_HUB_TESTS is set)")
-	}
-}
 
 func TestGetDefaultKernelVersion(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -38,7 +29,6 @@ func TestGetKernelPath(t *testing.T) {
 }
 
 func TestEnsureSystemFiles(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// This test requires network access and takes a while
 	// Skip by default, run explicitly with: go test -run TestEnsureSystemFiles
 	if testing.Short() {

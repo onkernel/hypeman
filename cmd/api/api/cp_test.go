@@ -17,7 +17,6 @@ import (
 )
 
 func TestCpToAndFromInstance(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
@@ -157,7 +156,6 @@ func TestCpToAndFromInstance(t *testing.T) {
 }
 
 func TestCpDirectoryToInstance(t *testing.T) {
-	skipIfNoDockerHub(t)
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
