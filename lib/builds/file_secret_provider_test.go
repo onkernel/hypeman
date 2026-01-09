@@ -100,3 +100,4 @@ func TestNoOpSecretProvider(t *testing.T) {
 	assert.Empty(t, secrets)
 }
 
+
