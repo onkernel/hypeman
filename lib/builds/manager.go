@@ -466,30 +466,30 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 
 	// Handle messages from agent until we get the build result
 	for {
-	// Use a goroutine for decoding so we can respect context cancellation.
-	type decodeResult struct {
-		response VsockMessage
-		err      error
-	}
-	resultCh := make(chan decodeResult, 1)
+		// Use a goroutine for decoding so we can respect context cancellation.
+		type decodeResult struct {
+			response VsockMessage
+			err      error
+		}
+		resultCh := make(chan decodeResult, 1)
 
-	go func() {
-		var response VsockMessage
-		err := decoder.Decode(&response)
-		resultCh <- decodeResult{response: response, err: err}
-	}()
+		go func() {
+			var response VsockMessage
+			err := decoder.Decode(&response)
+			resultCh <- decodeResult{response: response, err: err}
+		}()
 
 		// Wait for either a message or context cancellation
 		var dr decodeResult
-	select {
-	case <-ctx.Done():
-		conn.Close()
-		<-resultCh
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			<-resultCh
+			return nil, ctx.Err()
 		case dr = <-resultCh:
-		if dr.err != nil {
+			if dr.err != nil {
 				return nil, fmt.Errorf("read message: %w", dr.err)
-		}
+			}
 		}
 
 		// Handle message based on type
@@ -516,8 +516,8 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			// Build completed
 			if dr.response.Result == nil {
 				return nil, fmt.Errorf("received build_result with nil result")
-		}
-		return dr.response.Result, nil
+			}
+			return dr.response.Result, nil
 
 		default:
 			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)
@@ -612,6 +612,14 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for completion", "id", id, "error", readErr)
+		return
+	}
+
+	// Don't overwrite terminal states - this prevents race conditions where
+	// a cancelled build's runBuild goroutine later fails and tries to set "failed"
+	if meta.Status == StatusCancelled || meta.Status == StatusReady || meta.Status == StatusFailed {
+		m.logger.Debug("skipping status update for already-terminal build",
+			"id", id, "current_status", meta.Status, "attempted_status", status)
 		return
 	}
 
@@ -804,6 +812,8 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 					if event.Status == StatusReady || event.Status == StatusFailed || event.Status == StatusCancelled {
 						return
 					}
+					// Non-terminal status event - keep waiting for log file
+					continue
 				case <-time.After(500 * time.Millisecond):
 					if _, err := os.Stat(logPath); err == nil {
 						break // Log file appeared
@@ -921,6 +931,7 @@ func (m *manager) RecoverPendingBuilds() {
 	}
 
 	for _, meta := range pending {
+		meta := meta // Shadow loop variable for closure capture
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)
 
 		// Re-enqueue the build

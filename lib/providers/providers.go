@@ -238,11 +238,13 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		buildConfig.DefaultTimeout = 600
 	}
 
-	// Configure secret provider
+	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider
 	if cfg.BuildSecretsDir != "" {
 		secretProvider = builds.NewFileSecretProvider(cfg.BuildSecretsDir)
 		log.Info("build secrets enabled", "dir", cfg.BuildSecretsDir)
+	} else {
+		secretProvider = &builds.NoOpSecretProvider{}
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
