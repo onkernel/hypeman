@@ -355,6 +355,12 @@ func run() error {
 	// Error group for coordinated shutdown
 	grp, gctx := errgroup.WithContext(ctx)
 
+	// Start build manager background services (vsock handler for builder VMs)
+	if err := app.BuildManager.Start(gctx); err != nil {
+		logger.Error("failed to start build manager", "error", err)
+		return err
+	}
+
 	// Run the server
 	grp.Go(func() error {
 		logger.Info("starting hypeman API", "port", app.Config.Port)

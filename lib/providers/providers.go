@@ -8,6 +8,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/builds"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
@@ -211,4 +212,41 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
 	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
+}
+
+// ProvideBuildManager provides the build manager
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builds.Manager, error) {
+	buildConfig := builds.Config{
+		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
+		BuilderImage:        cfg.BuilderImage,
+		RegistryURL:         cfg.RegistryURL,
+		DefaultTimeout:      cfg.BuildTimeout,
+		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
+	}
+
+	// Apply defaults if not set
+	if buildConfig.MaxConcurrentBuilds == 0 {
+		buildConfig.MaxConcurrentBuilds = 2
+	}
+	if buildConfig.BuilderImage == "" {
+		buildConfig.BuilderImage = "hypeman/builder:latest"
+	}
+	if buildConfig.RegistryURL == "" {
+		buildConfig.RegistryURL = "localhost:8080"
+	}
+	if buildConfig.DefaultTimeout == 0 {
+		buildConfig.DefaultTimeout = 600
+	}
+
+	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
+	var secretProvider builds.SecretProvider
+	if cfg.BuildSecretsDir != "" {
+		secretProvider = builds.NewFileSecretProvider(cfg.BuildSecretsDir)
+		log.Info("build secrets enabled", "dir", cfg.BuildSecretsDir)
+	} else {
+		secretProvider = &builds.NoOpSecretProvider{}
+	}
+
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, secretProvider, log, meter)
 }
