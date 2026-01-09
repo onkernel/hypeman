@@ -8,18 +8,13 @@ Outstanding issues and improvements for the build system.
 
 ### 1. Enable cgroups for BuildKit Secrets
 
-**Status:** ✅ Implemented (Option A)
+**Status:** ✅ Implemented and tested
 
 **Changes:** Added cgroup2 mount to `lib/system/init/mount.go`:
 - `mountEssentials()` now mounts `/sys/fs/cgroup` with cgroup2 filesystem
 - `bindMountsToNewRoot()` now bind-mounts cgroups to the new root
 
-**To activate:** Rebuild the embedded binaries, then start the API server:
-```bash
-make build-embedded  # Rebuilds lib/system/init/init
-make dev             # Or: make build && ./bin/hypeman
-```
-The initrd is automatically rebuilt on first VM start when it detects the embedded binaries have changed.
+**Verified:** E2E build test passes (`./scripts/e2e-build-test.sh`)
 
 ---
 
